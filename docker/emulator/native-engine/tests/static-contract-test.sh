@@ -77,11 +77,12 @@ jq -e '
     $qt_x11.git_tree == "ce55fd91d181e57515f3833e80a4d1fcc7f732da" and
     $qt_x11.verify_tree == false and
     ($files | keys | sort) == [
-      "libX11.so", "libX11.so.6", "libXau.so", "libXau.so.6",
+      "libX11-xcb.so.1", "libX11.so", "libX11.so.6", "libXau.so", "libXau.so.6",
       "libXdmcp.so.6", "libbsd.so.0", "libxcb.so.1"
     ] and
     all($qt_x11.files[];
       .path == ("linux-aarch64/lib/" + .destination)) and
+    $files["libX11-xcb.so.1"].sha1 == "c1b35aa0d931b4d5b15c552e20c220b0a213f04b" and
     $files["libX11.so"].sha1 == "c6a6bf0eb60353d00ec60df437dab1e16134ed45" and
     $files["libX11.so.6"].sha1 == "c6a6bf0eb60353d00ec60df437dab1e16134ed45" and
     $files["libXau.so"].sha1 == "338d63b32fedd3fb45f057bec3ab888c27f5f5ed" and
@@ -107,7 +108,38 @@ jq -e '
     .commit == "f64c458fc47ac18f738f9c8bdecb64d265f530f4"))
 ' "${LOCK_FILE}" >/dev/null || fail 'major source pins do not match the approved revisions'
 
-EXPECTED_AEMU_PATCHES='["patches/0001-build-x86_64-headless-for-linux-aarch64.patch","patches/0002-build-headless-engine-only.patch","patches/0003-fix-gnss-proto-relative-path.patch","patches/0004-use-system-toolchain-for-build-host-tools.patch","patches/0005-build-host-protoc-from-upstream-source.patch","patches/0006-propagate-host-cmake-context.patch","patches/0007-disable-x86-kvm-on-non-x86-linux.patch","patches/0008-use-tcg-translation-without-kvm.patch"]'
+jq -e '
+  ((.sources[] | select(.id == "aemu")).blob_checks | INDEX(.path)) as $aemu_blobs |
+  $aemu_blobs["android/data/advancedFeatures.ini"].sha1 == "21086765b1a03ade85ca4602b45fe0961c979d2f" and
+  $aemu_blobs["android/data/emu-original-feature-flags.protobuf"].sha1 == "789ec726ca31c2186d1e1d38af352caa7fe36f33" and
+  $aemu_blobs["android/data/ca-bundle.pem"].sha1 == "759a4d6f3f96680a57eaa67a37a0ac67501660f5" and
+  $aemu_blobs["android/data/hostapd.conf"].sha1 == "869c93d2f0ce99d803222c8994751b65ea601085" and
+  $aemu_blobs["android/android-grpc/security/src/android/emulation/control/secure/emulator_access.json"].sha1 == "e2aedfda75f8b494717d54b64045f51c5786e18c" and
+  ((.sources[] | select(.id == "common-swiftshader-linux-aarch64")) as $swiftshader |
+    ($swiftshader.files | INDEX(.destination)) as $files |
+    $swiftshader.repository == "https://android.googlesource.com/platform/prebuilts/android-emulator-build/common" and
+    $swiftshader.commit == "f64c458fc47ac18f738f9c8bdecb64d265f530f4" and
+    $swiftshader.destination == "prebuilts/android-emulator-build/common/swiftshader/linux-aarch64/lib" and
+    $swiftshader.git_tree == "739f97a2f858a9cd633202ee02dc22ba31b23f79" and
+    $swiftshader.verify_tree == false and
+    ($files | keys | sort) == ["libEGL.so", "libGLES_CM.so", "libGLESv2.so"] and
+    all($swiftshader.files[]; .path == ("swiftshader/linux-aarch64/lib/" + .destination)) and
+    $files["libEGL.so"].sha1 == "6ba90a42d6a0369bfdc45309d9370b0a74a168ea" and
+    $files["libGLES_CM.so"].sha1 == "cb02f7fc831a546a16ea9b3d3e2c3a17084e353b" and
+    $files["libGLESv2.so"].sha1 == "b8c987eac2fb2f91da24febfa8e4cd27a2c7c165") and
+  (.sources[] | select(.id == "common-virtualscene") |
+    .subtree == "virtualscene" and
+    .destination == "prebuilts/android-emulator-build/common/virtualscene" and
+    .git_tree == "0798090bcaae798590d852f0ba76db69f4848ae2" and
+    .verify_tree == true) and
+  (.sources[] | select(.id == "common-skins-x86_64-android-36") |
+    .subtree == "skins/x86_64/android-36" and
+    .destination == "prebuilts/android-emulator-build/common/skins/x86_64/android-36" and
+    .git_tree == "bebd3c0b91f525f6da18c640fc3ebba8144b0447" and
+    .verify_tree == true)
+' "${LOCK_FILE}" >/dev/null || fail 'runtime data and SwiftShader locks changed'
+
+EXPECTED_AEMU_PATCHES='["patches/0001-build-x86_64-headless-for-linux-aarch64.patch","patches/0002-build-headless-engine-only.patch","patches/0003-fix-gnss-proto-relative-path.patch","patches/0004-use-system-toolchain-for-build-host-tools.patch","patches/0005-build-host-protoc-from-upstream-source.patch","patches/0006-propagate-host-cmake-context.patch","patches/0007-disable-x86-kvm-on-non-x86-linux.patch","patches/0008-use-tcg-translation-without-kvm.patch","patches/0009-use-origin-rpath-for-emugl-common.patch"]'
 [[ $(jq -c '.patches.aemu' "${LOCK_FILE}") == "${EXPECTED_AEMU_PATCHES}" ]] \
   || fail 'AEMU patch order changed'
 [[ $(jq -c '.patches.protobuf' "${LOCK_FILE}") == \
@@ -116,6 +148,9 @@ EXPECTED_AEMU_PATCHES='["patches/0001-build-x86_64-headless-for-linux-aarch64.pa
 [[ $(jq -c '.patches.crashpad' "${LOCK_FILE}") == \
   '["patches/crashpad-0001-gcc-packed-alignment.patch"]' ]] \
   || fail 'Crashpad patch order changed'
+[[ $(jq -c '.patches.gfxstream' "${LOCK_FILE}") == \
+  '["patches/gfxstream-0001-propagate-xcb-headers-to-vulkan-cereal.patch"]' ]] \
+  || fail 'gfxstream patch order changed'
 
 while IFS= read -r patch_path; do
   [[ -f "${ENGINE_DIR}/${patch_path}" ]] || fail "locked patch is missing: ${patch_path}"
@@ -123,16 +158,23 @@ done < <(jq -r '.patches[] | .[]' "${LOCK_FILE}")
 
 assert_contains '#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))' \
   "${ENGINE_DIR}/patches/0007-disable-x86-kvm-on-non-x86-linux.patch"
-assert_contains '#ifdef CONFIG_KVM' \
+assert_contains '#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))' \
   "${ENGINE_DIR}/patches/0008-use-tcg-translation-without-kvm.patch"
 assert_contains 'set_address_translation_funcs(0, tcg_gpa2hva);' \
   "${ENGINE_DIR}/patches/0008-use-tcg-translation-without-kvm.patch"
+assert_contains '"LINK_FLAGS<=-Wl,-rpath,'"'"'$ORIGIN'"'"'  -Wl,--disable-new-dtags"' \
+  "${ENGINE_DIR}/patches/0009-use-origin-rpath-for-emugl-common.patch"
+assert_contains 'gfxstream_xcb_headers' \
+  "${ENGINE_DIR}/patches/gfxstream-0001-propagate-xcb-headers-to-vulkan-cereal.patch"
+assert_contains 'apply_series gfxstream "${WORKSPACE}/hardware/google/gfxstream"' \
+  "${ENGINE_DIR}/scripts/apply-patches.sh"
 
 bash -n "${ENGINE_DIR}"/scripts/*.sh
 sh -n "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
 
 for flag in \
   '-DCMAKE_BUILD_TYPE=Release' \
+  '-DCMAKE_SKIP_BUILD_RPATH=TRUE' \
   '-DCMAKE_TOOLCHAIN_FILE=' \
   '-DPython_EXECUTABLE=/usr/bin/python3' \
   '-DQT5_LINK_PATH:STRING=' \
@@ -153,12 +195,14 @@ assert_contains '?format=TEXT' "${ENGINE_DIR}/scripts/fetch-sources.sh"
 assert_contains 'base64 --decode' "${ENGINE_DIR}/scripts/fetch-sources.sh"
 assert_contains 'git hash-object --no-filters' "${ENGINE_DIR}/scripts/fetch-sources.sh"
 
-assert_contains '--target qemu-system-x86_64-headless' "${ENGINE_DIR}/scripts/build.sh"
+for target in qemu-system-x86_64-headless gfxstream_backend crashpad_handler qemu-img nimble_bridge; do
+  assert_contains "${target}" "${ENGINE_DIR}/scripts/build.sh"
+done
 assert_contains 'FROM --platform=${BUNDLE_PLATFORM} scratch AS bundle' "${ENGINE_DIR}/Dockerfile"
 assert_contains '/out/bundle/opt/cloudandx/native-aemu' "${ENGINE_DIR}/Dockerfile"
-assert_contains '/opt/cloudandx/native-aemu/bin/qemu-system-x86_64-headless' \
+assert_contains '/opt/cloudandx/native-aemu/${ENGINE_RELATIVE}' \
   "${ENGINE_DIR}/scripts/package-bundle.sh"
-assert_contains '/opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless' \
+assert_contains '/opt/cloudandx/native-aemu/${RUNNER_RELATIVE}' \
   "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains '/opt/cloudandx/native-aemu/manifest.json' "${ENGINE_DIR}/README.md"
 assert_contains '/opt/cloudandx/native-aemu/SHA256SUMS' "${ENGINE_DIR}/README.md"
@@ -166,6 +210,15 @@ assert_contains 'ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}' \
   "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
 assert_contains 'LD_LIBRARY_PATH=${LIBRARY_PATH}' \
   "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+assert_contains 'ANDROID_EMULATOR_LAUNCHER_DIR=${ROOT}' \
+  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+assert_contains 'ANDROID_EMU_VK_LOADER_PATH' \
+  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+assert_contains 'QT_X11_LIB_DIR=${WORKSPACE}/prebuilts/android-emulator-build/qt/linux-aarch64/lib' \
+  "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains 'X11_XCB_RELATIVE=lib64/libX11-xcb.so.1' \
+  "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains 'runtime_dlopen' "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains 'exec "${ENGINE}" "$@"' \
   "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
 if grep -Fq 'exec "${LOADER}"' "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"; then
@@ -191,7 +244,14 @@ assert_contains 'ARG NATIVE_AEMU_PATCH_SET_SHA256' \
 assert_contains 'io.cloudandx.native-aemu.source-lock-sha256=' "${ENGINE_DIR}/Dockerfile"
 assert_contains 'io.cloudandx.native-aemu.patch-set-sha256=' "${ENGINE_DIR}/Dockerfile"
 assert_contains 'execution_model direct-engine' "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains '"${STRIP}" --strip-unneeded' "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains 'validate_origin_search_path' "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains 'copy_runtime_tree_flat' "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains 'common/skins/x86_64/android-36' "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains 'identity.properties' "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains '/lib/ld-linux-aarch64.so.1' "${REPO_ROOT}/docker/emulator/Dockerfile"
+assert_contains 'sdk-resources.SHA256SUMS' "${REPO_ROOT}/docker/emulator/Dockerfile"
+assert_contains 'native_aemu_graphics_args' "${REPO_ROOT}/docker/emulator/bin/entrypoint.sh"
+assert_contains '-feature -VulkanSnapshots' "${REPO_ROOT}/docker/emulator/bin/runtime-lib.sh"
 
 printf 'static-contract-test: source locks, patch order, scripts, and bundle contract verified\n'

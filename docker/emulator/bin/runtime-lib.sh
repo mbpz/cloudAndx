@@ -79,7 +79,16 @@ selected_engine_kind() {
 validate_native_aemu_bundle() {
   bundle_root=${1:-/opt/cloudandx/native-aemu}
   runner=${bundle_root}/bin/run-qemu-system-x86_64-headless
-  engine=${bundle_root}/bin/qemu-system-x86_64-headless
+  engine=${bundle_root}/qemu/linux-aarch64/qemu-system-x86_64-headless
+  gfxstream_backend=${bundle_root}/lib64/libgfxstream_backend.so
+  x11_xcb=${bundle_root}/lib64/libX11-xcb.so.1
+  crashpad_handler=${bundle_root}/crashpad_handler
+  qemu_img=${bundle_root}/qemu-img
+  nimble_bridge=${bundle_root}/nimble_bridge
+  pc_bios=${bundle_root}/lib/pc-bios
+  swiftshader=${bundle_root}/lib64/gles_swiftshader
+  resources=${bundle_root}/resources
+  sdk_resource_checksums=${bundle_root}/sdk-resources.SHA256SUMS
   manifest=${bundle_root}/manifest.json
   checksums=${bundle_root}/SHA256SUMS
   identity=${bundle_root}/identity.properties
@@ -102,11 +111,53 @@ validate_native_aemu_bundle() {
 
   [ -x "${runner}" ] || runtime_die "Native AEMU runner is missing or not executable: ${runner}" || return 1
   [ -x "${engine}" ] || runtime_die "Native AEMU engine is missing or not executable: ${engine}" || return 1
+  [ -s "${gfxstream_backend}" ] || runtime_die "Native AEMU gfxstream backend is missing: ${gfxstream_backend}" || return 1
+  [ -s "${x11_xcb}" ] || runtime_die "Native AEMU X11-XCB runtime library is missing: ${x11_xcb}" || return 1
+  [ -x "${crashpad_handler}" ] || runtime_die "Native AEMU crashpad handler is missing: ${crashpad_handler}" || return 1
+  [ -x "${qemu_img}" ] || runtime_die "Native AEMU qemu-img is missing: ${qemu_img}" || return 1
+  [ -x "${nimble_bridge}" ] || runtime_die "Native AEMU NimBLE bridge is missing: ${nimble_bridge}" || return 1
+  [ -d "${pc_bios}" ] || runtime_die "Native AEMU pc-bios data is missing: ${pc_bios}" || return 1
+  find "${pc_bios}" -type f -print -quit | grep -q . \
+    || runtime_die "Native AEMU pc-bios data is empty." \
+    || return 1
+  for data_file in advancedFeatures.ini emu-original-feature-flags.protobuf \
+    ca-bundle.pem hostapd.conf emulator_access.json; do
+    [ -s "${bundle_root}/lib/${data_file}" ] \
+      || runtime_die "Native AEMU locked data file is missing: ${data_file}" \
+      || return 1
+  done
+  [ -z "$(find "${bundle_root}/lib" -mindepth 1 -maxdepth 1 \
+    ! -name pc-bios \
+    ! -name advancedFeatures.ini \
+    ! -name emu-original-feature-flags.protobuf \
+    ! -name ca-bundle.pem \
+    ! -name hostapd.conf \
+    ! -name emulator_access.json \
+    -print -quit)" ] \
+    || runtime_die "Native AEMU lib directory contains unlocked runtime data." \
+    || return 1
+  for swiftshader_library in libEGL.so libGLES_CM.so libGLESv2.so; do
+    [ -s "${swiftshader}/${swiftshader_library}" ] \
+      || runtime_die "Native AEMU SwiftShader library is missing: ${swiftshader_library}" \
+      || return 1
+  done
   [ -s "${manifest}" ] || runtime_die "Native AEMU provenance manifest is missing: ${manifest}" || return 1
   [ -s "${checksums}" ] || runtime_die "Native AEMU checksum manifest is missing: ${checksums}" || return 1
   [ -s "${identity}" ] || runtime_die "Native AEMU immutable identity is missing: ${identity}" || return 1
   (cd "${bundle_root}" && sha256sum -c SHA256SUMS >/dev/null 2>&1) \
     || runtime_die "Native AEMU bundle checksum verification failed." \
+    || return 1
+  [ -d "${resources}" ] \
+    || runtime_die "Google Emulator runtime resources are missing: ${resources}" \
+    || return 1
+  find "${resources}" -type f -print -quit | grep -q . \
+    || runtime_die "Google Emulator runtime resources are empty." \
+    || return 1
+  [ -s "${sdk_resource_checksums}" ] \
+    || runtime_die "Google Emulator resource checksum manifest is missing." \
+    || return 1
+  (cd "${bundle_root}" && sha256sum -c sdk-resources.SHA256SUMS >/dev/null 2>&1) \
+    || runtime_die "Google Emulator runtime resource checksum verification failed." \
     || return 1
   [ "$(wc -l < "${identity}" | tr -d ' ')" = 3 ] \
     || runtime_die "Native AEMU identity must contain exactly three fields." \
@@ -124,8 +175,8 @@ validate_native_aemu_bundle() {
 
 validate_native_aemu_direct_execution() {
   bundle_root=${1:-/opt/cloudandx/native-aemu}
-  bundled_loader=${bundle_root}/lib/ld-linux-aarch64.so.1
-  engine_lib_link=${bundle_root}/bin/lib64
+  bundled_loader=${bundle_root}/lib64/ld-linux-aarch64.so.1
+  engine_lib_link=${bundle_root}/qemu/linux-aarch64/lib64
   interpreter=${2:-/lib/ld-linux-aarch64.so.1}
 
   [ -x "${interpreter}" ] \
@@ -137,7 +188,7 @@ validate_native_aemu_direct_execution() {
   [ -L "${engine_lib_link}" ] \
     || runtime_die "Native AEMU engine lib64 path is not a symbolic link." \
     || return 1
-  [ "$(readlink "${engine_lib_link}")" = ../lib ] \
+  [ "$(readlink "${engine_lib_link}")" = ../../lib64 ] \
     || runtime_die "Native AEMU engine lib64 path does not resolve inside the bundle." \
     || return 1
 }
@@ -149,12 +200,40 @@ expected_engine_executable() {
       printf '%s\n' "${UPSTREAM_QEMU_ENGINE:-/opt/android-sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64}"
       ;;
     arm64|aarch64)
-      printf '%s\n' "${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}/bin/qemu-system-x86_64-headless"
+      printf '%s\n' "${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
       ;;
     *)
       runtime_die "Cannot select an engine executable for architecture '${architecture}'."
       ;;
   esac
+}
+
+validate_runtime_gpu_mode() {
+  architecture=${1-}
+  gpu=${2-}
+
+  case ${architecture} in
+    arm64|aarch64)
+      [ "${gpu}" = swiftshader ] \
+        || runtime_die "ARM64 native AEMU requires EMULATOR_GPU=swiftshader for first boot."
+      ;;
+    x86_64|amd64)
+      return 0
+      ;;
+    *)
+      runtime_die "Cannot validate GPU mode for unsupported architecture '${architecture}'."
+      ;;
+  esac
+}
+
+native_aemu_graphics_args() {
+  printf '%s\n' \
+    -gpu swiftshader \
+    -feature -Vulkan \
+    -feature -GuestAngle \
+    -feature -GuestUsesAngle \
+    -feature -VulkanNativeSwapchain \
+    -feature -VulkanSnapshots
 }
 
 engine_process_matches_expected() {

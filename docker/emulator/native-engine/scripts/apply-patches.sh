@@ -32,6 +32,7 @@ apply_series() {
   || die 'unexpected AEMU revision in source lock'
 
 apply_series aemu "${WORKSPACE}/external/qemu"
+apply_series gfxstream "${WORKSPACE}/hardware/google/gfxstream"
 apply_series protobuf "${WORKSPACE}/external/protobuf"
 apply_series crashpad "${WORKSPACE}/external/crashpad"
 

@@ -9,19 +9,81 @@ NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION:-}
 NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256:-}
 NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256:-}
 
+ENGINE=${BUNDLE_DIR}/qemu/linux-aarch64/qemu-system-x86_64-headless
+RUNNER=${BUNDLE_DIR}/bin/run-qemu-system-x86_64-headless
+LOADER=${BUNDLE_DIR}/lib64/ld-linux-aarch64.so.1
+GFXSTREAM_BACKEND=${BUNDLE_DIR}/lib64/libgfxstream_backend.so
+X11_XCB=${BUNDLE_DIR}/lib64/libX11-xcb.so.1
+CRASHPAD_HANDLER=${BUNDLE_DIR}/crashpad_handler
+QEMU_IMG=${BUNDLE_DIR}/qemu-img
+NIMBLE_BRIDGE=${BUNDLE_DIR}/nimble_bridge
+SWIFTSHADER_DIR=${BUNDLE_DIR}/lib64/gles_swiftshader
+IDENTITY=${BUNDLE_DIR}/identity.properties
+
 die() {
   printf 'smoke-test-bundle: %s\n' "$*" >&2
   exit 1
 }
 
-ENGINE=${BUNDLE_DIR}/bin/qemu-system-x86_64-headless
-RUNNER=${BUNDLE_DIR}/bin/run-qemu-system-x86_64-headless
-LOADER=${BUNDLE_DIR}/lib/ld-linux-aarch64.so.1
-IDENTITY=${BUNDLE_DIR}/identity.properties
+elf_build_id() {
+  local path=$1
+  "${READELF}" -n "${path}" 2>/dev/null \
+    | sed -n 's/.*Build ID: \([0-9a-f][0-9a-f]*\).*/\1/p' \
+    | sed -n '1p'
+}
 
-for required in "${ENGINE}" "${RUNNER}" "${LOADER}" \
-  "${IDENTITY}" "${BUNDLE_DIR}/manifest.json" "${BUNDLE_DIR}/SHA256SUMS"; do
+validate_origin_search_path() {
+  local search_path=$1 tag=$2 entry relative component
+  local -a entries=()
+  local -a components=()
+
+  [[ -n "${search_path}" ]] || return 0
+  case ${search_path} in
+    :*|*:|*::*) die "${tag} contains an empty ELF search-path entry" ;;
+  esac
+
+  IFS=: read -r -a entries <<<"${search_path}"
+  for entry in "${entries[@]}"; do
+    case ${entry} in
+      '$ORIGIN') continue ;;
+      '$ORIGIN/'*)
+        relative=${entry#\$ORIGIN/}
+        [[ -n "${relative}" && "${relative}" != */ && "${relative}" != *//* ]] \
+          || die "${tag} contains a non-normalized ELF search path: ${entry}"
+        IFS=/ read -r -a components <<<"${relative}"
+        for component in "${components[@]}"; do
+          [[ -n "${component}" && "${component}" != . && "${component}" != .. ]] \
+            || die "${tag} contains a non-normalized ELF search path: ${entry}"
+        done
+        ;;
+      *) die "${tag} escapes the bundle: ${entry}" ;;
+    esac
+  done
+}
+
+search_path_contains() {
+  local search_path=$1 expected=$2
+  [[ ":${search_path}:" == *":${expected}:"* ]]
+}
+
+for required in \
+  "${ENGINE}" \
+  "${RUNNER}" \
+  "${LOADER}" \
+  "${GFXSTREAM_BACKEND}" \
+  "${X11_XCB}" \
+  "${CRASHPAD_HANDLER}" \
+  "${QEMU_IMG}" \
+  "${NIMBLE_BRIDGE}" \
+  "${IDENTITY}" \
+  "${BUNDLE_DIR}/manifest.json" \
+  "${BUNDLE_DIR}/SHA256SUMS"; do
   [[ -f "${required}" ]] || die "required bundle file is missing: ${required}"
+done
+
+for executable in "${ENGINE}" "${RUNNER}" "${LOADER}" \
+  "${CRASHPAD_HANDLER}" "${QEMU_IMG}" "${NIMBLE_BRIDGE}"; do
+  [[ -x "${executable}" ]] || die "bundle executable is not executable: ${executable}"
 done
 
 (
@@ -32,17 +94,30 @@ done
 sh -n "${RUNNER}"
 grep -Fq 'ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}' "${RUNNER}" \
   || die 'runner does not default to the fixed bundle root'
+grep -Fq 'ENGINE=${ROOT}/qemu/linux-aarch64/qemu-system-x86_64-headless' "${RUNNER}" \
+  || die 'runner does not use the launcher-compatible engine path'
 grep -Fq 'unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT' "${RUNNER}" \
   || die 'runner does not clear inherited dynamic-loader variables'
+grep -Fq 'unset ANDROID_EGL_LIB ANDROID_GLESv1_LIB ANDROID_GLESv2_LIB' "${RUNNER}" \
+  || die 'runner does not clear inherited GLES library selection'
+grep -Fq 'unset ANDROID_EMU_VK_LOADER_PATH' "${RUNNER}" \
+  || die 'runner does not clear the inherited Emulator Vulkan loader path'
+grep -Fq 'unset VK_ICD_FILENAMES VK_DRIVER_FILES' "${RUNNER}" \
+  || die 'runner does not clear inherited Vulkan driver selection'
+grep -Fq 'ANDROID_EMULATOR_LAUNCHER_DIR=${ROOT}' "${RUNNER}" \
+  || die 'runner does not replace the inherited launcher directory'
+grep -Fq 'LIBRARY_PATH=${ROOT}/lib64:${ROOT}/lib64/gles_swiftshader' "${RUNNER}" \
+  || die 'runner does not select the ARM64 library and SwiftShader directories'
 grep -Fq 'LD_LIBRARY_PATH=${LIBRARY_PATH}' "${RUNNER}" \
-  || die 'runner does not replace the inherited library path with the bundle path'
+  || die 'runner does not replace the inherited library path'
 grep -Fq 'exec "${ENGINE}" "$@"' "${RUNNER}" \
   || die 'runner does not directly exec the engine'
 if grep -Fq 'exec "${LOADER}"' "${RUNNER}"; then
   die 'runner still executes the ELF loader as the process image'
 fi
-[[ -L "${BUNDLE_DIR}/bin/lib64" \
-  && $(readlink "${BUNDLE_DIR}/bin/lib64") == ../lib ]] \
+
+[[ -L "${BUNDLE_DIR}/qemu/linux-aarch64/lib64" \
+  && $(readlink "${BUNDLE_DIR}/qemu/linux-aarch64/lib64") == ../../lib64 ]] \
   || die 'engine $ORIGIN/lib64 link does not resolve to the bundle library directory'
 
 INTERPRETER=$("${READELF}" -l "${ENGINE}" \
@@ -51,39 +126,116 @@ RPATH=$("${READELF}" -d "${ENGINE}" 2>/dev/null \
   | sed -n 's/.*(RPATH).*\[\([^]]*\)\].*/\1/p')
 RUNPATH=$("${READELF}" -d "${ENGINE}" 2>/dev/null \
   | sed -n 's/.*(RUNPATH).*\[\([^]]*\)\].*/\1/p')
+BUILD_ID=$(elf_build_id "${ENGINE}")
 [[ "${INTERPRETER}" == /lib/ld-linux-aarch64.so.1 ]] \
   || die "unexpected direct-exec ELF interpreter: ${INTERPRETER:-missing}"
-[[ "${RPATH}:${RUNPATH}" == *'$ORIGIN/lib64'* ]] \
-  || die 'engine ELF search path does not contain $ORIGIN/lib64'
+if ! search_path_contains "${RPATH}" '$ORIGIN/lib64' \
+  && ! search_path_contains "${RUNPATH}" '$ORIGIN/lib64'; then
+  die 'engine ELF search path does not contain $ORIGIN/lib64'
+fi
+validate_origin_search_path "${RPATH}" RPATH
+validate_origin_search_path "${RUNPATH}" RUNPATH
+[[ -n "${BUILD_ID}" ]] || die 'stripped engine has no GNU Build ID'
+
+for data_file in \
+  advancedFeatures.ini \
+  emu-original-feature-flags.protobuf \
+  ca-bundle.pem \
+  hostapd.conf \
+  emulator_access.json; do
+  [[ -s "${BUNDLE_DIR}/lib/${data_file}" ]] \
+    || die "locked AEMU runtime data is missing: ${data_file}"
+done
+[[ -d "${BUNDLE_DIR}/lib/pc-bios" ]] || die 'locked AEMU pc-bios directory is missing'
+find "${BUNDLE_DIR}/lib/pc-bios" -type f -print -quit | grep -q . \
+  || die 'locked AEMU pc-bios directory is empty'
+[[ -z $(find "${BUNDLE_DIR}/lib" -mindepth 1 -maxdepth 1 \
+  ! -name pc-bios \
+  ! -name advancedFeatures.ini \
+  ! -name emu-original-feature-flags.protobuf \
+  ! -name ca-bundle.pem \
+  ! -name hostapd.conf \
+  ! -name emulator_access.json \
+  -print -quit) ]] || die 'bundle lib contains unlocked runtime data'
+
+[[ -d "${BUNDLE_DIR}/resources/skins/android-36" ]] \
+  || die 'locked x86_64 guest skin resources are missing'
+find "${BUNDLE_DIR}/resources" -type f -print -quit | grep -q . \
+  || die 'locked native AEMU runtime resources are empty'
+[[ -z $(find "${BUNDLE_DIR}/resources" -name BUILD.bazel -print -quit) ]] \
+  || die 'build-only metadata leaked into runtime resources'
+
+EXPECTED_SWIFTSHADER=$'libEGL.so\nlibGLES_CM.so\nlibGLESv2.so'
+ACTUAL_SWIFTSHADER=$(find "${SWIFTSHADER_DIR}" -maxdepth 1 -type f \
+  -printf '%f\n' | sort)
+[[ "${ACTUAL_SWIFTSHADER}" == "${EXPECTED_SWIFTSHADER}" ]] \
+  || die 'SwiftShader directory does not contain exactly the three locked GLES libraries'
 
 while IFS= read -r elf_file; do
   "${READELF}" -h "${elf_file}" \
     | grep -Eq 'Machine:[[:space:]]+AArch64' \
     || die "ELF is not AArch64: ${elf_file}"
+  if "${READELF}" -S "${elf_file}" 2>/dev/null \
+    | grep -Eq '\.debug_(info|line|str)([[:space:]]|$)'; then
+    die "ELF still contains debug sections after packaging: ${elf_file}"
+  fi
+  ELF_RPATH=$("${READELF}" -d "${elf_file}" 2>/dev/null \
+    | sed -n 's/.*(RPATH).*\[\([^]]*\)\].*/\1/p')
+  ELF_RUNPATH=$("${READELF}" -d "${elf_file}" 2>/dev/null \
+    | sed -n 's/.*(RUNPATH).*\[\([^]]*\)\].*/\1/p')
+  validate_origin_search_path "${ELF_RPATH}" RPATH
+  validate_origin_search_path "${ELF_RUNPATH}" RUNPATH
   while IFS= read -r needed; do
-    [[ -f "${BUNDLE_DIR}/lib/${needed}" ]] \
+    [[ -f "${BUNDLE_DIR}/lib64/${needed}" \
+      || -f "${SWIFTSHADER_DIR}/${needed}" ]] \
       || die "unresolved bundled DT_NEEDED entry ${needed} from ${elf_file}"
   done < <("${READELF}" -d "${elf_file}" 2>/dev/null \
     | sed -n 's/.*(NEEDED).*\[\([^]]*\)\].*/\1/p' | sort -u)
-done < <(printf '%s\n' "${ENGINE}" "${LOADER}"; find "${BUNDLE_DIR}/lib" \
-  -maxdepth 1 -type f ! -name ld-linux-aarch64.so.1 -print | sort)
+done < <(
+  printf '%s\n' \
+    "${ENGINE}" \
+    "${CRASHPAD_HANDLER}" \
+    "${QEMU_IMG}" \
+    "${NIMBLE_BRIDGE}"
+  find "${BUNDLE_DIR}/lib64" -type f -print | sort
+)
+
+if grep -Fq '/out/build' "${BUNDLE_DIR}/manifest.json"; then
+  die 'build-tree path leaked into the bundle manifest'
+fi
 
 jq -e \
   --arg interpreter "${INTERPRETER}" \
   --arg rpath "${RPATH}" \
-  --arg runpath "${RUNPATH}" '
-  .schema_version == 1 and
+  --arg runpath "${RUNPATH}" \
+  --arg build_id "${BUILD_ID}" '
+  .schema_version == 2 and
   .product == "cloudandx-aemu-native-engine" and
   .revision == "37.1.7" and
   .architecture == "arm64" and
-  .binary == "/opt/cloudandx/native-aemu/bin/qemu-system-x86_64-headless" and
+  .binary == "/opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-x86_64-headless" and
   .runner == "/opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless" and
-  .loader == "/opt/cloudandx/native-aemu/lib/ld-linux-aarch64.so.1" and
+  .loader == "/opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1" and
+  .helpers.gfxstream_backend == "/opt/cloudandx/native-aemu/lib64/libgfxstream_backend.so" and
+  .helpers.crashpad_handler == "/opt/cloudandx/native-aemu/crashpad_handler" and
+  .helpers.qemu_img == "/opt/cloudandx/native-aemu/qemu-img" and
+  .helpers.nimble_bridge == "/opt/cloudandx/native-aemu/nimble_bridge" and
+  .runtime_dlopen == {
+    "gfxstream_backend": "/opt/cloudandx/native-aemu/lib64/libgfxstream_backend.so",
+    "x11_xcb": "/opt/cloudandx/native-aemu/lib64/libX11-xcb.so.1",
+    "swiftshader_egl": "/opt/cloudandx/native-aemu/lib64/gles_swiftshader/libEGL.so",
+    "swiftshader_gles_cm": "/opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLES_CM.so",
+    "swiftshader_gles_v2": "/opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLESv2.so"
+  } and
+  .data.pc_bios == "/opt/cloudandx/native-aemu/lib/pc-bios" and
+  .data.swiftshader == "/opt/cloudandx/native-aemu/lib64/gles_swiftshader" and
+  .data.resources == "/opt/cloudandx/native-aemu/resources" and
   .execution.model == "direct-engine" and
   .execution.interpreter == $interpreter and
   .execution.rpath == $rpath and
   .execution.runpath == $runpath and
-  .execution.library_path == "/opt/cloudandx/native-aemu/lib"
+  .execution.build_id == $build_id and
+  .execution.library_path == "/opt/cloudandx/native-aemu/lib64:/opt/cloudandx/native-aemu/lib64/gles_swiftshader"
 ' "${BUNDLE_DIR}/manifest.json" >/dev/null \
   || die 'bundle manifest contract is invalid'
 
@@ -107,4 +259,4 @@ grep -Fxq "patch_set_sha256=${PATCH_SET_SHA256}" "${IDENTITY}" \
   || "${PATCH_SET_SHA256}" == "${NATIVE_AEMU_PATCH_SET_SHA256}" ]] \
   || die 'expected patch-set identity mismatch'
 
-printf 'smoke-test-bundle: direct AArch64 engine, identity, ELF closure, and checksums verified\n'
+printf 'smoke-test-bundle: launcher layout, stripped ARM64 ELF closure, SwiftShader, identity, and checksums verified\n'

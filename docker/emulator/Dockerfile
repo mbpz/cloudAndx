@@ -175,9 +175,9 @@ RUN set -eu; \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/runtime-lib.sh \
       /usr/local/bin/runtime-preflight.sh \
-    && install -m 0555 /opt/cloudandx/native-aemu/lib/ld-linux-aarch64.so.1 \
+    && install -m 0555 /opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1 \
       /lib/ld-linux-aarch64.so.1 \
-    && cmp -s /opt/cloudandx/native-aemu/lib/ld-linux-aarch64.so.1 \
+    && cmp -s /opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1 \
       /lib/ld-linux-aarch64.so.1 \
     && (cd /opt/cloudandx/native-aemu && sha256sum -c SHA256SUMS) \
     && grep -Fxq "revision=${NATIVE_AEMU_REVISION}" \
@@ -186,8 +186,36 @@ RUN set -eu; \
       /opt/cloudandx/native-aemu/identity.properties \
     && grep -Fxq "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
       /opt/cloudandx/native-aemu/identity.properties \
-    && test -L /opt/cloudandx/native-aemu/bin/lib64 \
-    && test "$(readlink /opt/cloudandx/native-aemu/bin/lib64)" = ../lib \
+    && test -L /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64 \
+    && test "$(readlink /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64)" = ../../lib64 \
+    && test -x /opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-x86_64-headless \
+    && test -s /opt/cloudandx/native-aemu/lib64/libgfxstream_backend.so \
+    && test -s /opt/cloudandx/native-aemu/lib64/libX11-xcb.so.1 \
+    && test -x /opt/cloudandx/native-aemu/crashpad_handler \
+    && test -x /opt/cloudandx/native-aemu/qemu-img \
+    && test -x /opt/cloudandx/native-aemu/nimble_bridge \
+    && test -s /opt/cloudandx/native-aemu/lib/advancedFeatures.ini \
+    && test -s /opt/cloudandx/native-aemu/lib/emu-original-feature-flags.protobuf \
+    && test -s /opt/cloudandx/native-aemu/lib/ca-bundle.pem \
+    && test -s /opt/cloudandx/native-aemu/lib/hostapd.conf \
+    && test -s /opt/cloudandx/native-aemu/lib/emulator_access.json \
+    && test -s /opt/cloudandx/native-aemu/lib64/gles_swiftshader/libEGL.so \
+    && test -s /opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLES_CM.so \
+    && test -s /opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLESv2.so \
+    && test -d /opt/android-sdk/emulator/resources \
+    && test -d /opt/cloudandx/native-aemu/resources \
+    && for resource_dir in macros macroPreviews; do \
+      test -d "/opt/android-sdk/emulator/resources/${resource_dir}"; \
+      test ! -e "/opt/cloudandx/native-aemu/resources/${resource_dir}"; \
+      cp -a "/opt/android-sdk/emulator/resources/${resource_dir}" \
+        /opt/cloudandx/native-aemu/resources/; \
+    done \
+    && (cd /opt/cloudandx/native-aemu \
+      && find resources/macros resources/macroPreviews -type f -print | LC_ALL=C sort \
+        | while IFS= read -r resource_file; do sha256sum "${resource_file}"; done \
+        > sdk-resources.SHA256SUMS \
+      && test -s sdk-resources.SHA256SUMS \
+      && sha256sum -c sdk-resources.SHA256SUMS) \
     && chmod -R a-w /opt/android-sdk /opt/android-avd-template \
       /opt/cloudandx/native-aemu \
     && test -x /opt/android-sdk/emulator/emulator \

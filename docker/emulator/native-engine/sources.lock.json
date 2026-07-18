@@ -64,7 +64,12 @@
         {"path": "cmake-main.linux-aarch64.inc", "sha1": "844a24bdfb19d9cca58358436b9c81c83ea52e47"},
         {"path": "android/build/cmake/toolchain-linux-aarch64.cmake", "sha1": "1fa863f9f813d1750039cc1952df8d02ec735b07"},
         {"path": "android/emulator/CMakeLists.txt", "sha1": "e29c1d113371919b650e31ea9fbc192d1d789917"},
-        {"path": "android/emulator/main-emulator.cpp", "sha1": "b1ce66146651b509fc85b20f5ecc3c51aea56a35"}
+        {"path": "android/emulator/main-emulator.cpp", "sha1": "b1ce66146651b509fc85b20f5ecc3c51aea56a35"},
+        {"path": "android/data/advancedFeatures.ini", "sha1": "21086765b1a03ade85ca4602b45fe0961c979d2f"},
+        {"path": "android/data/emu-original-feature-flags.protobuf", "sha1": "789ec726ca31c2186d1e1d38af352caa7fe36f33"},
+        {"path": "android/data/ca-bundle.pem", "sha1": "759a4d6f3f96680a57eaa67a37a0ac67501660f5"},
+        {"path": "android/data/hostapd.conf", "sha1": "869c93d2f0ce99d803222c8994751b65ea601085"},
+        {"path": "android/android-grpc/security/src/android/emulation/control/secure/emulator_access.json", "sha1": "e2aedfda75f8b494717d54b64045f51c5786e18c"}
       ]
     },
     {
@@ -85,8 +90,13 @@
       "destination": "prebuilts/android-emulator-build/qt/linux-aarch64/lib",
       "git_tree": "ce55fd91d181e57515f3833e80a4d1fcc7f732da",
       "verify_tree": false,
-      "verification_note": "Only the pinned AArch64 X11 link libraries and their non-glibc DT_NEEDED closure are fetched from this official Qt lib tree.",
+      "verification_note": "Only the pinned AArch64 X11 link libraries, explicit libX11-xcb runtime dlopen asset, and their non-glibc DT_NEEDED closure are fetched from this official Qt lib tree.",
       "files": [
+        {
+          "path": "linux-aarch64/lib/libX11-xcb.so.1",
+          "destination": "libX11-xcb.so.1",
+          "sha1": "c1b35aa0d931b4d5b15c552e20c220b0a213f04b"
+        },
         {
           "path": "linux-aarch64/lib/libX11.so",
           "destination": "libX11.so",
@@ -204,6 +214,51 @@
       "subtree": "ANGLE/linux-aarch64",
       "destination": "prebuilts/android-emulator-build/common/ANGLE/linux-aarch64",
       "git_tree": "8b1e7b8605ef2bab6dccaad503a167484434a71c",
+      "verify_tree": true
+    },
+    {
+      "id": "common-swiftshader-linux-aarch64",
+      "repository": "https://android.googlesource.com/platform/prebuilts/android-emulator-build/common",
+      "commit": "f64c458fc47ac18f738f9c8bdecb64d265f530f4",
+      "subtree": "",
+      "destination": "prebuilts/android-emulator-build/common/swiftshader/linux-aarch64/lib",
+      "git_tree": "739f97a2f858a9cd633202ee02dc22ba31b23f79",
+      "verify_tree": false,
+      "verification_note": "Only the three blob-verified AArch64 GLES SwiftShader libraries are fetched; Vulkan is intentionally excluded.",
+      "files": [
+        {
+          "path": "swiftshader/linux-aarch64/lib/libEGL.so",
+          "destination": "libEGL.so",
+          "sha1": "6ba90a42d6a0369bfdc45309d9370b0a74a168ea"
+        },
+        {
+          "path": "swiftshader/linux-aarch64/lib/libGLES_CM.so",
+          "destination": "libGLES_CM.so",
+          "sha1": "cb02f7fc831a546a16ea9b3d3e2c3a17084e353b"
+        },
+        {
+          "path": "swiftshader/linux-aarch64/lib/libGLESv2.so",
+          "destination": "libGLESv2.so",
+          "sha1": "b8c987eac2fb2f91da24febfa8e4cd27a2c7c165"
+        }
+      ]
+    },
+    {
+      "id": "common-virtualscene",
+      "repository": "https://android.googlesource.com/platform/prebuilts/android-emulator-build/common",
+      "commit": "f64c458fc47ac18f738f9c8bdecb64d265f530f4",
+      "subtree": "virtualscene",
+      "destination": "prebuilts/android-emulator-build/common/virtualscene",
+      "git_tree": "0798090bcaae798590d852f0ba76db69f4848ae2",
+      "verify_tree": true
+    },
+    {
+      "id": "common-skins-x86_64-android-36",
+      "repository": "https://android.googlesource.com/platform/prebuilts/android-emulator-build/common",
+      "commit": "f64c458fc47ac18f738f9c8bdecb64d265f530f4",
+      "subtree": "skins/x86_64/android-36",
+      "destination": "prebuilts/android-emulator-build/common/skins/x86_64/android-36",
+      "git_tree": "bebd3c0b91f525f6da18c640fc3ebba8144b0447",
       "verify_tree": true
     },
     {
@@ -556,7 +611,11 @@
       "patches/0005-build-host-protoc-from-upstream-source.patch",
       "patches/0006-propagate-host-cmake-context.patch",
       "patches/0007-disable-x86-kvm-on-non-x86-linux.patch",
-      "patches/0008-use-tcg-translation-without-kvm.patch"
+      "patches/0008-use-tcg-translation-without-kvm.patch",
+      "patches/0009-use-origin-rpath-for-emugl-common.patch"
+    ],
+    "gfxstream": [
+      "patches/gfxstream-0001-propagate-xcb-headers-to-vulkan-cereal.patch"
     ],
     "protobuf": [
       "patches/protobuf-0001-allow-standalone-host-protoc.patch"

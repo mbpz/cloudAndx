@@ -39,6 +39,19 @@ assert_contains() {
   esac
 }
 
+assert_not_contains() {
+  haystack=$1
+  needle=$2
+  label=$3
+  case "${haystack}" in
+    *"${needle}"*)
+      printf 'FAIL: %s: output unexpectedly contained <%s>\n%s\n' "${label}" "${needle}" "${haystack}" >&2
+      exit 1
+      ;;
+    *) pass ;;
+  esac
+}
+
 assert_fails() {
   label=$1
   shift
@@ -76,6 +89,13 @@ assert_fails 'missing Docker Engine architecture rejected by runtime' validate_e
 assert_fails 'unsafe AVD name rejected' validate_avd_name '../escape'
 validate_avd_name Pixel_9_Android_17_Play
 pass
+validate_runtime_gpu_mode arm64 swiftshader
+pass
+validate_runtime_gpu_mode x86_64 auto
+pass
+assert_fails 'ARM64 rejects non-SwiftShader first boot' validate_runtime_gpu_mode arm64 auto
+assert_eq "$(printf '%s\n' -gpu swiftshader -feature -Vulkan -feature -GuestAngle -feature -GuestUsesAngle -feature -VulkanNativeSwapchain -feature -VulkanSnapshots)" \
+  "$(native_aemu_graphics_args)" 'ARM64 graphics guard disables unsupported Vulkan and ANGLE features'
 
 tmp=$(mktemp -d)
 real_engine_pid=
@@ -111,7 +131,12 @@ mkdir -p \
   "${sdk}/platform-tools" \
   "${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64" \
   "${native_aemu}/bin" \
-  "${native_aemu}/lib" \
+  "${native_aemu}/qemu/linux-aarch64" \
+  "${native_aemu}/lib/pc-bios" \
+  "${native_aemu}/lib64/gles_swiftshader" \
+  "${native_aemu}/resources/skins/android-36" \
+  "${native_aemu}/resources/macros" \
+  "${native_aemu}/resources/macroPreviews" \
   "${data}" \
   "${template}"
 
@@ -135,10 +160,29 @@ cp "${ROOT}/bin/qemu-system-x86_64-headless-dispatcher.sh" \
   "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless"
 printf '%s\n' '#!/bin/sh' 'printf "native:%s\n" "$*"' \
   >"${native_aemu}/bin/run-qemu-system-x86_64-headless"
-printf '%s\n' '#!/bin/sh' 'exit 0' >"${native_aemu}/bin/qemu-system-x86_64-headless"
+printf '%s\n' '#!/bin/sh' 'exit 0' \
+  >"${native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
+for helper in crashpad_handler qemu-img nimble_bridge; do
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"${native_aemu}/${helper}"
+done
+printf '%s\n' gfxstream >"${native_aemu}/lib64/libgfxstream_backend.so"
+printf '%s\n' x11-xcb >"${native_aemu}/lib64/libX11-xcb.so.1"
 printf '%s\n' '{"revision":"test","elf_machine":"AArch64"}' >"${native_aemu}/manifest.json"
-printf '%s\n' 'locked-arm64-loader' >"${native_aemu}/lib/ld-linux-aarch64.so.1"
-ln -s ../lib "${native_aemu}/bin/lib64"
+printf '%s\n' 'locked-arm64-loader' >"${native_aemu}/lib64/ld-linux-aarch64.so.1"
+ln -s ../../lib64 "${native_aemu}/qemu/linux-aarch64/lib64"
+for data_file in advancedFeatures.ini emu-original-feature-flags.protobuf \
+  ca-bundle.pem hostapd.conf emulator_access.json; do
+  printf '%s\n' "${data_file}" >"${native_aemu}/lib/${data_file}"
+done
+printf '%s\n' pc-bios >"${native_aemu}/lib/pc-bios/bios.bin"
+for swiftshader_library in libEGL.so libGLES_CM.so libGLESv2.so; do
+  printf '%s\n' "${swiftshader_library}" \
+    >"${native_aemu}/lib64/gles_swiftshader/${swiftshader_library}"
+done
+printf '%s\n' virtualscene >"${native_aemu}/resources/virtualscene.dat"
+printf '%s\n' skin >"${native_aemu}/resources/skins/android-36/layout"
+printf '%s\n' macro >"${native_aemu}/resources/macros/default.proto"
+printf '%s\n' preview >"${native_aemu}/resources/macroPreviews/default.png"
 printf '%s\n' \
   "revision=${NATIVE_AEMU_REVISION}" \
   "source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
@@ -148,16 +192,45 @@ chmod 0755 \
   "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless" \
   "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64" \
   "${native_aemu}/bin/run-qemu-system-x86_64-headless" \
-  "${native_aemu}/bin/qemu-system-x86_64-headless" \
-  "${native_aemu}/lib/ld-linux-aarch64.so.1"
-(cd "${native_aemu}" && sha256sum \
-  bin/qemu-system-x86_64-headless \
-  bin/run-qemu-system-x86_64-headless \
-  identity.properties \
-  lib/ld-linux-aarch64.so.1 \
-  manifest.json >SHA256SUMS)
+  "${native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless" \
+  "${native_aemu}/crashpad_handler" \
+  "${native_aemu}/qemu-img" \
+  "${native_aemu}/nimble_bridge" \
+  "${native_aemu}/lib64/ld-linux-aarch64.so.1"
+
+write_fake_bundle_checksums() {
+  (
+    cd "${native_aemu}"
+    find . -type f \
+      ! -name SHA256SUMS \
+      ! -name sdk-resources.SHA256SUMS \
+      ! -path './resources/macros/*' \
+      ! -path './resources/macroPreviews/*' \
+      -print | sort \
+      | while IFS= read -r bundle_file; do sha256sum "${bundle_file#./}"; done \
+      >SHA256SUMS
+    find resources/macros resources/macroPreviews -type f -print | sort \
+      | while IFS= read -r resource_file; do sha256sum "${resource_file}"; done \
+      >sdk-resources.SHA256SUMS
+  )
+}
+
+write_fake_bundle_checksums
 validate_native_aemu_bundle "${native_aemu}"
 pass
+mv "${native_aemu}/lib64/libX11-xcb.so.1" \
+  "${native_aemu}/lib64/libX11-xcb.so.1.missing"
+write_fake_bundle_checksums
+assert_fails 'native bundle rejects a checksum-valid missing X11-XCB dlopen library' \
+  validate_native_aemu_bundle "${native_aemu}"
+mv "${native_aemu}/lib64/libX11-xcb.so.1.missing" \
+  "${native_aemu}/lib64/libX11-xcb.so.1"
+write_fake_bundle_checksums
+printf '%s\n' tampered >"${native_aemu}/resources/macros/default.proto"
+assert_fails 'native bundle rejects a modified SDK runtime resource' \
+  validate_native_aemu_bundle "${native_aemu}"
+printf '%s\n' macro >"${native_aemu}/resources/macros/default.proto"
+write_fake_bundle_checksums
 saved_source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}
 unset NATIVE_AEMU_SOURCE_LOCK_SHA256
 assert_fails 'native bundle identity requires the image source-lock digest' \
@@ -165,7 +238,7 @@ assert_fails 'native bundle identity requires the image source-lock digest' \
 NATIVE_AEMU_SOURCE_LOCK_SHA256=${saved_source_lock_sha256}
 export NATIVE_AEMU_SOURCE_LOCK_SHA256
 fake_interpreter=${tmp}/ld-linux-aarch64.so.1
-cp "${native_aemu}/lib/ld-linux-aarch64.so.1" "${fake_interpreter}"
+cp "${native_aemu}/lib64/ld-linux-aarch64.so.1" "${fake_interpreter}"
 chmod 0755 "${fake_interpreter}"
 validate_native_aemu_direct_execution "${native_aemu}" "${fake_interpreter}"
 pass
@@ -174,12 +247,7 @@ printf '%s\n' \
   "source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
   "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
   >"${native_aemu}/identity.properties"
-(cd "${native_aemu}" && sha256sum \
-  bin/qemu-system-x86_64-headless \
-  bin/run-qemu-system-x86_64-headless \
-  identity.properties \
-  lib/ld-linux-aarch64.so.1 \
-  manifest.json >SHA256SUMS)
+write_fake_bundle_checksums
 assert_fails 'native bundle rejects a checksum-valid wrong revision identity' \
   validate_native_aemu_bundle "${native_aemu}"
 printf '%s\n' \
@@ -187,12 +255,7 @@ printf '%s\n' \
   "source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
   "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
   >"${native_aemu}/identity.properties"
-(cd "${native_aemu}" && sha256sum \
-  bin/qemu-system-x86_64-headless \
-  bin/run-qemu-system-x86_64-headless \
-  identity.properties \
-  lib/ld-linux-aarch64.so.1 \
-  manifest.json >SHA256SUMS)
+write_fake_bundle_checksums
 dispatcher=${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless
 assert_contains "$(DOCKER_ENGINE_ARCHITECTURE=x86_64 UPSTREAM_QEMU_ENGINE=${dispatcher}.upstream-x86_64 "${dispatcher}" one two 2>/dev/null)" \
   'upstream:one two' 'dispatcher preserves args for the upstream x86_64 child'
@@ -234,6 +297,7 @@ assert_contains "${command_output}" '=off' 'entrypoint uses software acceleratio
 assert_contains "${command_output}" '=test.value=a b' 'entrypoint preserves one argument containing spaces'
 assert_contains "${command_output}" '=-grpc' 'entrypoint enables gRPC'
 assert_contains "${command_output}" '=8556' 'entrypoint uses isolated internal gRPC port'
+assert_not_contains "${command_output}" '=-Vulkan' 'x86_64 command remains free of ARM-only feature guards'
 
 proxy_pid_dir=${tmp}/proxy-pids
 mkdir -p "${proxy_pid_dir}"
@@ -289,11 +353,18 @@ printf '%s\n' '#!/bin/sh' '[ "${FAKE_GRPC:-1}" = 1 ]' >"${tcp_probe}"
 chmod 0755 "${tcp_probe}"
 
 real_native_aemu=${tmp}/real-native-aemu
-mkdir -p "${real_native_aemu}/bin" "${real_native_aemu}/lib"
-cp -L "$(command -v sleep)" "${real_native_aemu}/bin/qemu-system-x86_64-headless"
-chmod 0755 "${real_native_aemu}/bin/qemu-system-x86_64-headless"
-real_expected_engine=$(readlink -f "${real_native_aemu}/bin/qemu-system-x86_64-headless")
-NATIVE_AEMU_ROOT=${real_native_aemu} LD_LIBRARY_PATH=/inherited/x86/library/path \
+mkdir -p "${real_native_aemu}/qemu/linux-aarch64" \
+  "${real_native_aemu}/lib64/gles_swiftshader"
+cp -L "$(command -v sleep)" \
+  "${real_native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
+chmod 0755 "${real_native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
+real_expected_engine=$(readlink -f "${real_native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless")
+NATIVE_AEMU_ROOT=${real_native_aemu} \
+  LD_LIBRARY_PATH=/inherited/x86/library/path \
+  ANDROID_EGL_LIB=/inherited/x86/libEGL.so \
+  ANDROID_EMU_VK_LOADER_PATH=/inherited/x86/libvulkan.so \
+  VK_ICD_FILENAMES=/inherited/x86/icd.json \
+  VK_ADD_DRIVER_FILES=/inherited/x86/additional-icd.json \
   "${ROOT}/native-engine/bin/run-qemu-system-x86_64-headless" 30 &
 real_engine_pid=$!
 attempt=0
@@ -308,7 +379,16 @@ assert_eq "${real_expected_engine}" "${real_process}" 'native runner directly ex
 engine_process_matches_expected "${real_expected_engine}"
 pass
 tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
-  | grep -Fxq "LD_LIBRARY_PATH=${real_native_aemu}/lib"
+  | grep -Fxq "LD_LIBRARY_PATH=${real_native_aemu}/lib64:${real_native_aemu}/lib64/gles_swiftshader"
+pass
+tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
+  | grep -Fxq "ANDROID_EMULATOR_LAUNCHER_DIR=${real_native_aemu}"
+pass
+if tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
+  | grep -Eq '^(ANDROID_EGL_LIB|ANDROID_EMU_VK_LOADER_PATH|VK_ICD_FILENAMES|VK_ADD_DRIVER_FILES)='; then
+  printf '%s\n' 'FAIL: native runner preserved inherited x86 graphics environment.' >&2
+  exit 1
+fi
 pass
 env DOCKER_ENGINE_ARCHITECTURE=arm64 \
   ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \

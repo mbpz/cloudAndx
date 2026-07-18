@@ -44,6 +44,9 @@ ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl build-emulator
 The controller derives the immutable native-engine source-lock and ordered
 patch-set identities, then performs both Docker builds in dependency order.
 The native-engine build and all source fetching remain inside Docker.
+The main image verifies that bundle before merging only the pinned Google SDK
+`macros/` and `macroPreviews/` resource directories. Those additions receive a
+separate sorted SHA-256 manifest that runtime preflight checks again.
 
 The system image download is about 2.31 GB. The offline self-test target avoids all Android downloads:
 
@@ -83,7 +86,12 @@ The official x86_64 launcher still parses the AVD and command line. Its fixed he
 path is an immutable dispatcher. On ARM64 it executes the bundled native AArch64 AEMU binary
 directly with the locked ARM64 `PT_INTERP` and bundle-local library closure; on x86_64 it
 executes the renamed Google upstream child. Direct execution keeps `/proc/<pid>/exe` bound to
-the engine. This removes the double-translation hotspot while retaining the unmodified
+the engine. The ARM child uses the launcher-compatible `qemu/linux-aarch64`
+layout, locked pc-bios/runtime data, an AArch64 gfxstream backend, and three
+verified SwiftShader GLES libraries. ARM startup is fixed to SwiftShader and
+disables Vulkan and Guest ANGLE features until a real AArch64 Vulkan loader and
+ICD are separately locked; x86_64 retains its existing GPU behavior. This
+removes the double-translation hotspot while retaining the unmodified
 official Google Play guest. Bundle source commits, patches, DT_NEEDED closure, immutable
 identity labels and SHA-256 digests are recorded under `native-engine/`.
 
@@ -120,7 +128,7 @@ Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control a
 | `DOCKER_ENGINE_ARCHITECTURE` | supplied by `androidctl` | Accepts x86_64/amd64 or ARM64/aarch64; missing and unknown values fail closed. |
 | `ANDROID_RUNTIME_IMPLEMENTATION` | derived by `androidctl` | `native` on x86_64; exactly `hybrid-aemu-arm64` on ARM64. Other cross-architecture declarations fail closed. |
 | `EMULATOR_ACCEL` | `auto` (default), `kvm`, `off` | ARM64 always resolves to `off`; x86_64 `auto` uses usable KVM. Explicit KVM fails without a native-compatible device. |
-| `EMULATOR_GPU` | `swiftshader` | Also accepts `auto`, `software`, `swangle`, or `lavapipe`. |
+| `EMULATOR_GPU` | `swiftshader` | ARM64 requires `swiftshader`; x86_64 also accepts `auto`, `software`, `swangle`, or `lavapipe`. |
 | `EMULATOR_CORES` | `4` | Validated in the range 1–32. |
 | `EMULATOR_MEMORY_MB` | `4096` | Validated in the emulator-supported range 1536–8192. |
 | `EMULATOR_WIPE_DATA` | `0` | Set to `1` for one destructive guest-data reset. |

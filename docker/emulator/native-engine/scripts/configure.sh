@@ -11,6 +11,7 @@ cmake \
   -B "${BUILD_DIR}" \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_SKIP_BUILD_RPATH=TRUE \
   -DCMAKE_TOOLCHAIN_FILE="${WORKSPACE}/external/qemu/android/build/cmake/toolchain-linux-aarch64.cmake" \
   -DPython_EXECUTABLE=/usr/bin/python3 \
   -DQT5_LINK_PATH:STRING="-L${WORKSPACE}/prebuilts/android-emulator-build/qt/linux-aarch64/lib" \

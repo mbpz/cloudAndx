@@ -15,6 +15,10 @@ same locked Cuttlefish commit; AEMU continues to compile its own cross-platform
 `SharedFD` implementation instead of Cuttlefish's host implementation.
 The ARM64 X11 link libraries are a blob-verified minimal closure from Google's
 locked Emulator Qt prebuilt rather than mutable distribution packages.
+The three GLES SwiftShader libraries are individually blob-verified AArch64
+artifacts from the same locked common revision. VirtualScene data and the
+Android 36 x86_64 guest skin are verified as complete Git subtrees; no x86_64
+Vulkan loader or ICD is included in the ARM bundle.
 
 Build the final stage through the Docker-only controller. It derives the
 immutable build arguments from the current source lock and ordered patch list:
@@ -26,19 +30,29 @@ immutable build arguments from the current source lock and ordered patch list:
 The final image is a scratch carrier whose exact bundle root is
 `/opt/cloudandx/native-aemu/`. Its stable integration paths are:
 
-- Engine: `/opt/cloudandx/native-aemu/bin/qemu-system-x86_64-headless`
+- Engine: `/opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-x86_64-headless`
 - Runner: `/opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless`
+- Helpers: `/opt/cloudandx/native-aemu/{crashpad_handler,qemu-img,nimble_bridge}`
+- Renderer: `/opt/cloudandx/native-aemu/lib64/libgfxstream_backend.so`
+- Renderer X11/XCB dlopen support: `/opt/cloudandx/native-aemu/lib64/libX11-xcb.so.1`
+- ARM ELF closure: `/opt/cloudandx/native-aemu/lib64/`
+- SwiftShader GLES: `/opt/cloudandx/native-aemu/lib64/gles_swiftshader/`
+- Locked data and firmware: `/opt/cloudandx/native-aemu/lib/` and `lib/pc-bios/`
+- Scene and guest-skin data: `/opt/cloudandx/native-aemu/resources/`
 - Identity: `/opt/cloudandx/native-aemu/identity.properties`
 - Manifest: `/opt/cloudandx/native-aemu/manifest.json`
 - Checksums: `/opt/cloudandx/native-aemu/SHA256SUMS`
 
-The runner removes inherited dynamic-loader variables, installs a controlled
-bundle-local library path, and directly executes the engine. The parent runtime
+The runner removes inherited x86_64 dynamic-loader, GLES, and Vulkan variables,
+sets `ANDROID_EMULATOR_LAUNCHER_DIR` to the bundle root, installs a controlled
+`lib64` plus `gles_swiftshader` search path, and directly executes the engine.
+The parent runtime
 installs the exact bundled loader at the engine's locked `PT_INTERP` path, so
 `/proc/<pid>/exe` identifies the engine rather than the loader. Packaging also
-records RPATH/RUNPATH facts, recursively resolves every `DT_NEEDED` entry, and
-fails if any dependency is missing or is not an AArch64 ELF. OCI labels and the
-identity file bind the revision to the source-lock and ordered patch-set digests.
+rejects build-directory RPATHs, strips copied ARM ELF artifacts while retaining
+their GNU Build IDs, records RPATH/RUNPATH facts, and recursively resolves every
+`DT_NEEDED` entry. OCI labels and the identity file bind the revision to the
+source-lock and ordered patch-set digests.
 
 Run the offline contract test without downloading or building sources:
 

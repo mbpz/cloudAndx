@@ -30,6 +30,7 @@ UPSTREAM_QEMU_ENGINE=${UPSTREAM_QEMU_ENGINE:-${QEMU_DISPATCHER}.upstream-x86_64}
 
 validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}"
 validate_runtime_settings
+validate_runtime_gpu_mode "${DOCKER_ENGINE_ARCHITECTURE}" "${EMULATOR_GPU}"
 effective_accel=$(resolve_runtime_acceleration "${DOCKER_ENGINE_ARCHITECTURE}" "${EMULATOR_ACCEL}" "${KVM_DEVICE}")
 engine_kind=$(selected_engine_kind "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}")
 engine_executable=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")

@@ -174,6 +174,16 @@ start_emulator() {
       "$@"
   fi
 
+  case ${DOCKER_ENGINE_ARCHITECTURE} in
+    arm64|aarch64)
+      while IFS= read -r graphics_argument; do
+        set -- "$@" "${graphics_argument}"
+      done <<EOF
+$(native_aemu_graphics_args)
+EOF
+      ;;
+  esac
+
   if [ "${MODE}" = print ]; then
     print_argv "$@"
     return 0

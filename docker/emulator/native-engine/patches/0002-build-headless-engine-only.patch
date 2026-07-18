@@ -58,7 +58,7 @@ diff --git a/android/CMakeLists.txt b/android/CMakeLists.txt
 diff --git a/android/android-ui/CMakeLists.txt b/android/android-ui/CMakeLists.txt
 --- a/android/android-ui/CMakeLists.txt
 +++ b/android/android-ui/CMakeLists.txt
-@@ -1,3 +1,5 @@
+@@ -1,6 +1,8 @@
  # The list of dependencies.
 -prebuilt(QT5)
 -message(STATUS "Building UI using Qt ${QT_VERSION_MAJOR}.${QT_VERSION_MINOR}")
@@ -66,7 +66,10 @@ diff --git a/android/android-ui/CMakeLists.txt b/android/android-ui/CMakeLists.t
 +  prebuilt(QT5)
 +  message(STATUS "Building UI using Qt ${QT_VERSION_MAJOR}.${QT_VERSION_MINOR}")
 +endif()
-@@ -58,13 +60,16 @@ endfunction()
+ 
+ # ~~~
+ # ! android_qt_lib: Create a target with the given sources and dependencies
+@@ -60,13 +62,16 @@ endfunction()
  
 -add_subdirectory(apps)
  add_subdirectory(modules/aemu-gl-bridge)
@@ -90,15 +93,15 @@ diff --git a/android/android-ui/CMakeLists.txt b/android/android-ui/CMakeLists.t
 diff --git a/android/android-ui/modules/aemu-gl-bridge/CMakeLists.txt b/android/android-ui/modules/aemu-gl-bridge/CMakeLists.txt
 --- a/android/android-ui/modules/aemu-gl-bridge/CMakeLists.txt
 +++ b/android/android-ui/modules/aemu-gl-bridge/CMakeLists.txt
-@@ -10,5 +10,6 @@ target_include_directories(aemu-gl-bridge PRIVATE .)
+@@ -10,6 +10,7 @@
  target_compile_options(aemu-gl-bridge PRIVATE -Wno-return-type-c-linkage)
  android_target_link_libraries(aemu-gl-bridge linux-x86_64 PRIVATE -lX11)
  
 +if(NOT OPTION_HEADLESS_ENGINE_ONLY)
  android_qt_lib(
    TARGET aemu-gl-qt-bridge
-@@ -47,4 +48,5 @@ if(ENABLE_QT_TESTS)
-     set_target_properties(aemu-gl-bridge-tests PROPERTIES INSTALL_RPATH "\$ORIGIN/lib64/qt/lib;\$ORIGIN/lib64")
+   ALIAS ui::gl-qt-bridge
+@@ -48,3 +49,4 @@
    endif()
    set_target_properties(aemu-gl-bridge-tests PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
  endif()
@@ -106,22 +109,27 @@ diff --git a/android/android-ui/modules/aemu-gl-bridge/CMakeLists.txt b/android/
 diff --git a/android/emu/crashreport/CMakeLists.txt b/android/emu/crashreport/CMakeLists.txt
 --- a/android/emu/crashreport/CMakeLists.txt
 +++ b/android/emu/crashreport/CMakeLists.txt
-@@ -1,2 +1,4 @@
+@@ -1,4 +1,6 @@
 -prebuilt(QT5)
 +if(NOT OPTION_HEADLESS_ENGINE_ONLY)
 +  prebuilt(QT5)
 +endif()
  android_add_library(
-@@ -53,5 +55,6 @@ target_compile_options(android-emu-crashreport PRIVATE -Wno-extern-c-compat
+   TARGET android-emu-crash-initializer
+   # SHARED # Used to test if you can compile this stand alone.
+@@ -53,6 +55,7 @@
                         PUBLIC -Wno-macro-redefined)
  
  # This file defines emulator crash service
 +if(NOT OPTION_HEADLESS_ENGINE_ONLY)
  android_add_library(
    TARGET android-emu-crashreport-consent-ui
-@@ -81,4 +84,5 @@ target_include_directories(android-emu-crashreport-consent-ui PRIVATE src
+   # SHARED # Used to test if you can compile this stand alone.
+@@ -79,6 +82,7 @@
+                            PUBLIC include)
  target_compile_options(android-emu-crashreport-consent-ui
                         PRIVATE -Wno-extern-c-compat)
 +endif()
  
  android_add_library(
+   TARGET android-emu-crashreport-consent-no-ui

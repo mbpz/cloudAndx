@@ -16,6 +16,7 @@ Build the final stage from the repository root:
 ```sh
 docker build \
   --file docker/emulator/native-engine/Dockerfile \
+  --platform linux/arm64 \
   --target bundle \
   --tag cloudandx/aemu-native-engine:37.1.7 \
   docker/emulator/native-engine

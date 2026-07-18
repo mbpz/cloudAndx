@@ -38,7 +38,7 @@ Review the Android SDK license first, then explicitly acknowledge it:
 
 ```sh
 cd ../..
-docker build --platform linux/amd64 --target bundle \
+docker build --platform linux/arm64 --target bundle \
   --tag cloudandx/aemu-native-engine:37.1.7 \
   docker/emulator/native-engine
 docker build \

@@ -2,6 +2,7 @@ ARG TEST_BASE_IMAGE=alpine@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e6
 ARG RUNTIME_BASE_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ARG RUNTIME_PLATFORM=linux/amd64
 ARG NATIVE_ENGINE_IMAGE=cloudandx/aemu-native-engine:37.1.7
+ARG NATIVE_ENGINE_PLATFORM=linux/arm64
 
 # This target deliberately has no network or Android artifact dependency. It is
 # used to validate the runtime scripts and the complete Dockerfile on any host.
@@ -118,7 +119,7 @@ RUN set -eu; \
     printf '%s\n' "${adb_version}"; \
     printf '%s\n' "${adb_version}" | grep -q 'Version 37\.0\.0'
 
-FROM --platform=${RUNTIME_PLATFORM} ${NATIVE_ENGINE_IMAGE} AS native-engine-bundle
+FROM --platform=${NATIVE_ENGINE_PLATFORM} ${NATIVE_ENGINE_IMAGE} AS native-engine-bundle
 
 FROM runtime-base AS runtime
 

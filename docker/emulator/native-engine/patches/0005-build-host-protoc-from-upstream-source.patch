@@ -1,7 +1,7 @@
 diff --git a/android/third_party/protobuf/CMakeLists.txt b/android/third_party/protobuf/CMakeLists.txt
 --- a/android/third_party/protobuf/CMakeLists.txt
 +++ b/android/third_party/protobuf/CMakeLists.txt
-@@ -62,6 +62,6 @@ else()
+@@ -62,17 +62,22 @@
    # currently running on.
    get_filename_component(
      PROTOC
@@ -9,7 +9,7 @@ diff --git a/android/third_party/protobuf/CMakeLists.txt b/android/third_party/p
 +    ${ANDROID_CROSS_BUILD_DIRECTORY}/protobuf_ext_cross/src/protobuf_ext_cross-build/protoc
      ABSOLUTE)
    message(STATUS "Cross compiling protobuf for host ${ANDROID_HOST_TAG}")
-@@ -70,9 +70,14 @@ else()
+   externalproject_add(
      protobuf_ext_cross
      PREFIX ${ANDROID_CROSS_BUILD_DIRECTORY}/protobuf_ext_cross
      DOWNLOAD_COMMAND ""
@@ -26,3 +26,4 @@ diff --git a/android/third_party/protobuf/CMakeLists.txt b/android/third_party/p
 +      "-Dprotobuf_WITH_ZLIB=OFF"
      BUILD_BYPRODUCTS ${PROTOC}
      LOG_OUTPUT_ON_FAILURE TRUE
+     INSTALL_COMMAND "")

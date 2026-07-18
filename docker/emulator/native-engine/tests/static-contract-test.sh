@@ -61,7 +61,7 @@ jq -e '
     .commit == "f64c458fc47ac18f738f9c8bdecb64d265f530f4"))
 ' "${LOCK_FILE}" >/dev/null || fail 'major source pins do not match the approved revisions'
 
-EXPECTED_AEMU_PATCHES='["patches/0001-build-x86_64-headless-for-linux-aarch64.patch","patches/0002-build-headless-engine-only.patch","patches/0003-fix-gnss-proto-relative-path.patch","patches/0004-use-system-toolchain-for-build-host-tools.patch","patches/0005-build-host-protoc-from-upstream-source.patch"]'
+EXPECTED_AEMU_PATCHES='["patches/0001-build-x86_64-headless-for-linux-aarch64.patch","patches/0002-build-headless-engine-only.patch","patches/0003-fix-gnss-proto-relative-path.patch","patches/0004-use-system-toolchain-for-build-host-tools.patch","patches/0005-build-host-protoc-from-upstream-source.patch","patches/0006-propagate-host-cmake-context.patch"]'
 [[ $(jq -c '.patches.aemu' "${LOCK_FILE}") == "${EXPECTED_AEMU_PATCHES}" ]] \
   || fail 'AEMU patch order changed'
 [[ $(jq -c '.patches.protobuf' "${LOCK_FILE}") == \

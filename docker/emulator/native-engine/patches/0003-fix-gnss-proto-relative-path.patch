@@ -1,7 +1,7 @@
 diff --git a/android/android-grpc/services/gnss/CMakeLists.txt b/android/android-grpc/services/gnss/CMakeLists.txt
 --- a/android/android-grpc/services/gnss/CMakeLists.txt
 +++ b/android/android-grpc/services/gnss/CMakeLists.txt
-@@ -3,6 +3,6 @@ set(GNSS_ROOT
+@@ -3,7 +3,7 @@
  )
  
  android_grpc_service_lib(TARGET gnss_proxy_service SOURCE_DIR ${GNSS_ROOT}
@@ -9,3 +9,4 @@ diff --git a/android/android-grpc/services/gnss/CMakeLists.txt b/android/android
 +                         SOURCES gnss_grpc_proxy.proto)
  
  android_add_library(
+   TARGET gnss_proxy_lib

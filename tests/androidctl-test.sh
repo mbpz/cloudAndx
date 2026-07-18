@@ -19,6 +19,9 @@ if [ "${1-}" = info ] && [ "${2-}" = --format ]; then
     *) printf '%s\n' unknown ;;
   esac
 fi
+if [ "${1-}" = image ] && [ "${2-}" = inspect ] && [ -n "${FAKE_NATIVE_IMAGE_PLATFORM-}" ]; then
+  printf '%s\n' "${FAKE_NATIVE_IMAGE_PLATFORM}"
+fi
 exit 0
 EOF
 chmod 0755 "${tmp}/bin/docker"
@@ -62,9 +65,19 @@ env FAKE_DOCKER_ARCH=x86_64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
 
 : >"${tmp}/docker.log"
 run_ctl arm64 up >"${tmp}/arm.out" 2>&1
-grep -q 'build --platform linux/amd64 --target bundle --tag cloudandx/aemu-native-engine:37.1.7' "${tmp}/docker.log"
+grep -q 'build --platform linux/arm64 --target bundle --tag cloudandx/aemu-native-engine:37.1.7' "${tmp}/docker.log"
 grep -q 'compose .* up -d --build' "${tmp}/docker.log"
 grep -q 'runtime_implementation=hybrid-aemu-arm64' "${tmp}/docker.log"
+
+: >"${tmp}/docker.log"
+env FAKE_DOCKER_ARCH=arm64 FAKE_NATIVE_IMAGE_PLATFORM=linux/arm64 \
+  FAKE_DOCKER_LOG="${tmp}/docker.log" PATH="${tmp}/bin:${PATH}" \
+  sh "${ROOT}/androidctl" up >"${tmp}/arm-reuse.out" 2>&1
+grep -q 'reuse=local' "${tmp}/arm-reuse.out"
+if grep -q 'build --platform linux/arm64 --target bundle' "${tmp}/docker.log"; then
+  printf '%s\n' 'FAIL: existing verified-platform native bundle was rebuilt during up.' >&2
+  exit 1
+fi
 
 : >"${tmp}/docker.log"
 if run_ctl aarch64 up-kvm >"${tmp}/arm-kvm.out" 2>&1; then

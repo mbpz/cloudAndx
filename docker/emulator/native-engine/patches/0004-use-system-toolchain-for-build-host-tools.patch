@@ -1,7 +1,7 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -123,6 +123,11 @@ set(OPTION_HEADLESS_ENGINE_ONLY
+@@ -121,6 +121,11 @@ set(OPTION_HEADLESS_ENGINE_ONLY
      CACHE BOOL
            "Build only the x86_64 headless engine, without the Qt launcher/UI targets."
  )
@@ -16,7 +16,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/android/build/cmake/android.cmake b/android/build/cmake/android.cmake
 --- a/android/build/cmake/android.cmake
 +++ b/android/build/cmake/android.cmake
-@@ -23,4 +23,14 @@ include(symbols)
+@@ -23,6 +23,16 @@
  # We want to make sure all the cross targets end up in a unique location
  set(ANDROID_CROSS_BUILD_DIRECTORY ${CMAKE_BINARY_DIR}/build/${ANDROID_HOST_TAG})
  
@@ -31,7 +31,9 @@ diff --git a/android/build/cmake/android.cmake b/android/build/cmake/android.cma
 +endif()
 +
  set(ANDROID_XCODE_SIGN_ADHOC FALSE)
-@@ -82,6 +92,6 @@ function(android_compile_for_host EXE SOURCE OUT_PATH)
+ 
+ if(APPLE)
+@@ -79,7 +89,7 @@
          DOWNLOAD_COMMAND ""
          SOURCE_DIR ${SOURCE}
          CMAKE_ARGS
@@ -39,10 +41,11 @@ diff --git a/android/build/cmake/android.cmake b/android/build/cmake/android.cma
 +          ${ANDROID_HOST_TOOLCHAIN_CMAKE_ARGS}
            "-DBREAKPAD_API_KEY=${BREAKPAD_API_KEY}"
            "-DBREAKPAD_API_URL=${BREAKPAD_API_URL}"
+           "-DOPTION_TEST_LOGS=${OPTION_TEST_LOGS}"
 diff --git a/android/third_party/protobuf/CMakeLists.txt b/android/third_party/protobuf/CMakeLists.txt
 --- a/android/third_party/protobuf/CMakeLists.txt
 +++ b/android/third_party/protobuf/CMakeLists.txt
-@@ -72,6 +72,6 @@ else()
+@@ -71,7 +71,7 @@
      DOWNLOAD_COMMAND ""
      SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
      CMAKE_ARGS
@@ -50,3 +53,4 @@ diff --git a/android/third_party/protobuf/CMakeLists.txt b/android/third_party/p
 +      ${ANDROID_HOST_TOOLCHAIN_CMAKE_ARGS}
        "-DIN_CROSS_COMPILE=TRUE"
      BUILD_BYPRODUCTS ${PROTOC}
+     LOG_OUTPUT_ON_FAILURE TRUE

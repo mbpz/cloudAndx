@@ -97,10 +97,20 @@ require_native_x86_linux_engine() {
 
 build_native_engine() {
   docker build \
-    --platform linux/amd64 \
+    --platform linux/arm64 \
     --target bundle \
     --tag "${NATIVE_ENGINE_IMAGE}" \
     "${ROOT}/docker/emulator/native-engine"
+}
+
+ensure_native_engine() {
+  native_platform=$(docker image inspect "${NATIVE_ENGINE_IMAGE}" \
+    --format '{{.Os}}/{{.Architecture}}' 2>/dev/null || true)
+  if [ "${native_platform}" = linux/arm64 ]; then
+    printf 'native-engine=%s platform=%s reuse=local\n' "${NATIVE_ENGINE_IMAGE}" "${native_platform}"
+    return 0
+  fi
+  build_native_engine
 }
 
 init() {
@@ -118,6 +128,7 @@ Usage: ./androidctl COMMAND [ARGS...]
   preflight          Verify the official Android 17 image metadata (no KVM required)
   preflight-kvm      Require an already-present /dev/kvm; never changes the host
   build-core         Build controller, bridge, dashboard, evidence gate, and tests
+  build-native-engine Build the pinned native ARM64 AEMU bundle
   build-emulator     Build the native ARM64 AEMU bundle and pinned Google Android image
   up                 Start software emulation on x86_64 or ARM64 Docker Engine
   up-kvm             Start on native x86_64 Linux with an existing /dev/kvm
@@ -168,6 +179,9 @@ case ${1-} in
     docker build --platform linux/amd64 --target test -t cloudandx/android-device-bridge:test "${ROOT}/services/device-bridge"
     docker run --rm --platform linux/amd64 cloudandx/android-device-bridge:test
     ;;
+  build-native-engine)
+    build_native_engine
+    ;;
   build-emulator)
     build_native_engine
     compose build emulator
@@ -175,14 +189,14 @@ case ${1-} in
   up)
     require_supported_linux_engine
     init
-    build_native_engine
+    ensure_native_engine
     compose up -d --build
     ;;
   up-kvm)
     require_native_x86_linux_engine
     init
     configure_kvm_group
-    build_native_engine
+    ensure_native_engine
     compose_kvm run --rm evidence-gate
     compose_kvm up -d --build
     ;;

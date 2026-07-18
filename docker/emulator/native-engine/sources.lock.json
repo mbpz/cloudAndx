@@ -485,7 +485,8 @@
       "patches/0002-build-headless-engine-only.patch",
       "patches/0003-fix-gnss-proto-relative-path.patch",
       "patches/0004-use-system-toolchain-for-build-host-tools.patch",
-      "patches/0005-build-host-protoc-from-upstream-source.patch"
+      "patches/0005-build-host-protoc-from-upstream-source.patch",
+      "patches/0006-propagate-host-cmake-context.patch"
     ],
     "protobuf": [
       "patches/protobuf-0001-allow-standalone-host-protoc.patch"

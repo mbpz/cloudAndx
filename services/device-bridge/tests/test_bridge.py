@@ -55,18 +55,20 @@ class FakeAdb:
 
 
 class RuntimeAdb:
-    def __init__(self, installed_packages=None):
+    def __init__(self, installed_packages=None, page_size="16384"):
         if installed_packages is None:
             installed_packages = bridge.REQUIRED_GOOGLE_PACKAGES
         self.installed_packages = set(installed_packages)
+        self.page_size = page_size
+        self.shell_calls = []
         self.properties = {
             "sys.boot_completed": "1",
             "ro.build.version.release": "17",
             "ro.build.version.sdk": "37",
             "ro.build.version.security_patch": "2026-07-01",
-            "ro.build.fingerprint": "google/sdk_gphone64_x86_64/test",
-            "ro.product.name": "sdk_gphone64_x86_64",
-            "ro.product.cpu.abi": "x86_64",
+            "ro.build.fingerprint": "google/sdk_gphone64_arm64/test",
+            "ro.product.name": "sdk_gphone64_arm64",
+            "ro.product.cpu.abi": "arm64-v8a",
         }
 
     def text(self, args, timeout=30):
@@ -75,8 +77,11 @@ class RuntimeAdb:
         raise AssertionError(f"unexpected text call: {args}")
 
     def shell(self, *args, **kwargs):
+        self.shell_calls.append(args)
         if args[:1] == ("getprop",):
             return self.properties[args[1]]
+        if args == ("getconf", "PAGE_SIZE"):
+            return self.page_size
         if args[:2] == ("pm", "path"):
             package = args[2]
             return f"package:/system/{package}.apk" if package in self.installed_packages else ""
@@ -87,7 +92,12 @@ def healthy_observation():
     return {
         "serial": "emulator:5555",
         "state": "device",
-        "properties": {"boot_completed": "1", "api_level": "37"},
+        "properties": {
+            "boot_completed": "1",
+            "api_level": "37",
+            "abi": "arm64-v8a",
+            "page_size_bytes": "16384",
+        },
         "packages": {
             "com.android.vending": True,
             "com.google.android.gms": True,
@@ -105,6 +115,9 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertTrue(healthy)
         self.assertEqual(reason, "ready")
         self.assertEqual(observed["properties"]["api_level"], "37")
+        self.assertEqual(observed["properties"]["abi"], "arm64-v8a")
+        self.assertEqual(observed["properties"]["page_size_bytes"], "16384")
+        self.assertIn(("getconf", "PAGE_SIZE"), adb.shell_calls)
         self.assertEqual(
             observed["packages"],
             {
@@ -127,6 +140,47 @@ class RuntimeHealthTests(unittest.TestCase):
         healthy, reason = bridge._assess_runtime_health(healthy_observation())
         self.assertTrue(healthy)
         self.assertEqual(reason, "ready")
+
+    def test_x86_64_guest_abi_is_unhealthy(self):
+        observed = healthy_observation()
+        observed["properties"]["abi"] = "x86_64"
+
+        healthy, reason = bridge._assess_runtime_health(observed)
+
+        self.assertFalse(healthy)
+        self.assertIn("ro.product.cpu.abi is 'x86_64'; expected 'arm64-v8a'", reason)
+
+    def test_4k_guest_page_size_is_unhealthy(self):
+        observed = healthy_observation()
+        observed["properties"]["page_size_bytes"] = "4096"
+
+        healthy, reason = bridge._assess_runtime_health(observed)
+
+        self.assertFalse(healthy)
+        self.assertIn("PAGE_SIZE is 4096 bytes; expected 16384", reason)
+
+    def test_missing_or_malformed_architecture_evidence_is_unhealthy(self):
+        cases = {
+            "missing ABI": ("abi", None, "ro.product.cpu.abi is ''; expected 'arm64-v8a'"),
+            "missing page size": ("page_size_bytes", None, "PAGE_SIZE is not an integer: ''"),
+            "malformed page size": (
+                "page_size_bytes",
+                "unknown",
+                "PAGE_SIZE is not an integer: 'unknown'",
+            ),
+        }
+        for name, (field, value, expected_reason) in cases.items():
+            with self.subTest(name=name):
+                observed = healthy_observation()
+                if value is None:
+                    observed["properties"].pop(field)
+                else:
+                    observed["properties"][field] = value
+
+                healthy, reason = bridge._assess_runtime_health(observed)
+
+                self.assertFalse(healthy)
+                self.assertIn(expected_reason, reason)
 
     def test_each_required_evidence_failure_is_unhealthy(self):
         cases = {

@@ -75,28 +75,27 @@ assert_fails 'forced kvm rejects missing device' resolve_acceleration kvm /path/
 assert_fails 'invalid acceleration rejected' resolve_acceleration turbo /dev/null
 assert_eq off "$(resolve_runtime_acceleration arm64 auto /dev/null)" 'ARM64 auto selects software TCG for the AEMU NONE-accelerator guard'
 assert_eq off "$(resolve_runtime_acceleration aarch64 off /dev/null)" 'ARM64 explicit software TCG is accepted'
-assert_eq on "$(resolve_runtime_acceleration x86_64 kvm /dev/null)" 'x86_64 KVM remains accelerated'
-assert_fails 'ARM64 rejects KVM for the x86_64 guest' resolve_runtime_acceleration arm64 kvm /dev/null
-validate_engine_architecture x86_64 native
-pass
-validate_engine_architecture amd64 native
-pass
+assert_fails 'x86_64 runtime remains deferred' resolve_runtime_acceleration x86_64 kvm /dev/null
+assert_fails 'ARM64 Docker-only guest rejects KVM' resolve_runtime_acceleration arm64 kvm /dev/null
+assert_fails 'x86_64 engine path remains deferred' validate_engine_architecture x86_64 native
+assert_fails 'amd64 engine path remains deferred' validate_engine_architecture amd64 native
 validate_engine_architecture arm64 hybrid-aemu-arm64
 pass
 assert_eq native-aemu-arm64 "$(selected_engine_kind aarch64 hybrid-aemu-arm64)" 'ARM64 selects native AEMU child'
-assert_eq upstream-x86_64 "$(selected_engine_kind amd64 native)" 'x86_64 selects upstream AEMU child'
+assert_fails 'x86_64 child selection remains deferred' selected_engine_kind amd64 native
 assert_fails 'ARM64 rejects an undeclared hybrid runtime' validate_engine_architecture arm64 native
 assert_fails 'missing Docker Engine architecture rejected by runtime' validate_engine_architecture ''
 assert_fails 'unsafe AVD name rejected' validate_avd_name '../escape'
-validate_avd_name Pixel_9_Android_17_Play
+validate_avd_name Pixel_9_Android_17_Play_ARM64
 pass
 validate_runtime_gpu_mode arm64 swiftshader
 pass
-validate_runtime_gpu_mode x86_64 auto
-pass
+assert_fails 'x86_64 GPU path remains deferred' validate_runtime_gpu_mode x86_64 auto
 assert_fails 'ARM64 rejects non-SwiftShader first boot' validate_runtime_gpu_mode arm64 auto
-assert_eq "$(printf '%s\n' -gpu swiftshader -feature -Vulkan -feature -GuestAngle -feature -GuestUsesAngle -feature -VulkanNativeSwapchain -feature -VulkanSnapshots)" \
-  "$(native_aemu_graphics_args)" 'ARM64 graphics guard disables unsupported Vulkan and ANGLE features'
+assert_eq "$(printf '%s\n' -gpu swiftshader -feature -GuestAngle -feature -GuestUsesAngle -feature -VulkanNativeSwapchain -feature -VulkanSnapshots)" \
+  "$(native_aemu_graphics_args)" 'ARM64 graphics guard enables packaged SwiftShader Vulkan while disabling unsupported ANGLE and snapshot features'
+assert_eq "$(printf '%s\n' -qemu -machine gic-version=3 -cpu cortex-a57)" \
+  "$(native_aemu_tcg_qemu_args)" 'ARM64 TCG guard overrides the Linux AArch64 KVM-only GIC and CPU defaults'
 
 tmp=$(mktemp -d)
 real_engine_pid=
@@ -128,13 +127,13 @@ pass
 
 mkdir -p \
   "${sdk}/emulator" \
-  "${sdk}/emulator/qemu/linux-x86_64" \
   "${sdk}/platform-tools" \
-  "${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64" \
+  "${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a" \
   "${native_aemu}/bin" \
   "${native_aemu}/qemu/linux-aarch64" \
   "${native_aemu}/lib/pc-bios" \
   "${native_aemu}/lib64/gles_swiftshader" \
+  "${native_aemu}/lib64/vulkan" \
   "${native_aemu}/libexec/linux-x86_64" \
   "${native_aemu}/resources/skins/android-36" \
   "${native_aemu}/resources/macros" \
@@ -156,17 +155,15 @@ printf '%s\n' \
   '  start-server|kill-server) ;;' \
   'esac' >"${sdk}/platform-tools/adb"
 chmod 0755 "${sdk}/emulator/emulator" "${sdk}/platform-tools/adb"
-printf '%s\n' '#!/bin/sh' 'printf "upstream:%s\n" "$*"' \
-  >"${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64"
-cp "${ROOT}/bin/qemu-system-x86_64-headless-dispatcher.sh" \
-  "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless"
-printf '%s\n' '#!/bin/sh' 'printf "native:%s\n" "$*"' \
-  >"${native_aemu}/bin/run-qemu-system-x86_64-headless"
+cp "${ROOT}/native-engine/bin/run-qemu-system-aarch64-headless" \
+  "${native_aemu}/bin/run-qemu-system-aarch64-headless"
 printf '%s\n' \
   '#!/bin/sh' \
+  '[ -z "${FAKE_EMULATOR_PID_FILE-}" ] || printf "%s\\n" "$$" >"${FAKE_EMULATOR_PID_FILE}"' \
   'if [ "${1-}" = --print-audio-driver ]; then printf "%s\n" "${QEMU_AUDIO_DRV-}"; fi' \
+  'sleep "${FAKE_EMULATOR_SLEEP:-0}"' \
   'exit 0' \
-  >"${native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
+  >"${native_aemu}/qemu/linux-aarch64/qemu-system-aarch64-headless"
 cp "${ROOT}/native-engine/bin/netsimd" "${native_aemu}/netsimd"
 printf '%s\n' \
   '#!/bin/sh' \
@@ -185,6 +182,15 @@ printf '%s\n' x11-xcb >"${native_aemu}/lib64/libX11-xcb.so.1"
 printf '%s\n' '{"revision":"test","elf_machine":"AArch64"}' >"${native_aemu}/manifest.json"
 printf '%s\n' 'locked-arm64-loader' >"${native_aemu}/lib64/ld-linux-aarch64.so.1"
 ln -s ../../lib64 "${native_aemu}/qemu/linux-aarch64/lib64"
+printf '%s\n' vulkan-loader >"${native_aemu}/lib64/vulkan/libvulkan.so.1.4.344"
+ln -s libvulkan.so.1.4.344 "${native_aemu}/lib64/vulkan/libvulkan.so.1"
+ln -s libvulkan.so.1 "${native_aemu}/lib64/vulkan/libvulkan.so"
+printf '%s\n' swiftshader-vulkan >"${native_aemu}/lib64/vulkan/libvk_swiftshader.so"
+printf '%s\n' \
+  '{"file_format_version": "1.0.0", "ICD": {"library_path": "./libvk_swiftshader.so", "api_version": "1.0.5"}}' \
+  >"${native_aemu}/lib64/vulkan/vk_swiftshader_icd.json"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "vulkan-smoke: fake PASS"' \
+  >"${native_aemu}/vulkan-smoke"
 for data_file in advancedFeatures.ini emu-original-feature-flags.protobuf \
   ca-bundle.pem hostapd.conf emulator_access.json; do
   printf '%s\n' "${data_file}" >"${native_aemu}/lib/${data_file}"
@@ -204,16 +210,15 @@ printf '%s\n' \
   "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
   >"${native_aemu}/identity.properties"
 chmod 0755 \
-  "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless" \
-  "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64" \
-  "${native_aemu}/bin/run-qemu-system-x86_64-headless" \
-  "${native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless" \
+  "${native_aemu}/bin/run-qemu-system-aarch64-headless" \
+  "${native_aemu}/qemu/linux-aarch64/qemu-system-aarch64-headless" \
   "${native_aemu}/crashpad_handler" \
   "${native_aemu}/qemu-img" \
   "${native_aemu}/nimble_bridge" \
   "${native_aemu}/netsimd" \
   "${native_aemu}/libexec/linux-x86_64/netsimd" \
-  "${native_aemu}/lib64/ld-linux-aarch64.so.1"
+  "${native_aemu}/lib64/ld-linux-aarch64.so.1" \
+  "${native_aemu}/vulkan-smoke"
 
 write_fake_bundle_checksums() {
   (
@@ -243,12 +248,55 @@ mixed_helper_output=$(env \
 assert_contains "${mixed_helper_output}" 'netsimd 0.3.112' \
   'netsimd launcher clears ARM loader and GPU variables before the x86_64 helper'
 runner_audio_output=$(env NATIVE_AEMU_ROOT="${native_aemu}" QEMU_AUDIO_DRV=oss \
-  "${ROOT}/native-engine/bin/run-qemu-system-x86_64-headless" \
+  "${ROOT}/native-engine/bin/run-qemu-system-aarch64-headless" \
   --print-audio-driver)
 assert_eq none "${runner_audio_output}" \
   'native runner replaces inherited OSS audio with the no-host-device backend'
 validate_native_aemu_bundle "${native_aemu}"
 pass
+validate_native_aemu_vulkan "${native_aemu}"
+pass
+mv "${native_aemu}/lib64/vulkan/libvulkan.so.1.4.344" \
+  "${native_aemu}/lib64/vulkan/libvulkan.so.1.4.344.missing"
+write_fake_bundle_checksums
+assert_fails 'native bundle rejects a checksum-valid missing Vulkan loader' \
+  validate_native_aemu_bundle "${native_aemu}"
+mv "${native_aemu}/lib64/vulkan/libvulkan.so.1.4.344.missing" \
+  "${native_aemu}/lib64/vulkan/libvulkan.so.1.4.344"
+write_fake_bundle_checksums
+mv "${native_aemu}/lib64/vulkan/libvk_swiftshader.so" \
+  "${native_aemu}/lib64/vulkan/libvk_swiftshader.so.missing"
+write_fake_bundle_checksums
+assert_fails 'native bundle rejects a checksum-valid missing Vulkan ICD' \
+  validate_native_aemu_bundle "${native_aemu}"
+mv "${native_aemu}/lib64/vulkan/libvk_swiftshader.so.missing" \
+  "${native_aemu}/lib64/vulkan/libvk_swiftshader.so"
+write_fake_bundle_checksums
+mv "${native_aemu}/vulkan-smoke" "${native_aemu}/vulkan-smoke.missing"
+write_fake_bundle_checksums
+assert_fails 'native bundle rejects a checksum-valid missing Vulkan probe' \
+  validate_native_aemu_bundle "${native_aemu}"
+mv "${native_aemu}/vulkan-smoke.missing" "${native_aemu}/vulkan-smoke"
+write_fake_bundle_checksums
+printf '%s\n' \
+  '{"file_format_version": "1.0.0", "ICD": {"library_path": "/host/libvk.so", "api_version": "1.0.5"}}' \
+  >"${native_aemu}/lib64/vulkan/vk_swiftshader_icd.json"
+write_fake_bundle_checksums
+assert_fails 'native bundle rejects a checksum-valid escaping Vulkan ICD path' \
+  validate_native_aemu_bundle "${native_aemu}"
+printf '%s\n' \
+  '{"file_format_version": "1.0.0", "ICD": {"library_path": "./libvk_swiftshader.so", "api_version": "1.0.5"}}' \
+  >"${native_aemu}/lib64/vulkan/vk_swiftshader_icd.json"
+write_fake_bundle_checksums
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "vulkan-smoke: fake FAIL"' 'exit 1' \
+  >"${native_aemu}/vulkan-smoke"
+chmod 0755 "${native_aemu}/vulkan-smoke"
+assert_fails 'native Vulkan preflight rejects a failing probe' \
+  validate_native_aemu_vulkan "${native_aemu}"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "vulkan-smoke: fake PASS"' \
+  >"${native_aemu}/vulkan-smoke"
+chmod 0755 "${native_aemu}/vulkan-smoke"
+write_fake_bundle_checksums
 mv "${native_aemu}/libexec/linux-x86_64/netsimd" \
   "${native_aemu}/libexec/linux-x86_64/netsimd.missing"
 write_fake_bundle_checksums
@@ -295,15 +343,8 @@ printf '%s\n' \
   "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
   >"${native_aemu}/identity.properties"
 write_fake_bundle_checksums
-dispatcher=${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless
-assert_contains "$(DOCKER_ENGINE_ARCHITECTURE=x86_64 UPSTREAM_QEMU_ENGINE=${dispatcher}.upstream-x86_64 "${dispatcher}" one two 2>/dev/null)" \
-  'upstream:one two' 'dispatcher preserves args for the upstream x86_64 child'
-assert_contains "$(DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} "${dispatcher}" three four 2>/dev/null)" \
-  'native:three four' 'dispatcher preserves args for the native ARM64 child'
-assert_fails 'dispatcher fails closed for undeclared ARM64 hybrid mode' \
-  env DOCKER_ENGINE_ARCHITECTURE=arm64 NATIVE_AEMU_ROOT="${native_aemu}" "${dispatcher}"
-printf '%s\n' system >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/system.img"
-printf '%s\n' vendor >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/vendor.img"
+printf '%s\n' system >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/system.img"
+printf '%s\n' vendor >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/vendor.img"
 cp "${ROOT}/avd/config.ini" "${template}/config.ini"
 cp "${ROOT}/avd/template-version" "${template}/template-version"
 
@@ -314,17 +355,20 @@ printf '%s\n' \
   'if [ -n "${FAKE_SOCAT_PID_DIR-}" ]; then printf "%s\\n" "$$" >"${FAKE_SOCAT_PID_DIR}/$$"; fi' \
   'exec sleep 30' >"${socat_stub}"
 chmod 0755 "${socat_stub}"
-common_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native NATIVE_AEMU_ROOT=${native_aemu} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm"
+common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm"
 
 preflight_output=$(env ${common_env} EMULATOR_ACCEL=auto "${ROOT}/bin/runtime-preflight.sh" 2>&1)
 assert_contains "${preflight_output}" 'android.release=17' 'preflight reports Android release'
 assert_contains "${preflight_output}" 'android.api=37.0' 'preflight reports API release'
 assert_contains "${preflight_output}" 'accel.effective=off' 'preflight reports software fallback'
-assert_contains "${preflight_output}" 'engine.selected=upstream-x86_64' 'preflight reports the selected child engine'
+assert_contains "${preflight_output}" 'engine.selected=native-aemu-arm64' 'preflight reports the selected native engine'
 assert_contains "${preflight_output}" "native-aemu.revision=${NATIVE_AEMU_REVISION}" 'preflight reports locked native revision'
 assert_contains "${preflight_output}" "native-aemu.source-lock-sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" 'preflight reports locked source identity'
 assert_contains "${preflight_output}" "native-aemu.patch-set-sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" 'preflight reports locked patch identity'
-assert_contains "${preflight_output}" 'android.release-policy=base-stable-qpr1-beta-excluded' 'preflight reports release policy'
+assert_contains "${preflight_output}" 'android.image=google_apis_playstore_ps16k/arm64-v8a/r06' 'preflight reports ARM64 image'
+assert_contains "${preflight_output}" 'android.release-policy=base-final-stable-qpr1-beta-excluded' 'preflight reports release policy'
+assert_contains "${preflight_output}" 'sdk.emulator-package.version=36.6.11' 'preflight distinguishes the SDK artifact from the native engine revision'
+assert_not_contains "${preflight_output}" 'emulator.version=' 'preflight does not mislabel the SDK package as the selected native engine version'
 
 assert_fails 'preflight fails closed for unavailable forced KVM' \
   env ${common_env} EMULATOR_ACCEL=kvm "${ROOT}/bin/runtime-preflight.sh"
@@ -336,7 +380,32 @@ assert_contains "${command_output}" '=off' 'entrypoint uses software acceleratio
 assert_contains "${command_output}" '=test.value=a b' 'entrypoint preserves one argument containing spaces'
 assert_contains "${command_output}" '=-grpc' 'entrypoint enables gRPC'
 assert_contains "${command_output}" '=8556' 'entrypoint uses isolated internal gRPC port'
-assert_not_contains "${command_output}" '=-Vulkan' 'x86_64 command remains free of ARM-only feature guards'
+if printf '%s\n' "${command_output}" | grep -Eq '^argv\[[0-9]+\]=-Vulkan$'; then
+  printf '%s\n' 'FAIL: ARM64 command disables Vulkan despite the packaged host loader and ICD.' >&2
+  exit 1
+fi
+pass
+assert_contains "${command_output}" '=-VulkanSnapshots' \
+  'ARM64 command retains the Vulkan snapshot safety guard'
+raw_qemu_tail=$(printf '%s\n' "${command_output}" | tail -n 5 \
+  | sed 's/^argv\[[0-9][0-9]*\]=//')
+assert_eq "$(printf '%s\n' -qemu -machine gic-version=3 -cpu cortex-a57)" \
+  "${raw_qemu_tail}" 'entrypoint keeps the locked ARM TCG override as the final argv tail'
+qemu_sentinel_count=$(printf '%s\n' "${command_output}" \
+  | grep -Ec '^argv\[[0-9]+\]=-qemu$')
+assert_eq 1 "${qemu_sentinel_count}" 'entrypoint emits exactly one raw QEMU sentinel'
+user_argument_line=$(printf '%s\n' "${command_output}" \
+  | grep -nF '=test.value=a b' | cut -d: -f1)
+qemu_sentinel_line=$(printf '%s\n' "${command_output}" \
+  | grep -nE '^argv\[[0-9]+\]=-qemu$' | cut -d: -f1)
+if [ "${user_argument_line}" -ge "${qemu_sentinel_line}" ]; then
+  printf '%s\n' 'FAIL: user Android argument escaped into the locked raw QEMU tail.' >&2
+  exit 1
+fi
+pass
+assert_fails 'entrypoint rejects a user-supplied raw QEMU sentinel' \
+  env ${common_env} EMULATOR_ACCEL=auto \
+    "${ROOT}/bin/entrypoint.sh" print-command -qemu -machine gic-version=host
 
 proxy_pid_dir=${tmp}/proxy-pids
 mkdir -p "${proxy_pid_dir}"
@@ -389,6 +458,8 @@ printf '%s\n' \
   '  "-s ${expected_serial} get-state") printf "%s\\n" "${FAKE_STATE:-device}" ;;' \
   '  "-s ${expected_serial} shell getprop sys.boot_completed") printf "%s\\n" "${FAKE_BOOT:-1}" ;;' \
   '  "-s ${expected_serial} shell getprop ro.build.version.sdk") printf "%s\\n" "${FAKE_SDK:-37}" ;;' \
+  '  "-s ${expected_serial} shell getprop ro.product.cpu.abi") printf "%s\\n" "${FAKE_ABI:-arm64-v8a}" ;;' \
+  '  "-s ${expected_serial} shell getconf PAGE_SIZE") printf "%s\\n" "${FAKE_PAGE_SIZE:-16384}" ;;' \
   '  "-s ${expected_serial} shell pm path com.android.vending") [ "${FAKE_PLAY:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/Phonesky/Phonesky.apk ;;' \
   '  "-s ${expected_serial} shell pm path com.google.android.gms") [ "${FAKE_GMS:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk ;;' \
   '  *) exit 1 ;;' \
@@ -400,13 +471,19 @@ tcp_probe=${tmp}/fake-tcp-probe
 printf '%s\n' '#!/bin/sh' '[ "${FAKE_GRPC:-1}" = 1 ]' >"${tcp_probe}"
 chmod 0755 "${tcp_probe}"
 
+if [ -e /proc/self/exe ]; then
 real_native_aemu=${tmp}/real-native-aemu
 mkdir -p "${real_native_aemu}/qemu/linux-aarch64" \
   "${real_native_aemu}/lib64/gles_swiftshader"
 cp -L "$(command -v sleep)" \
-  "${real_native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
-chmod 0755 "${real_native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
-real_expected_engine=$(readlink -f "${real_native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless")
+  "${real_native_aemu}/qemu/linux-aarch64/qemu-system-aarch64-headless"
+chmod 0755 "${real_native_aemu}/qemu/linux-aarch64/qemu-system-aarch64-headless"
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - \
+    "${real_native_aemu}/qemu/linux-aarch64/qemu-system-aarch64-headless" \
+    >/dev/null 2>&1
+fi
+real_expected_engine=$(readlink -f "${real_native_aemu}/qemu/linux-aarch64/qemu-system-aarch64-headless")
 NATIVE_AEMU_ROOT=${real_native_aemu} \
   LD_LIBRARY_PATH=/inherited/x86/library/path \
   ANDROID_EGL_LIB=/inherited/x86/libEGL.so \
@@ -414,7 +491,7 @@ NATIVE_AEMU_ROOT=${real_native_aemu} \
   VK_ICD_FILENAMES=/inherited/x86/icd.json \
   VK_ADD_DRIVER_FILES=/inherited/x86/additional-icd.json \
   QEMU_AUDIO_DRV=oss \
-  "${ROOT}/native-engine/bin/run-qemu-system-x86_64-headless" 30 &
+  "${ROOT}/native-engine/bin/run-qemu-system-aarch64-headless" 30 &
 real_engine_pid=$!
 attempt=0
 real_process=
@@ -434,10 +511,16 @@ tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
   | grep -Fxq "ANDROID_EMULATOR_LAUNCHER_DIR=${real_native_aemu}"
 pass
 tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
+  | grep -Fxq "ANDROID_EMU_VK_LOADER_PATH=${real_native_aemu}/lib64/vulkan/libvulkan.so"
+pass
+tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
+  | grep -Fxq 'ANDROID_EMU_VK_ICD=swiftshader'
+pass
+tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
   | grep -Fxq 'QEMU_AUDIO_DRV=none'
 pass
 if tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
-  | grep -Eq '^(ANDROID_EGL_LIB|ANDROID_EMU_VK_LOADER_PATH|VK_ICD_FILENAMES|VK_ADD_DRIVER_FILES)='; then
+  | grep -Eq '^(ANDROID_EGL_LIB|VK_ICD_FILENAMES|VK_ADD_DRIVER_FILES)='; then
   printf '%s\n' 'FAIL: native runner preserved inherited x86 graphics environment.' >&2
   exit 1
 fi
@@ -448,12 +531,7 @@ env DOCKER_ENGINE_ARCHITECTURE=arm64 \
   ADB_BIN="${fake_adb}" FAKE_ADB_LOG="${fake_adb_log}" SOCAT_BIN="${tcp_probe}" \
   "${ROOT}/bin/healthcheck.sh"
 pass
-kill "${real_engine_pid}"
-wait "${real_engine_pid}" 2>/dev/null || true
-real_engine_pid=
-
-expected_process=$(readlink /proc/$$/exe)
-health_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native UPSTREAM_QEMU_ENGINE=${expected_process} ADB_BIN=${fake_adb} FAKE_ADB_LOG=${fake_adb_log} SOCAT_BIN=${tcp_probe}"
+health_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${real_native_aemu} ADB_BIN=${fake_adb} FAKE_ADB_LOG=${fake_adb_log} SOCAT_BIN=${tcp_probe}"
 : >"${fake_adb_log}"
 env ${health_env} "${ROOT}/bin/healthcheck.sh"
 pass
@@ -475,8 +553,8 @@ grep -Fxq 'connect 127.0.0.1:5581' "${fake_adb_log}"
 grep -Fxq -- '-s emulator-5580 get-state' "${fake_adb_log}"
 pass
 assert_fails 'healthcheck requires the selected child process' \
-  env DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native \
-    UPSTREAM_QEMU_ENGINE="${tmp}/not-running" ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" \
+  env DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \
+    NATIVE_AEMU_ROOT="${tmp}/not-running" ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" \
     "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires gRPC proxy' env ${health_env} FAKE_GRPC=0 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires the internal ADB connect to succeed' \
@@ -487,7 +565,14 @@ assert_fails 'healthcheck rejects an offline configured emulator serial' \
   env ${health_env} FAKE_STATE=offline "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck rejects incomplete boot' env ${health_env} FAKE_BOOT=0 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck rejects wrong API' env ${health_env} FAKE_SDK=36 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects wrong ABI' env ${health_env} FAKE_ABI=x86_64 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects a 4 KB guest' env ${health_env} FAKE_PAGE_SIZE=4096 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires Play Store' env ${health_env} FAKE_PLAY=0 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires Google Play services' env ${health_env} FAKE_GMS=0 "${ROOT}/bin/healthcheck.sh"
+
+kill "${real_engine_pid}"
+wait "${real_engine_pid}" 2>/dev/null || true
+real_engine_pid=
+fi
 
 printf 'PASS: %s assertions\n' "${passed}"

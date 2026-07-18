@@ -7,7 +7,9 @@ This directory contains a Docker-only, fail-closed preflight and evidence valida
 The service performs four independent checks:
 
 1. normalizes the container architecture, validates the declared Android runtime implementation, and inspects `/dev/kvm` while accepting it as readiness evidence only for an eligible native runtime;
-2. fetches only allowlisted Google HTTPS repository XML, then requires the stable Android 17 Play tuple `system-images;android-37.0;google_apis_playstore_ps16k;x86_64` with a valid revision, archive URL, and SHA-1 or SHA-256 checksum;
+2. fetches only allowlisted Google HTTPS repository XML, then requires the Android 17 base
+   final release tuple `system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a` on
+   SDK repository `channel-0` with the pinned revision, archive URL, and checksum;
 3. validates image-manifest and capability-evidence JSON instances against Draft 2020-12 contracts mounted read-only at `/contracts`;
 4. atomically writes `/evidence/preflight.json` and exits nonzero unless the selected readiness policy passes.
 
@@ -18,8 +20,8 @@ Repository metadata verification proves that an advertised package tuple exists.
 | State | Meaning | Default exit |
 |---|---|---:|
 | `DESIGN_READY` | Both contract schemas are valid, but no repository URL was supplied | 2 |
-| `SOFTWARE_EMULATION_ONLY` | Stable Google Play metadata is valid and either native x86_64 lacks usable KVM or the exact ARM64 hybrid runtime was declared | 2 |
-| `KVM_READY` | Metadata is valid, `/dev/kvm` is usable, and guest ABI matches the host architecture | 0 |
+| `SOFTWARE_EMULATION_ONLY` | Pinned Google Play metadata is valid and either a compatible native runtime lacks usable KVM or the exact ARM64 hybrid runtime was declared | 2 |
+| `KVM_READY` | Metadata is valid, `/dev/kvm` is usable, and the selected native host/guest pair is verified | 0 |
 | `BLOCKED` | Architecture, contracts, repository metadata, or an optional evidence instance failed | 2 |
 
 `ALLOW_SOFTWARE_EMULATION_ONLY=true` changes only the exit policy for
@@ -56,33 +58,44 @@ The container runs as UID/GID `65532`; the evidence volume must be writable by t
 
 Optional exact-match pins make repository changes fail closed:
 
-- `GOOGLE_PLAY_PACKAGE_PATH` (default `system-images;android-37.0;google_apis_playstore_ps16k;x86_64`)
-- `GOOGLE_PLAY_ABI` (default `x86_64`; an `arm64-v8a` override needs matching official metadata)
+- `GOOGLE_PLAY_PACKAGE_PATH` (default `system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a`)
+- `GOOGLE_PLAY_ABI` (default `arm64-v8a`)
+- `GOOGLE_PLAY_EXPECTED_CHANNEL_ID` (default `channel-0`)
 - `GOOGLE_PLAY_EXPECTED_REVISION`
 - `GOOGLE_PLAY_EXPECTED_URL`
 - `GOOGLE_PLAY_EXPECTED_CHECKSUM` (`sha1:<hex>`, `sha256:<hex>`, or bare hex)
 - `GOOGLE_REPOSITORY_TIMEOUT_SECONDS` (default `20`, maximum `120`)
 - `ANDROID_RUNTIME_IMPLEMENTATION` (exact allowlist: `native` or `hybrid-aemu-arm64`; default `native`)
 
-The exact defaults are revision `6`, archive `x86_64-playstore-ps16k-37.0_r06.zip`, SHA-1 `8eaeeceb77452c018c3f6b589913cdc45222a87f`, and channel `stable`; each may be overridden explicitly for a newly observed official revision. `ANDROID_VERSION`, `ANDROID_API_LEVEL`, and the XML type-details `GOOGLE_PLAY_TAG` default to `17`, `37`, and `google_apis_playstore`. The package path is independently pinned to the PS16K variant because the official XML's tag ID does not include the `_ps16k` suffix. Any other Android version/API pair or non-stable channel is blocked by this version of the gate.
+The exact defaults are revision `6`, archive
+`arm64-v8a-playstore-ps16k-37.0_r06.zip`, SHA-1
+`ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4`, and SDK repository
+`channel-0` whose text value is `stable`. Android 17 base was formally released by Google on
+2026-06-16; the machine-readable `android_release_status` is therefore independently pinned to
+`stable`. Android 17 QPR1 remains Beta and is excluded. Product release status and SDK
+repository channel are separate evidence and are never inferred from each other.
+`ANDROID_VERSION`, `ANDROID_API_LEVEL`, and the XML type-details `GOOGLE_PLAY_TAG` default to
+`17`, `37`, and `google_apis_playstore`. The package path is independently pinned to the PS16K
+variant because the official XML's tag ID does not include the `_ps16k` suffix.
 
-This runtime is pinned to Google's Linux x86_64 Emulator and x86_64 Play image. The default
-`ANDROID_RUNTIME_IMPLEMENTATION=native` behavior is unchanged: KVM readiness requires an
-x86_64 host, and an ARM64 host with the selected x86_64 guest is `BLOCKED` even when software
-emulation is allowed.
+This runtime uses resources from Google's Linux x86_64 Emulator package and the arm64-v8a Play
+image. The ARM path does not send the ARM64 AVD through the x86_64 launcher; the container
+entrypoint directly invokes the native AArch64 runner. The default
+`ANDROID_RUNTIME_IMPLEMENTATION=native` behavior remains fail-closed: KVM readiness requires a
+matching host/guest ISA. The Compose ARM64 path declares `hybrid-aemu-arm64` and is always
+classified as software emulation, even though the selected guest ISA is also ARM64.
 
-The one cross-architecture exception must be declared explicitly with
-`ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64`. It is valid only when the normalized
-container host architecture is `arm64` (both `arm64` and `aarch64` machine names normalize to
-that value) and the selected official Google Play guest ABI is `x86_64`. This declaration
-represents the x86_64 Google Emulator launcher integrated with a native ARM64 AEMU engine. The
-gate always reports that pairing as `SOFTWARE_EMULATION_ONLY`, never `KVM_READY`, even if
-`/dev/kvm` is visible. A successful exit additionally requires
+`ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64` is valid only when the normalized container
+host architecture is `arm64` (both `arm64` and `aarch64` normalize to that value) and the guest
+is the default official `arm64-v8a` Play image. The gate reports this pairing as
+`SOFTWARE_EMULATION_ONLY`, never `KVM_READY`, even if `/dev/kvm` is visible. A successful exit additionally requires
 `ALLOW_SOFTWARE_EMULATION_ONLY=true`.
 
-Any unknown implementation value, hybrid use on x86_64, hybrid use with a non-x86_64 guest,
-unsupported host architecture, or any other cross-architecture pairing remains fail-closed as
-`BLOCKED`. The emitted `runtime_implementation` check and `policy.runtime` object record the
+Any unknown implementation value, hybrid use on x86_64, hybrid use with a guest other than
+`arm64-v8a`, or an unsupported host architecture remains fail-closed as `BLOCKED`. Native
+x86_64 runtime is also `BLOCKED`: x86_64 host build and runtime verification are deferred until
+an x86_64 machine is available, and no x86 AEMU build is attempted on the current ARM host. The
+emitted `runtime_implementation` check and `policy.runtime` object record the
 implementation, execution mode, normalized host architecture, guest ABI, native/hybrid
 compatibility, and KVM-readiness eligibility.
 

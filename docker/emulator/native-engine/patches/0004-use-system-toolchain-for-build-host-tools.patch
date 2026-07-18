@@ -3,7 +3,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -121,6 +121,11 @@ set(OPTION_HEADLESS_ENGINE_ONLY
      CACHE BOOL
-           "Build only the x86_64 headless engine, without the Qt launcher/UI targets."
+           "Build only the AArch64 headless engine, without the Qt launcher/UI targets."
  )
 +set(OPTION_SYSTEM_HOST_TOOLCHAIN
 +    FALSE

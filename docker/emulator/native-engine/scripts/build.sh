@@ -8,7 +8,7 @@ BUILD_JOBS=${BUILD_JOBS:-$(nproc)}
 
 cmake --build "${BUILD_DIR}" \
   --target \
-    qemu-system-x86_64-headless \
+    qemu-system-aarch64-headless \
     gfxstream_backend \
     crashpad_handler \
     qemu-img \

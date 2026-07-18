@@ -1,22 +1,31 @@
 # Android 17 Google Play Emulator — Docker-only runtime
 
-This directory builds one `linux/amd64` container from Google-published stable artifacts:
+This directory builds one `linux/amd64` container userland from pinned Google-published artifacts:
 
 | Component | Pinned release | Integrity |
 |---|---|---|
-| Android Emulator | 36.6.11 (`15507667`) | SHA-1 `f8d8b83cf21a04966326eb1378bacda255f63b93` |
+| Google Linux Emulator SDK resources/tools | 36.6.11 (`15507667`) | SHA-1 `f8d8b83cf21a04966326eb1378bacda255f63b93` |
+| Executed native AEMU engine | source revision 37.1.7 | source-lock and ordered patch-set SHA-256 identities |
 | Platform Tools | 37.0.0 | SHA-1 `bcf323933980a59dccc3f14c339aed5fb2171163` |
-| Android system image | Android 17 API 37.0, Google Play, x86_64, 16 KB, r06 | SHA-1 `8eaeeceb77452c018c3f6b589913cdc45222a87f` |
+| Android system image | Android 17 API 37.0, Google Play, arm64-v8a, 16 KB, r06 | SHA-1 `ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4` |
 
-The API 37.0 image is the Android 17 base stable release used by this design. Android 17 QPR1/API 37.1 artifacts are excluded while QPR1 remains in beta, even if SDK repository packaging places a beta artifact on `channel-0`.
+The API 37.0 r06 image is pinned from the Android 17 base final/stable release announced by
+Google on 2026-06-16. Android 17 QPR1 remains Beta and is excluded from this design. Its SDK
+repository channel is `channel-0`, whose text value is also `stable`, but product release
+status and SDK repository channel are independent evidence: neither is inferred from the
+other. The evidence gate separately pins the product status, package, revision, URL, checksum,
+channel text, and channel ID.
 
 This is the official Google Play AVD software experience: Android 17 framework/UI, Google Play services, and Play Store. It is not a Pixel hardware clone and does not provide physical modem/eSIM, hardware-backed StrongBox, certified Widevine L1, real biometrics, or a production Play Integrity verdict.
 
-Google publishes the Linux Emulator host package only for x86_64. This project keeps that
-official launcher and Google Play guest unchanged, but replaces its fixed headless child path
-on ARM64 with a native AArch64 `qemu-system-x86_64-headless` built from pinned Android Emulator
-source. A dispatcher preserves the upstream child on x86_64. The image therefore supports
-Linux x86_64 and ARM64 Docker Engines without a host SDK or host configuration changes.
+Google publishes the Linux Emulator host package only for x86_64. The project uses its pinned
+SDK resources and tools in the amd64 container userland, but the ARM path does not ask that
+x86_64 launcher to parse an ARM64 AVD: AEMU rejects that combination for API 28 and newer.
+Instead, the entrypoint directly executes a native AArch64 runner built from pinned Android
+Emulator source, which launches `qemu-system-aarch64-headless`. The default guest is the
+official arm64-v8a package, avoiding the x86-to-ARM TCG boot bottleneck. x86_64 host build and
+runtime verification are deferred until an x86_64 machine is available; repository metadata
+for that ABI remains queryable, but the runtime path fails closed rather than claiming support.
 
 ## Safety boundary
 
@@ -50,7 +59,7 @@ separate sorted SHA-256 manifest that runtime preflight checks again.
 The amd64 runtime also executes the bundle's locked Google `netsimd --version`
 and requires 0.3.112 before the image can be produced.
 
-The system image download is about 2.31 GB. The offline self-test target avoids all Android downloads:
+The offline self-test target avoids all Android downloads:
 
 ```sh
 docker build --pull=false --target self-test --tag android17-emulator-self-test .
@@ -77,25 +86,32 @@ cd ../..
 ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl up
 ```
 
-On a native x86_64 Linux engine, `up-kvm` maps an already-present `/dev/kvm`; it never
-installs a driver or changes host permissions. `up` selects software translation on both
-x86_64 without KVM and ARM64. ARM64 uses the native AEMU child and never attempts KVM for the
-official x86_64 guest.
+The current ARM64 path uses the native AEMU child and never attempts KVM for the official
+arm64-v8a guest. Native x86_64 `up-kvm` build and runtime verification are intentionally
+deferred to an x86_64 host; nothing on this ARM machine attempts to build or run x86 AEMU.
 
 ## ARM64 / OrbStack hybrid engine
 
-The official x86_64 launcher still parses the AVD and command line. Its fixed headless-child
-path is an immutable dispatcher. On ARM64 it executes the bundled native AArch64 AEMU binary
-directly with the locked ARM64 `PT_INTERP` and bundle-local library closure; on x86_64 it
-executes the renamed Google upstream child. Direct execution keeps `/proc/<pid>/exe` bound to
-the engine. The ARM child uses the launcher-compatible `qemu/linux-aarch64`
+The amd64 container entrypoint bypasses the x86_64 launcher for the ARM64 AVD and directly
+executes the bundled native AArch64 runner with the locked ARM64 `PT_INTERP` and bundle-local
+library closure. Direct execution keeps `/proc/<pid>/exe` bound to the engine. The ARM engine
+uses the bundle's `qemu/linux-aarch64`
 layout, locked pc-bios/runtime data, an AArch64 gfxstream backend, and three
 verified SwiftShader GLES libraries. ARM startup is fixed to SwiftShader and
-disables Vulkan and Guest ANGLE features until a real AArch64 Vulkan loader and
-ICD are separately locked; x86_64 retains its existing GPU behavior. This
-removes the double-translation hotspot while retaining the unmodified
-official Google Play guest. Bundle source commits, patches, DT_NEEDED closure, immutable
+uses a separately locked AArch64 Khronos Vulkan loader and SwiftShader ICD. The build executes
+the loader through the bundle's AArch64 interpreter and library path, requires the 120-second
+Vulkan smoke probe to report `PASS`, leaves Vulkan enabled, and disables unsupported Guest ANGLE
+and Vulkan snapshot features. This
+removes cross-ISA guest translation while retaining the unmodified official arm64-v8a Google
+Play guest. Bundle source commits, patches, DT_NEEDED closure, immutable
 identity labels and SHA-256 digests are recorded under `native-engine/`.
+
+Linux AArch64 AEMU otherwise selects the KVM-only `gic-version=host` and `-cpu host`
+defaults even when acceleration is off. The entrypoint therefore appends
+`-qemu -machine gic-version=3 -cpu cortex-a57` as a locked final raw QEMU tail,
+after user-supplied Android options and the graphics safety arguments. User-supplied
+`-qemu` sentinels are rejected so they cannot move or override that TCG boundary;
+`cortex-a57` matches the same source tree's existing non-AArch64-host TCG default.
 
 Bluetooth, UWB, and netsim Wi-Fi packet streams use the official Google
 `netsimd` 0.3.112 helper locked from the same common revision. A launcher-root
@@ -136,10 +152,10 @@ Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control a
 
 | Variable | Values/default | Behavior |
 |---|---|---|
-| `DOCKER_ENGINE_ARCHITECTURE` | supplied by `androidctl` | Accepts x86_64/amd64 or ARM64/aarch64; missing and unknown values fail closed. |
-| `ANDROID_RUNTIME_IMPLEMENTATION` | derived by `androidctl` | `native` on x86_64; exactly `hybrid-aemu-arm64` on ARM64. Other cross-architecture declarations fail closed. |
-| `EMULATOR_ACCEL` | `auto` (default), `kvm`, `off` | ARM64 always resolves to `off`; x86_64 `auto` uses usable KVM. Explicit KVM fails without a native-compatible device. |
-| `EMULATOR_GPU` | `swiftshader` | ARM64 requires `swiftshader`; x86_64 also accepts `auto`, `software`, `swangle`, or `lavapipe`. |
+| `DOCKER_ENGINE_ARCHITECTURE` | supplied by `androidctl` | ARM64/aarch64 is the current supported build path; x86_64/amd64 is deferred and fails closed, as do missing and unknown values. |
+| `ANDROID_RUNTIME_IMPLEMENTATION` | derived by `androidctl` | Exactly `hybrid-aemu-arm64` for the current Docker build path. |
+| `EMULATOR_ACCEL` | `auto` (default), `off` | Both resolve to software execution on ARM64. `kvm` and every x86_64 path fail closed. |
+| `EMULATOR_GPU` | `swiftshader` | The ARM64 runtime requires the packaged SwiftShader GLES/Vulkan stack; every other value fails closed. |
 | `EMULATOR_CORES` | `4` | Validated in the range 1–32. |
 | `EMULATOR_MEMORY_MB` | `4096` | Validated in the emulator-supported range 1536–8192. |
 | `EMULATOR_WIPE_DATA` | `0` | Set to `1` for one destructive guest-data reset. |
@@ -158,13 +174,14 @@ supplies this fact from Docker Engine metadata rather than trusting a persisted 
 
 The image becomes healthy only after all of the following are true:
 
-1. `/proc/*/exe` proves the dispatcher selected the expected upstream x86_64 or native
-   AArch64 child executable.
+1. `/proc/*/exe` proves the entrypoint directly selected the expected native AArch64 engine.
 2. ADB reports `device`.
 3. `sys.boot_completed=1`.
 4. `ro.build.version.sdk=37`.
-5. `com.android.vending` (Play Store) is installed.
-6. `com.google.android.gms` (Google Play services) is installed.
+5. `ro.product.cpu.abi=arm64-v8a`.
+6. Guest page size is exactly 16384 bytes.
+7. `com.android.vending` (Play Store) is installed.
+8. `com.google.android.gms` (Google Play services) is installed.
 
 Before evaluating ADB state, the internal health check makes a five-second-bounded
 connection to `127.0.0.1:${EMULATOR_ADB_PORT}` and then checks only

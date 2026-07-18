@@ -18,8 +18,8 @@ NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION:-}
 NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256:-}
 NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256:-}
 
-ENGINE_RELATIVE=qemu/linux-aarch64/qemu-system-x86_64-headless
-RUNNER_RELATIVE=bin/run-qemu-system-x86_64-headless
+ENGINE_RELATIVE=qemu/linux-aarch64/qemu-system-aarch64-headless
+RUNNER_RELATIVE=bin/run-qemu-system-aarch64-headless
 LOADER_RELATIVE=lib64/ld-linux-aarch64.so.1
 GFXSTREAM_RELATIVE=lib64/libgfxstream_backend.so
 X11_XCB_RELATIVE=lib64/libX11-xcb.so.1
@@ -260,8 +260,8 @@ copy_runtime_tree_flat() {
   done < <(find "${source}" -type f ! -name BUILD.bazel -print | sort)
 }
 
-ENGINE_SOURCE=$(find_build_artifact qemu-system-x86_64-headless) \
-  || die 'AArch64 qemu-system-x86_64-headless was not found'
+ENGINE_SOURCE=$(find_build_artifact qemu-system-aarch64-headless) \
+  || die 'AArch64 qemu-system-aarch64-headless was not found'
 GFXSTREAM_SOURCE=$(find_build_artifact libgfxstream_backend.so) \
   || die 'AArch64 libgfxstream_backend.so was not found'
 CRASHPAD_SOURCE=$(find_build_artifact crashpad_handler) \
@@ -357,7 +357,7 @@ mkdir -p \
   "${BUNDLE_DIR}/share/licenses"
 
 cp --preserve=mode -- "${ENGINE_SOURCE}" "${BUNDLE_DIR}/${ENGINE_RELATIVE}"
-cp --preserve=mode -- "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless" \
+cp --preserve=mode -- "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless" \
   "${BUNDLE_DIR}/${RUNNER_RELATIVE}"
 cp --preserve=mode -- "${ENGINE_DIR}/bin/netsimd" \
   "${BUNDLE_DIR}/${NETSIMD_LAUNCHER_RELATIVE}"

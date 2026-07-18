@@ -3,7 +3,7 @@ set -eu
 
 ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}
 LIBRARY_PATH=${ROOT}/lib64:${ROOT}/lib64/gles_swiftshader
-ENGINE=${ROOT}/qemu/linux-aarch64/qemu-system-x86_64-headless
+ENGINE=${ROOT}/qemu/linux-aarch64/qemu-system-aarch64-headless
 
 unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT LD_DEBUG LD_PROFILE LD_ASSUME_KERNEL GLIBC_TUNABLES
 unset ANDROID_EGL_LIB ANDROID_GLESv1_LIB ANDROID_GLESv2_LIB ANDROID_EMULATOR_USE_SYSTEM_LIBS

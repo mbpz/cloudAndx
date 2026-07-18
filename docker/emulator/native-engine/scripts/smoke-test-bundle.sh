@@ -10,8 +10,8 @@ NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION:-}
 NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256:-}
 NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256:-}
 
-ENGINE=${BUNDLE_DIR}/qemu/linux-aarch64/qemu-system-x86_64-headless
-RUNNER=${BUNDLE_DIR}/bin/run-qemu-system-x86_64-headless
+ENGINE=${BUNDLE_DIR}/qemu/linux-aarch64/qemu-system-aarch64-headless
+RUNNER=${BUNDLE_DIR}/bin/run-qemu-system-aarch64-headless
 LOADER=${BUNDLE_DIR}/lib64/ld-linux-aarch64.so.1
 GFXSTREAM_BACKEND=${BUNDLE_DIR}/lib64/libgfxstream_backend.so
 X11_XCB=${BUNDLE_DIR}/lib64/libX11-xcb.so.1
@@ -112,7 +112,7 @@ sh -n "${RUNNER}"
 sh -n "${NETSIMD_LAUNCHER}"
 grep -Fq 'ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}' "${RUNNER}" \
   || die 'runner does not default to the fixed bundle root'
-grep -Fq 'ENGINE=${ROOT}/qemu/linux-aarch64/qemu-system-x86_64-headless' "${RUNNER}" \
+grep -Fq 'ENGINE=${ROOT}/qemu/linux-aarch64/qemu-system-aarch64-headless' "${RUNNER}" \
   || die 'runner does not use the launcher-compatible engine path'
 grep -Fq 'unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT' "${RUNNER}" \
   || die 'runner does not clear inherited dynamic-loader variables'
@@ -134,7 +134,7 @@ grep -Fq 'LD_LIBRARY_PATH=${LIBRARY_PATH}' "${RUNNER}" \
   || die 'runner does not replace the inherited library path'
 grep -Fq 'QEMU_AUDIO_DRV=none' "${RUNNER}" \
   || die 'runner does not select the host-device-free QEMU audio backend'
-grep -Fq 'export ANDROID_EMULATOR_LAUNCHER_DIR LD_LIBRARY_PATH QEMU_AUDIO_DRV' "${RUNNER}" \
+grep -Fq 'ANDROID_EMU_VK_ICD LD_LIBRARY_PATH QEMU_AUDIO_DRV' "${RUNNER}" \
   || die 'runner does not export the locked audio backend'
 grep -Fq 'exec "${ENGINE}" "$@"' "${RUNNER}" \
   || die 'runner does not directly exec the engine'
@@ -305,8 +305,8 @@ jq -e \
   .product == "cloudandx-aemu-native-engine" and
   .revision == "37.1.7" and
   .architecture == "arm64" and
-  .binary == "/opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-x86_64-headless" and
-  .runner == "/opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless" and
+  .binary == "/opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-aarch64-headless" and
+  .runner == "/opt/cloudandx/native-aemu/bin/run-qemu-system-aarch64-headless" and
   .loader == "/opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1" and
   .helpers.gfxstream_backend == "/opt/cloudandx/native-aemu/lib64/libgfxstream_backend.so" and
   .helpers.crashpad_handler == "/opt/cloudandx/native-aemu/crashpad_handler" and

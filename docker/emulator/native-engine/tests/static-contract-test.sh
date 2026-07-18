@@ -27,13 +27,24 @@ jq -e '
   (([.repository_roots[].id] | length) == ([.repository_roots[].id] | unique | length)) and
   all(.repository_roots[]; .commit | test("^[0-9a-f]{40}$")) and
   all(.repository_roots[]; .git_tree | test("^[0-9a-f]{40}$")) and
-  all(.repository_roots[]; .repository | test("^https://android\\.googlesource\\.com/[A-Za-z0-9._/-]+$")) and
+  all(.repository_roots[];
+    (.repository | test("^https://android\\.googlesource\\.com/[A-Za-z0-9._/-]+$")) or
+    .repository == "https://github.com/KhronosGroup/Vulkan-Headers" or
+    .repository == "https://github.com/KhronosGroup/Vulkan-Loader") and
   (.sources | length > 0) and
   (([.sources[].id] | length) == ([.sources[].id] | unique | length)) and
   (([.sources[].destination] | length) == ([.sources[].destination] | unique | length)) and
   all(.sources[]; .commit | test("^[0-9a-f]{40}$")) and
   all(.sources[]; (.git_tree == null) or (.git_tree | test("^[0-9a-f]{40}$"))) and
-  all(.sources[]; .repository | test("^https://android\\.googlesource\\.com/[A-Za-z0-9._/-]+$")) and
+  all(.sources[];
+    (((.archive_kind // "gitiles") == "gitiles") and
+      (.repository | test("^https://android\\.googlesource\\.com/[A-Za-z0-9._/-]+$"))) or
+    ((.archive_kind == "github") and
+      (.repository == "https://github.com/KhronosGroup/Vulkan-Headers" or
+       .repository == "https://github.com/KhronosGroup/Vulkan-Loader") and
+      .subtree == "" and
+      ((.files // []) | length) == 0 and
+      .verify_tree == true)) and
   all(.sources[]; all(.blob_checks[]?; .sha1 | test("^[0-9a-f]{40}$"))) and
   all(.sources[];
     all(.files[]?;
@@ -207,8 +218,10 @@ assert_contains 'apply_series gfxstream "${WORKSPACE}/hardware/google/gfxstream"
   "${ENGINE_DIR}/scripts/apply-patches.sh"
 
 bash -n "${ENGINE_DIR}"/scripts/*.sh
-sh -n "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+sh -n "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
 sh -n "${ENGINE_DIR}/bin/netsimd"
+[[ ! -e "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless" ]] \
+  || fail 'obsolete x86_64 guest runner must not remain in the native ARM bundle source'
 
 for flag in \
   '-DCMAKE_BUILD_TYPE=Release' \
@@ -221,49 +234,64 @@ for flag in \
   '-DOPTION_MINBUILD=TRUE' \
   '-DOPTION_HEADLESS_ENGINE_ONLY=TRUE' \
   '-DOPTION_SYSTEM_HOST_TOOLCHAIN=TRUE' \
-  '-DOPTION_X86_64_GUEST_ON_AARCH64=TRUE' \
   '-DOPTION_SDK_TOOLS_BUILD_NUMBER=cloudandx-hybrid' \
   '-DOPTION_SDK_TOOLS_REVISION=37.1.7' \
   '-DQTWEBENGINE=FALSE' \
   '-DWEBRTC=FALSE'; do
   assert_contains "${flag}" "${ENGINE_DIR}/scripts/configure.sh"
 done
+if grep -Fq -- '-DOPTION_X86_64_GUEST_ON_AARCH64=TRUE' \
+  "${ENGINE_DIR}/scripts/configure.sh"; then
+  fail 'native ARM64 build must not opt into the x86_64 guest target'
+fi
 
 assert_contains '?format=TEXT' "${ENGINE_DIR}/scripts/fetch-sources.sh"
 assert_contains 'base64 --decode' "${ENGINE_DIR}/scripts/fetch-sources.sh"
 assert_contains 'git hash-object --no-filters' "${ENGINE_DIR}/scripts/fetch-sources.sh"
 
-for target in qemu-system-x86_64-headless gfxstream_backend crashpad_handler qemu-img nimble_bridge; do
+for target in qemu-system-aarch64-headless gfxstream_backend crashpad_handler qemu-img nimble_bridge; do
   assert_contains "${target}" "${ENGINE_DIR}/scripts/build.sh"
 done
+assert_contains 'Build only the AArch64 headless engine' \
+  "${ENGINE_DIR}/patches/0004-use-system-toolchain-for-build-host-tools.patch"
+if grep -Fq 'Build only the x86_64 headless engine' \
+  "${ENGINE_DIR}/patches/0004-use-system-toolchain-for-build-host-tools.patch"; then
+  fail 'system-toolchain patch context still targets the obsolete x86_64 headless build'
+fi
 assert_contains 'FROM --platform=${BUNDLE_PLATFORM} scratch AS bundle' "${ENGINE_DIR}/Dockerfile"
 assert_contains '/out/bundle/opt/cloudandx/native-aemu' "${ENGINE_DIR}/Dockerfile"
 assert_contains '/opt/cloudandx/native-aemu/${ENGINE_RELATIVE}' \
   "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains '/opt/cloudandx/native-aemu/${RUNNER_RELATIVE}' \
   "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains 'ENGINE_RELATIVE=qemu/linux-aarch64/qemu-system-aarch64-headless' \
+  "${ENGINE_DIR}/scripts/package-bundle.sh"
+assert_contains 'RUNNER_RELATIVE=bin/run-qemu-system-aarch64-headless' \
+  "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains '/opt/cloudandx/native-aemu/manifest.json' "${ENGINE_DIR}/README.md"
 assert_contains '/opt/cloudandx/native-aemu/SHA256SUMS' "${ENGINE_DIR}/README.md"
 assert_contains 'ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}' \
-  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
 assert_contains 'LD_LIBRARY_PATH=${LIBRARY_PATH}' \
-  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
 assert_contains 'ANDROID_EMULATOR_LAUNCHER_DIR=${ROOT}' \
-  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
 assert_contains 'QEMU_AUDIO_DRV=none' \
-  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
-assert_contains 'export ANDROID_EMULATOR_LAUNCHER_DIR LD_LIBRARY_PATH QEMU_AUDIO_DRV' \
-  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
+assert_contains 'export ANDROID_EMULATOR_LAUNCHER_DIR ANDROID_EMU_VK_LOADER_PATH' \
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
+assert_contains 'ANDROID_EMU_VK_ICD LD_LIBRARY_PATH QEMU_AUDIO_DRV' \
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
 assert_contains 'ANDROID_EMU_VK_LOADER_PATH' \
-  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
 assert_contains 'QT_X11_LIB_DIR=${WORKSPACE}/prebuilts/android-emulator-build/qt/linux-aarch64/lib' \
   "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains 'X11_XCB_RELATIVE=lib64/libX11-xcb.so.1' \
   "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains 'runtime_dlopen' "${ENGINE_DIR}/scripts/package-bundle.sh"
 assert_contains 'exec "${ENGINE}" "$@"' \
-  "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"
-if grep -Fq 'exec "${LOADER}"' "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless"; then
+  "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"
+if grep -Fq 'exec "${LOADER}"' "${ENGINE_DIR}/bin/run-qemu-system-aarch64-headless"; then
   fail 'runner must not make the ELF loader the process image'
 fi
 
@@ -290,6 +318,12 @@ fi
 assert_contains 'ARG NATIVE_AEMU_SOURCE_LOCK_SHA256' \
   "${ENGINE_DIR}/Dockerfile"
 assert_contains 'ARG NATIVE_AEMU_PATCH_SET_SHA256' \
+  "${ENGINE_DIR}/Dockerfile"
+assert_contains '/usr/bin/timeout --signal=TERM --kill-after=5s 120s' \
+  "${ENGINE_DIR}/Dockerfile"
+assert_contains '/opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1' \
+  "${ENGINE_DIR}/Dockerfile"
+assert_contains '/opt/cloudandx/native-aemu/lib64/vulkan:/opt/cloudandx/native-aemu/lib64' \
   "${ENGINE_DIR}/Dockerfile"
 assert_contains 'NATIVE_AEMU_SOURCE_LOCK_SHA256=$(sha256_file "${NATIVE_AEMU_LOCK}")' \
   "${REPO_ROOT}/androidctl"

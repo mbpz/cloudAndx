@@ -19,7 +19,7 @@ services:
       - ALL
     environment:
       DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-}
-      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-native}
+      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
     volumes:
       - ./docker/bootstrap/check-runtime-arch.sh:/usr/local/bin/check-runtime-arch.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/check-runtime-arch.sh"]
@@ -85,15 +85,16 @@ services:
       ANDROID_VERSION: "17"
       ANDROID_API_LEVEL: "37"
       GOOGLE_PLAY_TAG: google_apis_playstore
-      GOOGLE_PLAY_PACKAGE_PATH: system-images;android-37.0;google_apis_playstore_ps16k;x86_64
-      GOOGLE_PLAY_ABI: x86_64
+      GOOGLE_PLAY_PACKAGE_PATH: system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a
+      GOOGLE_PLAY_ABI: arm64-v8a
       GOOGLE_PLAY_EXPECTED_CHANNEL: stable
+      GOOGLE_PLAY_EXPECTED_CHANNEL_ID: channel-0
       GOOGLE_PLAY_EXPECTED_REVISION: "6"
-      GOOGLE_PLAY_EXPECTED_URL: https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-playstore-ps16k-37.0_r06.zip
-      GOOGLE_PLAY_EXPECTED_CHECKSUM: sha1:8eaeeceb77452c018c3f6b589913cdc45222a87f
+      GOOGLE_PLAY_EXPECTED_URL: https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-playstore-ps16k-37.0_r06.zip
+      GOOGLE_PLAY_EXPECTED_CHECKSUM: sha1:ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4
       GOOGLE_REPOSITORY_URLS: https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-4.xml
       ALLOW_SOFTWARE_EMULATION_ONLY: "true"
-      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-native}
+      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
       PREFLIGHT_OUTPUT: /evidence/preflight.json
     volumes:
       - ./contracts:/contracts:ro
@@ -120,7 +121,8 @@ services:
     shm_size: 2gb
     environment:
       DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-}
-      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-native}
+      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
+      AVD_NAME: Pixel_9_Android_17_Play_ARM64
       EMULATOR_ACCEL: "off"
       EMULATOR_CORES: ${EMULATOR_CORES:-4}
       EMULATOR_MEMORY_MB: ${EMULATOR_MEMORY_MB:-4096}

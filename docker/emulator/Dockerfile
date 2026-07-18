@@ -14,10 +14,10 @@ WORKDIR /work
 COPY bin/ ./bin/
 COPY avd/ ./avd/
 COPY tests/ ./tests/
-COPY native-engine/bin/run-qemu-system-x86_64-headless ./native-engine/bin/run-qemu-system-x86_64-headless
+COPY native-engine/bin/run-qemu-system-aarch64-headless ./native-engine/bin/run-qemu-system-aarch64-headless
 COPY native-engine/bin/netsimd ./native-engine/bin/netsimd
 RUN chmod 0555 bin/*.sh tests/*.sh \
-      native-engine/bin/run-qemu-system-x86_64-headless native-engine/bin/netsimd \
+      native-engine/bin/run-qemu-system-aarch64-headless native-engine/bin/netsimd \
     && tests/self-test.sh
 
 FROM --platform=${RUNTIME_PLATFORM} ${RUNTIME_BASE_IMAGE} AS artifact-download-base
@@ -60,8 +60,8 @@ RUN set -eu; \
 
 FROM artifact-download-base AS system-image-fetcher
 
-ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-playstore-ps16k-37.0_r06.zip
-ARG SYSTEM_IMAGE_SHA1=8eaeeceb77452c018c3f6b589913cdc45222a87f
+ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-playstore-ps16k-37.0_r06.zip
+ARG SYSTEM_IMAGE_SHA1=ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4
 
 RUN set -eu; \
     image_parent=/opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k; \
@@ -70,8 +70,8 @@ RUN set -eu; \
       --output /tmp/system-image.zip "${SYSTEM_IMAGE_URL}"; \
     echo "${SYSTEM_IMAGE_SHA1}  /tmp/system-image.zip" | sha1sum --check --strict -; \
     unzip -q /tmp/system-image.zip -d "${image_parent}"; \
-    test -s "${image_parent}/x86_64/system.img"; \
-    test -s "${image_parent}/x86_64/vendor.img"; \
+    test -s "${image_parent}/arm64-v8a/system.img"; \
+    test -s "${image_parent}/arm64-v8a/vendor.img"; \
     rm -f /tmp/system-image.zip
 
 FROM --platform=${RUNTIME_PLATFORM} ${RUNTIME_BASE_IMAGE} AS runtime-base
@@ -134,16 +134,16 @@ ARG EMULATOR_URL=https://dl.google.com/android/repository/emulator-linux_x64-155
 ARG EMULATOR_SHA1=f8d8b83cf21a04966326eb1378bacda255f63b93
 ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r37.0.0-linux.zip
 ARG PLATFORM_TOOLS_SHA1=bcf323933980a59dccc3f14c339aed5fb2171163
-ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-playstore-ps16k-37.0_r06.zip
-ARG SYSTEM_IMAGE_SHA1=8eaeeceb77452c018c3f6b589913cdc45222a87f
+ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-playstore-ps16k-37.0_r06.zip
+ARG SYSTEM_IMAGE_SHA1=ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4
 ARG NATIVE_AEMU_REVISION
 ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
 ARG NATIVE_AEMU_PATCH_SET_SHA256
 ARG NATIVE_AEMU_QEMU_COMMIT=98f7f6ffcc4e6ce513a8b978323c3b961dc58143
 
 LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-only)" \
-      org.opencontainers.image.description="Google Android Emulator 36.6.11 with Android 17 API 37.0 Google Play x86_64 16 KB r06" \
-      org.opencontainers.image.version="android-17-api-37.0-play-r06-emulator-36.6.11" \
+      org.opencontainers.image.description="Google Android 17 API 37.0 Play arm64-v8a 16 KB r06 with native AEMU 37.1.7 and SDK resources from Emulator 36.6.11" \
+      org.opencontainers.image.version="android-17-api-37.0-play-r06-native-aemu-37.1.7-sdk-emulator-36.6.11" \
       org.opencontainers.image.vendor="cloudAndx" \
       io.cloudandx.android.release="Android 17 base release (API 37.0); Android 17 QPR1 remains excluded until its public stable release" \
       io.cloudandx.android.emulator.url="${EMULATOR_URL}" \
@@ -164,17 +164,12 @@ COPY --from=tool-fetcher /opt/android-sdk/ /opt/android-sdk/
 COPY --from=system-image-fetcher /opt/android-sdk/system-images/ /opt/android-sdk/system-images/
 COPY --from=native-engine-bundle /opt/cloudandx/native-aemu/ /opt/cloudandx/native-aemu/
 COPY avd/ /opt/android-avd-template/
-COPY bin/entrypoint.sh bin/healthcheck.sh bin/runtime-lib.sh bin/runtime-preflight.sh bin/qemu-system-x86_64-headless-dispatcher.sh /usr/local/bin/
+COPY bin/entrypoint.sh bin/healthcheck.sh bin/runtime-lib.sh bin/runtime-preflight.sh /usr/local/bin/
 
 RUN set -eu; \
     test -n "${NATIVE_AEMU_REVISION}"; \
     test "${#NATIVE_AEMU_SOURCE_LOCK_SHA256}" -eq 64; \
     test "${#NATIVE_AEMU_PATCH_SET_SHA256}" -eq 64; \
-    qemu_child=/opt/android-sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless; \
-    test -x "${qemu_child}"; \
-    mv "${qemu_child}" "${qemu_child}.upstream-x86_64"; \
-    install -m 0555 /usr/local/bin/qemu-system-x86_64-headless-dispatcher.sh "${qemu_child}"; \
-    rm -f /usr/local/bin/qemu-system-x86_64-headless-dispatcher.sh; \
     chmod 0555 /usr/local/bin/entrypoint.sh \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/runtime-lib.sh \
@@ -192,7 +187,7 @@ RUN set -eu; \
       /opt/cloudandx/native-aemu/identity.properties \
     && test -L /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64 \
     && test "$(readlink /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64)" = ../../lib64 \
-    && test -x /opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-x86_64-headless \
+    && test -x /opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-aarch64-headless \
     && test -s /opt/cloudandx/native-aemu/lib64/libgfxstream_backend.so \
     && test -s /opt/cloudandx/native-aemu/lib64/libX11-xcb.so.1 \
     && test -x /opt/cloudandx/native-aemu/crashpad_handler \
@@ -240,10 +235,8 @@ RUN set -eu; \
       /opt/cloudandx/native-aemu \
     && test -x /opt/android-sdk/emulator/emulator \
     && test -x /opt/android-sdk/platform-tools/adb \
-    && test -x "${qemu_child}" \
-    && test -x "${qemu_child}.upstream-x86_64" \
-    && test -x /opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless \
-    && test -s /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/system.img
+    && test -x /opt/cloudandx/native-aemu/bin/run-qemu-system-aarch64-headless \
+    && test -s /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/system.img
 
 ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     ANDROID_HOME=/opt/android-sdk \
@@ -252,7 +245,7 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     ANDROID_PREFS_ROOT=/data/prefs \
     HOME=/data/home \
     PATH=/opt/android-sdk/emulator:/opt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    AVD_NAME=Pixel_9_Android_17_Play \
+    AVD_NAME=Pixel_9_Android_17_Play_ARM64 \
     EMULATOR_ACCEL=auto \
     EMULATOR_CORES=4 \
     EMULATOR_MEMORY_MB=4096 \
@@ -263,7 +256,7 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     EMULATOR_GRPC_INTERNAL_PORT=8556 \
     EMULATOR_GRPC_PORT=8554 \
     EMULATOR_WIPE_DATA=0 \
-    ANDROID_RUNTIME_IMPLEMENTATION=native \
+    ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \
     NATIVE_AEMU_ROOT=/opt/cloudandx/native-aemu \
     NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
     NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \

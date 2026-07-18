@@ -12,7 +12,9 @@ EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
 SOCAT_BIN=${SOCAT_BIN:-socat}
 TIMEOUT_BIN=${TIMEOUT_BIN:-timeout}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
-ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-native}
+ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
+EXPECTED_ANDROID_ABI=${EXPECTED_ANDROID_ABI:-arm64-v8a}
+EXPECTED_PAGE_SIZE_BYTES=${EXPECTED_PAGE_SIZE_BYTES:-16384}
 serial=emulator-${EMULATOR_CONSOLE_PORT}
 adb_endpoint=127.0.0.1:${EMULATOR_ADB_PORT}
 
@@ -24,5 +26,7 @@ engine_process_matches_expected "${expected_engine}"
 [ "$("${ADB_BIN}" -s "${serial}" get-state 2>/dev/null)" = device ]
 [ "$("${ADB_BIN}" -s "${serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]
 [ "$("${ADB_BIN}" -s "${serial}" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')" = 37 ]
+[ "$("${ADB_BIN}" -s "${serial}" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')" = "${EXPECTED_ANDROID_ABI}" ]
+[ "$("${ADB_BIN}" -s "${serial}" shell getconf PAGE_SIZE 2>/dev/null | tr -d '\r')" = "${EXPECTED_PAGE_SIZE_BYTES}" ]
 "${ADB_BIN}" -s "${serial}" shell pm path com.android.vending 2>/dev/null | tr -d '\r' | grep -q '^package:'
 "${ADB_BIN}" -s "${serial}" shell pm path com.google.android.gms 2>/dev/null | tr -d '\r' | grep -q '^package:'

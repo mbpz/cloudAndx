@@ -75,7 +75,6 @@ runtime_implementation_for_engine() {
     return 0
   fi
   case $1 in
-    x86_64|amd64) printf '%s\n' native ;;
     arm64|aarch64) printf '%s\n' hybrid-aemu-arm64 ;;
     *) printf '%s\n' unsupported ;;
   esac
@@ -139,12 +138,17 @@ require_supported_linux_engine() {
   engine_arch=$(docker_engine_architecture)
 
   case "${engine_os}/${engine_arch}" in
-    linux/amd64|linux/x86_64|linux/arm64|linux/aarch64)
+    linux/arm64|linux/aarch64)
       return 0
+      ;;
+    linux/amd64|linux/x86_64)
+      printf 'ERROR: Docker Engine %s/%s is deferred until the x86_64 runtime is built and verified on x86_64 hardware.\n' "${engine_os}" "${engine_arch}" >&2
+      printf '%s\n' 'No host, network, KVM, or OrbStack change was attempted.' >&2
+      exit 78
       ;;
     *)
       printf 'ERROR: unsupported Docker Engine %s/%s.\n' "${engine_os}" "${engine_arch}" >&2
-      printf '%s\n' 'Supported Docker Engine architectures are x86_64 and ARM64.' >&2
+      printf '%s\n' 'The current supported build architecture is ARM64.' >&2
       printf '%s\n' 'No host, network, or OrbStack change was attempted.' >&2
       exit 78
       ;;
@@ -154,15 +158,9 @@ require_supported_linux_engine() {
 require_native_x86_linux_engine() {
   engine_os=$(docker_engine_os)
   engine_arch=$(docker_engine_architecture)
-
-  case "${engine_os}/${engine_arch}" in
-    linux/amd64|linux/x86_64) return 0 ;;
-    *)
-      printf 'ERROR: KVM mode requires a native x86_64 Linux Docker Engine; got %s/%s.\n' "${engine_os}" "${engine_arch}" >&2
-      printf '%s\n' 'No host, network, KVM, or OrbStack change was attempted.' >&2
-      exit 78
-      ;;
-  esac
+  printf 'ERROR: KVM and x86_64 runtime commands are deferred; got Docker Engine %s/%s.\n' "${engine_os}" "${engine_arch}" >&2
+  printf '%s\n' 'No host, network, KVM, or OrbStack change was attempted.' >&2
+  exit 78
 }
 
 build_native_engine() {
@@ -208,8 +206,8 @@ Usage: ./androidctl COMMAND [ARGS...]
   build-core         Build controller, bridge, dashboard, evidence gate, and tests
   build-native-engine Build the pinned native ARM64 AEMU bundle
   build-emulator     Build the native ARM64 AEMU bundle and pinned Google Android image
-  up                 Start software emulation on x86_64 or ARM64 Docker Engine
-  up-kvm             Start on native x86_64 Linux with an existing /dev/kvm
+  up                 Start the current ARM64 software-emulation build path
+  up-kvm             Fail closed (KVM/x86_64 runtime remains deferred)
   status             Show containers and the recorded evidence decision
   logs [SERVICE]     Follow stack logs
   adb [ARGS...]      Run bundled adb against the emulator
@@ -231,7 +229,7 @@ case ${1-} in
     docker info --format 'engine={{.OSType}}/{{.Architecture}} cpus={{.NCPU}} memory={{.MemTotal}}'
     compose config --quiet
     case "$(docker_engine_os)/$(docker_engine_architecture)" in
-      linux/amd64|linux/x86_64) runtime_support=supported-upstream-x86_64 ;;
+      linux/amd64|linux/x86_64) runtime_support=deferred-unverified-x86_64 ;;
       linux/arm64|linux/aarch64) runtime_support=supported-native-aemu-arm64 ;;
       *) runtime_support=blocked-unsupported-engine ;;
     esac
@@ -304,7 +302,7 @@ case ${1-} in
   verify-runtime)
     compose exec -T emulator /usr/local/bin/runtime-preflight.sh
     compose exec -T emulator /usr/local/bin/healthcheck.sh
-    printf '%s\n' 'runtime=verified engine-process=verified adb=device api>=37 play-store=present gms=present'
+    printf '%s\n' 'runtime=verified engine-process=verified adb=device api=37 abi=arm64-v8a page-size=16384 play-store=present gms=present'
     ;;
   down)
     compose down --remove-orphans

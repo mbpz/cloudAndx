@@ -14,15 +14,18 @@ from .io_utils import sha256_bytes, utc_now
 
 ANDROID_VERSION = 17
 ANDROID_API_LEVEL = 37
-GOOGLE_PLAY_PACKAGE_PATH = "system-images;android-37.0;google_apis_playstore_ps16k;x86_64"
+ANDROID_RELEASE_STATUS = "stable"
+GOOGLE_PLAY_PACKAGE_PATH = "system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a"
 GOOGLE_PLAY_TAG = "google_apis_playstore"
-GOOGLE_PLAY_ABI = "x86_64"
+GOOGLE_PLAY_ABI = "arm64-v8a"
+GOOGLE_PLAY_CHANNEL = "stable"
+GOOGLE_PLAY_CHANNEL_ID = "channel-0"
 GOOGLE_PLAY_REVISION = "6"
 GOOGLE_PLAY_ARCHIVE_URL = (
     "https://dl.google.com/android/repository/sys-img/google_apis_playstore/"
-    "x86_64-playstore-ps16k-37.0_r06.zip"
+    "arm64-v8a-playstore-ps16k-37.0_r06.zip"
 )
-GOOGLE_PLAY_CHECKSUM = "sha1:8eaeeceb77452c018c3f6b589913cdc45222a87f"
+GOOGLE_PLAY_CHECKSUM = "sha1:ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4"
 OFFICIAL_HOSTS = frozenset(
     {
         "dl.google.com",
@@ -46,6 +49,7 @@ class PackageRecord:
     revision: str
     revision_key: tuple[int, ...]
     channel: str
+    channel_id: str
     archive_url: str
     checksum_algorithm: str
     checksum: str
@@ -59,6 +63,7 @@ class PackageRecord:
             "abi": self.abi,
             "revision": self.revision,
             "channel": self.channel,
+            "channel_id": self.channel_id,
             "archive_url": self.archive_url,
             "checksum_algorithm": self.checksum_algorithm,
             "checksum": self.checksum,
@@ -73,7 +78,8 @@ class RepositoryExpectation:
     package_path: str = GOOGLE_PLAY_PACKAGE_PATH
     tag: str = GOOGLE_PLAY_TAG
     abi: str = GOOGLE_PLAY_ABI
-    channel: str = "stable"
+    channel: str = GOOGLE_PLAY_CHANNEL
+    channel_id: str = GOOGLE_PLAY_CHANNEL_ID
     revision: str | None = GOOGLE_PLAY_REVISION
     archive_url: str | None = GOOGLE_PLAY_ARCHIVE_URL
     checksum: str | None = GOOGLE_PLAY_CHECKSUM
@@ -87,8 +93,14 @@ class RepositoryExpectation:
         if self.tag != GOOGLE_PLAY_TAG:
             if not self.tag:
                 raise RepositoryError("Google Play tag cannot be empty")
-        if self.channel.lower() != "stable":
-            raise RepositoryError("only the stable Google repository channel is promotable")
+        if (
+            self.channel.lower() != GOOGLE_PLAY_CHANNEL
+            or self.channel_id != GOOGLE_PLAY_CHANNEL_ID
+        ):
+            raise RepositoryError(
+                "only SDK repository channel stable (channel-0) is promotable; "
+                "product release status and repository channel are independent evidence"
+            )
 
 
 def _local_name(tag: str) -> str:
@@ -234,6 +246,7 @@ def parse_repository_xml(xml_bytes: bytes, source_url: str) -> list[PackageRecor
                 revision=revision,
                 revision_key=revision_key,
                 channel=channel,
+                channel_id=channel_id,
                 archive_url=archive_url,
                 checksum_algorithm=checksum_algorithm,
                 checksum=checksum,
@@ -294,6 +307,7 @@ def verify_google_play_package(
             and package.tag == expectation.tag
             and package.abi == expectation.abi
             and package.channel == expectation.channel.lower()
+            and package.channel_id == expectation.channel_id
         )
     if document_count == 0:
         raise RepositoryError("no Google repository XML documents were supplied")
@@ -306,7 +320,8 @@ def verify_google_play_package(
         candidates = [package for package in candidates if package.checksum == wanted]
     if not candidates:
         raise RepositoryError(
-            "no stable Android 17 / API 37 Google Play system image matched "
+            "no Android 17 / API 37 Google Play system image on SDK repository channel "
+            f"{expectation.channel!r} ({expectation.channel_id}) matched "
             f"package {expectation.package_path!r}, ABI {expectation.abi!r}, and the configured "
             "revision/URL/checksum constraints"
         )
@@ -315,7 +330,13 @@ def verify_google_play_package(
     selected = candidates[0]
     same_revision = [package for package in candidates if package.revision_key == selected.revision_key]
     identities = {
-        (package.path, package.archive_url, package.checksum_algorithm, package.checksum)
+        (
+            package.path,
+            package.channel_id,
+            package.archive_url,
+            package.checksum_algorithm,
+            package.checksum,
+        )
         for package in same_revision
     }
     if len(identities) != 1:
@@ -325,6 +346,7 @@ def verify_google_play_package(
         "status": "PASS",
         "verified_at": utc_now(),
         "android_version": expectation.android_version,
+        "android_release_status": ANDROID_RELEASE_STATUS,
         "api_level": expectation.api_level,
         "selected_package": selected.to_dict(),
         "repository_sources": source_records,

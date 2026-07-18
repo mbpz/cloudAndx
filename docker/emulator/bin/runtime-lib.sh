@@ -45,10 +45,7 @@ validate_engine_architecture() {
 
   case ${architecture} in
     x86_64|amd64)
-      if [ "${implementation}" = native ]; then
-        return 0
-      fi
-      runtime_die "x86_64 requires ANDROID_RUNTIME_IMPLEMENTATION=native."
+      runtime_die "x86_64 Docker Engine runtime is deferred until it is built and verified on an x86_64 host."
       ;;
     arm64|aarch64)
       if [ "${implementation}" = hybrid-aemu-arm64 ]; then
@@ -71,15 +68,14 @@ selected_engine_kind() {
 
   validate_engine_architecture "${architecture}" "${implementation}" || return 1
   case ${architecture} in
-    x86_64|amd64) printf '%s\n' upstream-x86_64 ;;
     arm64|aarch64) printf '%s\n' native-aemu-arm64 ;;
   esac
 }
 
 validate_native_aemu_bundle() {
   bundle_root=${1:-/opt/cloudandx/native-aemu}
-  runner=${bundle_root}/bin/run-qemu-system-x86_64-headless
-  engine=${bundle_root}/qemu/linux-aarch64/qemu-system-x86_64-headless
+  runner=${bundle_root}/bin/run-qemu-system-aarch64-headless
+  engine=${bundle_root}/qemu/linux-aarch64/qemu-system-aarch64-headless
   gfxstream_backend=${bundle_root}/lib64/libgfxstream_backend.so
   x11_xcb=${bundle_root}/lib64/libX11-xcb.so.1
   crashpad_handler=${bundle_root}/crashpad_handler
@@ -264,10 +260,10 @@ expected_engine_executable() {
   architecture=${1-}
   case ${architecture} in
     x86_64|amd64)
-      printf '%s\n' "${UPSTREAM_QEMU_ENGINE:-/opt/android-sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64}"
+      runtime_die "x86_64 engine selection is deferred until x86_64 host verification."
       ;;
     arm64|aarch64)
-      printf '%s\n' "${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
+      printf '%s\n' "${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}/qemu/linux-aarch64/qemu-system-aarch64-headless"
       ;;
     *)
       runtime_die "Cannot select an engine executable for architecture '${architecture}'."
@@ -285,7 +281,7 @@ validate_runtime_gpu_mode() {
         || runtime_die "ARM64 native AEMU requires EMULATOR_GPU=swiftshader for first boot."
       ;;
     x86_64|amd64)
-      return 0
+      runtime_die "x86_64 GPU runtime is deferred until x86_64 host verification."
       ;;
     *)
       runtime_die "Cannot validate GPU mode for unsupported architecture '${architecture}'."
@@ -300,6 +296,21 @@ native_aemu_graphics_args() {
     -feature -GuestUsesAngle \
     -feature -VulkanNativeSwapchain \
     -feature -VulkanSnapshots
+}
+
+native_aemu_tcg_qemu_args() {
+  printf '%s\n' \
+    -qemu \
+    -machine gic-version=3 \
+    -cpu cortex-a57
+}
+
+validate_android_emulator_args() {
+  for argument do
+    [ "${argument}" != -qemu ] \
+      || runtime_die "Raw QEMU arguments are runtime-controlled; remove the user-supplied -qemu sentinel." \
+      || return 1
+  done
 }
 
 engine_process_matches_expected() {
@@ -376,7 +387,7 @@ resolve_runtime_acceleration() {
       case ${requested} in
         auto|off) printf '%s\n' off ;;
         kvm)
-          runtime_die "KVM cannot accelerate the official x86_64 guest on an ARM64 Docker Engine."
+          runtime_die "The Docker-only ARM64 guest path is fixed to software execution and does not map KVM."
           return 1
           ;;
         *)
@@ -386,7 +397,8 @@ resolve_runtime_acceleration() {
       esac
       ;;
     x86_64|amd64)
-      resolve_acceleration "${requested}" "${kvm_device}"
+      runtime_die "x86_64 acceleration is deferred until x86_64 host verification."
+      return 1
       ;;
     *)
       runtime_die "Cannot resolve acceleration for unsupported architecture '${architecture}'."

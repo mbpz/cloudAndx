@@ -6,7 +6,7 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 
 ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/opt/android-sdk}
 ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-/data/avd}
-AVD_NAME=${AVD_NAME:-Pixel_9_Android_17_Play}
+AVD_NAME=${AVD_NAME:-Pixel_9_Android_17_Play_ARM64}
 EMULATOR_ACCEL=${EMULATOR_ACCEL:-auto}
 EMULATOR_CORES=${EMULATOR_CORES:-4}
 EMULATOR_MEMORY_MB=${EMULATOR_MEMORY_MB:-4096}
@@ -19,14 +19,14 @@ EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
 EMULATOR_WIPE_DATA=${EMULATOR_WIPE_DATA:-0}
 KVM_DEVICE=${KVM_DEVICE:-/dev/kvm}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
-ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-native}
+ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
 NATIVE_AEMU_ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}
-EMULATOR_BIN=${EMULATOR_BIN:-${ANDROID_SDK_ROOT}/emulator/emulator}
+NATIVE_AEMU_RUNNER=${NATIVE_AEMU_ROOT}/bin/run-qemu-system-aarch64-headless
+NATIVE_AEMU_INTERPRETER=${NATIVE_AEMU_INTERPRETER:-/lib/ld-linux-aarch64.so.1}
+EMULATOR_BIN=${EMULATOR_BIN:-${NATIVE_AEMU_RUNNER}}
 ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 SOCAT_BIN=${SOCAT_BIN:-socat}
-SYSTEM_IMAGE_DIR=${SYSTEM_IMAGE_DIR:-${ANDROID_SDK_ROOT}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64}
-QEMU_DISPATCHER=${QEMU_DISPATCHER:-${ANDROID_SDK_ROOT}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless}
-UPSTREAM_QEMU_ENGINE=${UPSTREAM_QEMU_ENGINE:-${QEMU_DISPATCHER}.upstream-x86_64}
+SYSTEM_IMAGE_DIR=${SYSTEM_IMAGE_DIR:-${ANDROID_SDK_ROOT}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a}
 
 validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}"
 validate_runtime_settings
@@ -35,14 +35,14 @@ effective_accel=$(resolve_runtime_acceleration "${DOCKER_ENGINE_ARCHITECTURE}" "
 engine_kind=$(selected_engine_kind "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}")
 engine_executable=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 
-[ -x "${EMULATOR_BIN}" ] || runtime_die "Android Emulator is missing or not executable: ${EMULATOR_BIN}"
+[ "${EMULATOR_BIN}" = "${NATIVE_AEMU_RUNNER}" ] \
+  || runtime_die "ARM64 runtime must execute the locked native AEMU runner directly."
+[ -x "${EMULATOR_BIN}" ] || runtime_die "Native AEMU runner is missing or not executable: ${EMULATOR_BIN}"
 [ -x "${ADB_BIN}" ] || runtime_die "adb is missing or not executable: ${ADB_BIN}"
-[ -x "${QEMU_DISPATCHER}" ] || runtime_die "AEMU child dispatcher is missing or not executable: ${QEMU_DISPATCHER}"
-[ -x "${UPSTREAM_QEMU_ENGINE}" ] || runtime_die "Upstream Google x86_64 AEMU child is missing or not executable: ${UPSTREAM_QEMU_ENGINE}"
 validate_native_aemu_bundle "${NATIVE_AEMU_ROOT}"
 case ${DOCKER_ENGINE_ARCHITECTURE} in
   arm64|aarch64)
-    validate_native_aemu_direct_execution "${NATIVE_AEMU_ROOT}"
+    validate_native_aemu_direct_execution "${NATIVE_AEMU_ROOT}" "${NATIVE_AEMU_INTERPRETER}"
     validate_native_aemu_vulkan "${NATIVE_AEMU_ROOT}"
     ;;
 esac
@@ -76,9 +76,9 @@ printf '%s\n' \
   "runtime.uid=$(id -u)" \
   "android.release=17" \
   "android.api=37.0" \
-  "android.image=google_apis_playstore_ps16k/x86_64/r06" \
-  "android.release-policy=base-stable-qpr1-beta-excluded" \
-  "emulator.version=36.6.11" \
+  "android.image=google_apis_playstore_ps16k/arm64-v8a/r06" \
+  "android.release-policy=base-final-stable-qpr1-beta-excluded" \
+  "sdk.emulator-package.version=36.6.11" \
   "kvm.device=${KVM_DEVICE}" \
   "kvm.usable=$(if kvm_is_usable "${KVM_DEVICE}"; then printf yes; else printf no; fi)" \
   "accel.requested=${EMULATOR_ACCEL}" \

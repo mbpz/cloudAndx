@@ -1,4 +1,5 @@
 .env
 .runtime/
+.omx/
 __pycache__/
 *.pyc

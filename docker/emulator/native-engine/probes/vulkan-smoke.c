@@ -10,6 +10,11 @@ static int fail(const char* operation, VkResult result) {
     return 1;
 }
 
+static void stage(const char* operation) {
+    fprintf(stderr, "vulkan-smoke: stage=%s\n", operation);
+    fflush(stderr);
+}
+
 int main(void) {
     const VkApplicationInfo application_info = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -24,12 +29,15 @@ int main(void) {
         .pApplicationInfo = &application_info,
     };
     VkInstance instance = VK_NULL_HANDLE;
+    stage("instance-create-start");
     VkResult result = vkCreateInstance(&instance_info, NULL, &instance);
     if (result != VK_SUCCESS) {
         return fail("vkCreateInstance", result);
     }
+    stage("instance-create-pass");
 
     uint32_t physical_device_count = 0;
+    stage("physical-device-enumeration-start");
     result = vkEnumeratePhysicalDevices(instance, &physical_device_count, NULL);
     if (result != VK_SUCCESS || physical_device_count == 0) {
         vkDestroyInstance(instance, NULL);
@@ -49,6 +57,7 @@ int main(void) {
         vkDestroyInstance(instance, NULL);
         return fail("vkEnumeratePhysicalDevices(list)", result);
     }
+    stage("physical-device-enumeration-pass");
 
     int passed = 0;
     for (uint32_t device_index = 0; device_index < physical_device_count && !passed;
@@ -58,6 +67,8 @@ int main(void) {
         if (strstr(properties.deviceName, "SwiftShader") == NULL) {
             continue;
         }
+        fprintf(stderr, "vulkan-smoke: device=%s\n", properties.deviceName);
+        fflush(stderr);
 
         uint32_t queue_family_count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(
@@ -100,11 +111,13 @@ int main(void) {
             .pQueueCreateInfos = &queue_info,
         };
         VkDevice device = VK_NULL_HANDLE;
+        stage("device-create-start");
         result = vkCreateDevice(
             physical_devices[device_index], &device_info, NULL, &device);
         if (result != VK_SUCCESS) {
             continue;
         }
+        stage("device-create-pass");
 
         VkQueue queue = VK_NULL_HANDLE;
         vkGetDeviceQueue(device, queue_family_index, 0, &queue);
@@ -113,11 +126,13 @@ int main(void) {
             .queueFamilyIndex = queue_family_index,
         };
         VkCommandPool command_pool = VK_NULL_HANDLE;
+        stage("command-pool-create-start");
         result = vkCreateCommandPool(device, &pool_info, NULL, &command_pool);
         if (result != VK_SUCCESS) {
             vkDestroyDevice(device, NULL);
             continue;
         }
+        stage("command-pool-create-pass");
 
         const VkCommandBufferAllocateInfo allocate_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -126,6 +141,7 @@ int main(void) {
             .commandBufferCount = 1,
         };
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        stage("command-buffer-record-start");
         result = vkAllocateCommandBuffers(device, &allocate_info, &command_buffer);
         if (result == VK_SUCCESS) {
             const VkCommandBufferBeginInfo begin_info = {
@@ -137,13 +153,20 @@ int main(void) {
         if (result == VK_SUCCESS) {
             result = vkEndCommandBuffer(command_buffer);
         }
+        if (result == VK_SUCCESS) {
+            stage("command-buffer-record-pass");
+        }
 
         VkFence fence = VK_NULL_HANDLE;
         if (result == VK_SUCCESS) {
             const VkFenceCreateInfo fence_info = {
                 .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             };
+            stage("fence-create-start");
             result = vkCreateFence(device, &fence_info, NULL, &fence);
+            if (result == VK_SUCCESS) {
+                stage("fence-create-pass");
+            }
         }
         if (result == VK_SUCCESS) {
             const VkSubmitInfo submit_info = {
@@ -151,10 +174,18 @@ int main(void) {
                 .commandBufferCount = 1,
                 .pCommandBuffers = &command_buffer,
             };
+            stage("queue-submit-start");
             result = vkQueueSubmit(queue, 1, &submit_info, fence);
+            if (result == VK_SUCCESS) {
+                stage("queue-submit-pass");
+            }
         }
         if (result == VK_SUCCESS) {
+            stage("fence-wait-start");
             result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_C(30000000000));
+            if (result == VK_SUCCESS) {
+                stage("fence-wait-pass");
+            }
         }
         if (result == VK_SUCCESS) {
             printf("vulkan-smoke: device=%s api=%u.%u.%u queue-family=%u PASS\n",

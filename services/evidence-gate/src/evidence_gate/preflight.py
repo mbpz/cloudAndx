@@ -9,9 +9,12 @@ from typing import Any, Callable
 
 from .google_repo import (
     ANDROID_API_LEVEL,
+    ANDROID_RELEASE_STATUS,
     ANDROID_VERSION,
     GOOGLE_PLAY_ABI,
     GOOGLE_PLAY_ARCHIVE_URL,
+    GOOGLE_PLAY_CHANNEL,
+    GOOGLE_PLAY_CHANNEL_ID,
     GOOGLE_PLAY_CHECKSUM,
     GOOGLE_PLAY_PACKAGE_PATH,
     GOOGLE_PLAY_REVISION,
@@ -68,6 +71,7 @@ class PreflightSettings:
     google_play_package_path: str
     google_play_abi: str
     expected_channel: str
+    expected_channel_id: str
     expected_revision: str | None
     expected_url: str | None
     expected_checksum: str | None
@@ -103,7 +107,12 @@ class PreflightSettings:
             google_play_tag=os.environ.get("GOOGLE_PLAY_TAG", GOOGLE_PLAY_TAG),
             google_play_package_path=os.environ.get("GOOGLE_PLAY_PACKAGE_PATH", GOOGLE_PLAY_PACKAGE_PATH),
             google_play_abi=os.environ.get("GOOGLE_PLAY_ABI", GOOGLE_PLAY_ABI),
-            expected_channel=os.environ.get("GOOGLE_PLAY_EXPECTED_CHANNEL", "stable"),
+            expected_channel=os.environ.get(
+                "GOOGLE_PLAY_EXPECTED_CHANNEL", GOOGLE_PLAY_CHANNEL
+            ),
+            expected_channel_id=os.environ.get(
+                "GOOGLE_PLAY_EXPECTED_CHANNEL_ID", GOOGLE_PLAY_CHANNEL_ID
+            ),
             expected_revision=os.environ.get("GOOGLE_PLAY_EXPECTED_REVISION", GOOGLE_PLAY_REVISION),
             expected_url=os.environ.get("GOOGLE_PLAY_EXPECTED_URL", GOOGLE_PLAY_ARCHIVE_URL),
             expected_checksum=os.environ.get("GOOGLE_PLAY_EXPECTED_CHECKSUM", GOOGLE_PLAY_CHECKSUM),
@@ -164,10 +173,7 @@ def inspect_kvm(path: Path) -> dict[str, Any]:
 
 
 def native_kvm_compatible(host_architecture: str, guest_abi: str) -> bool:
-    return (host_architecture, guest_abi) in {
-        ("x86_64", "x86_64"),
-        ("arm64", "arm64-v8a"),
-    }
+    return (host_architecture, guest_abi) == ("arm64", "arm64-v8a")
 
 
 def evaluate_runtime_compatibility(
@@ -178,11 +184,11 @@ def evaluate_runtime_compatibility(
     hybrid_compatible = (
         implementation == HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION
         and host_architecture == "arm64"
-        and guest_abi == "x86_64"
+        and guest_abi == "arm64-v8a"
     )
     if implementation == NATIVE_RUNTIME_IMPLEMENTATION:
         execution_mode = "native-virtualization"
-        runtime_compatible = native_compatible
+        runtime_compatible = native_compatible and host_architecture != "x86_64"
     elif implementation == HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION:
         execution_mode = "hybrid-software-emulation"
         runtime_compatible = hybrid_compatible
@@ -199,7 +205,9 @@ def evaluate_runtime_compatibility(
         "hybrid_software_emulation_compatible": hybrid_compatible,
         "runtime_compatible": runtime_compatible,
         "kvm_readiness_eligible": bool(
-            implementation == NATIVE_RUNTIME_IMPLEMENTATION and native_compatible
+            implementation == NATIVE_RUNTIME_IMPLEMENTATION
+            and native_compatible
+            and host_architecture != "x86_64"
         ),
     }
 
@@ -242,14 +250,20 @@ def run_preflight(
         )
     elif not runtime["runtime_compatible"]:
         if settings.runtime_implementation == NATIVE_RUNTIME_IMPLEMENTATION:
-            blockers.append(
-                f"host architecture {architecture['normalized']} cannot run the selected "
-                f"{settings.google_play_abi} Google Android Emulator natively"
-            )
+            if architecture["normalized"] == "x86_64":
+                blockers.append(
+                    "x86_64 host runtime is deferred until it is built and verified on "
+                    "x86_64 hardware"
+                )
+            else:
+                blockers.append(
+                    f"host architecture {architecture['normalized']} cannot run the selected "
+                    f"{settings.google_play_abi} Google Android Emulator natively"
+                )
         else:
             blockers.append(
                 f"runtime implementation {settings.runtime_implementation} requires an arm64 "
-                "host and the selected x86_64 Google Play guest"
+                "host and the selected arm64-v8a Google Play guest"
             )
 
     schema_reports = [
@@ -297,6 +311,7 @@ def run_preflight(
                 tag=settings.google_play_tag,
                 abi=settings.google_play_abi,
                 channel=settings.expected_channel,
+                channel_id=settings.expected_channel_id,
                 revision=settings.expected_revision,
                 archive_url=settings.expected_url,
                 checksum=settings.expected_checksum,
@@ -374,11 +389,13 @@ def run_preflight(
             "allow_software_emulation_only": settings.allow_software_emulation_only,
             "runtime": runtime,
             "android_version": settings.android_version,
+            "android_release_status": ANDROID_RELEASE_STATUS,
             "api_level": settings.api_level,
             "google_play_tag": settings.google_play_tag,
             "google_play_package_path": settings.google_play_package_path,
             "google_play_abi": settings.google_play_abi,
             "expected_channel": settings.expected_channel,
+            "expected_channel_id": settings.expected_channel_id,
         },
         "architecture": architecture,
         "runtime": runtime,

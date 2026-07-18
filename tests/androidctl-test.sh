@@ -30,9 +30,12 @@ exit 0
 EOF
 chmod 0755 "${tmp}/bin/docker"
 
-ANDROID_RUNTIME_IMPLEMENTATION=native \
-  sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" x86_64 >"${tmp}/runtime-x86.out"
-grep -q 'supported' "${tmp}/runtime-x86.out"
+if ANDROID_RUNTIME_IMPLEMENTATION=native \
+  sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" x86_64 >"${tmp}/runtime-x86.out" 2>&1; then
+  printf '%s\n' 'FAIL: Compose runtime architecture gate accepted the deferred x86_64 host path.' >&2
+  exit 1
+fi
+grep -q 'deferred' "${tmp}/runtime-x86.out"
 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \
   sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" arm64 >"${tmp}/runtime-arm.out"
 grep -q 'engine=native-aemu-arm64' "${tmp}/runtime-arm.out"
@@ -63,9 +66,19 @@ env FAKE_DOCKER_ARCH=arm64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
 grep -q 'required.arm64-child-platform=linux/arm64' "${tmp}/standalone-preflight-arm.out"
 grep -q 'required.host-mutations=none' "${tmp}/standalone-preflight-arm.out"
 
-env FAKE_DOCKER_ARCH=x86_64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
+if env FAKE_DOCKER_ARCH=x86_64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
   PATH="${tmp}/bin:${PATH}" sh "${ROOT}/docker/emulator/preflight.sh" \
-  >"${tmp}/standalone-preflight-x86.out" 2>&1
+  >"${tmp}/standalone-preflight-x86.out" 2>&1; then
+  printf '%s\n' 'FAIL: standalone preflight accepted the deferred x86_64 host path.' >&2
+  exit 1
+fi
+grep -q 'deferred' "${tmp}/standalone-preflight-x86.out"
+
+grep -q 'api=37' "${ROOT}/androidctl"
+if grep -Fq 'api>=37' "${ROOT}/androidctl"; then
+  printf '%s\n' 'FAIL: verify-runtime still weakens the exact API 37 health contract.' >&2
+  exit 1
+fi
 
 : >"${tmp}/docker.log"
 run_ctl arm64 up >"${tmp}/arm.out" 2>&1
@@ -135,13 +148,18 @@ if grep -q -- '--device /dev/kvm' "${tmp}/docker.log"; then
   exit 1
 fi
 
-: >"${tmp}/docker.log"
-run_ctl amd64 up >"${tmp}/amd64.out" 2>&1
-grep -q 'compose .* up -d --build' "${tmp}/docker.log"
-
-: >"${tmp}/docker.log"
-run_ctl x86_64 up >"${tmp}/x86-64.out" 2>&1
-grep -q 'compose .* up -d --build' "${tmp}/docker.log"
+for deferred_arch in amd64 x86_64; do
+  : >"${tmp}/docker.log"
+  if run_ctl "${deferred_arch}" up >"${tmp}/${deferred_arch}.out" 2>&1; then
+    printf 'FAIL: deferred %s Docker Engine path unexpectedly started.\n' "${deferred_arch}" >&2
+    exit 1
+  fi
+  grep -q 'deferred' "${tmp}/${deferred_arch}.out"
+  if grep -q 'compose .* up' "${tmp}/docker.log"; then
+    printf 'FAIL: deferred %s guard ran after Compose startup.\n' "${deferred_arch}" >&2
+    exit 1
+  fi
+done
 
 : >"${tmp}/docker.log"
 if run_ctl riscv64 up >"${tmp}/unknown.out" 2>&1; then

@@ -38,6 +38,8 @@ PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
 PHONE_RE = re.compile(r"^[+0-9*#]{1,32}$")
 SESSION_HEALTH_RE = re.compile(r"^/sessions/(ses_[a-f0-9]{32})/healthz$")
 MIN_ANDROID_API_LEVEL = 37
+EXPECTED_ANDROID_ABI = "arm64-v8a"
+EXPECTED_PAGE_SIZE_BYTES = 16384
 REQUIRED_GOOGLE_PACKAGES = (
     "com.android.vending",
     "com.google.android.gms",
@@ -133,6 +135,24 @@ def _assess_runtime_health(observed: dict[str, Any]) -> tuple[bool, str]:
         if api_level < MIN_ANDROID_API_LEVEL:
             reasons.append(f"API level {api_level} is below required {MIN_ANDROID_API_LEVEL}")
 
+    abi = str(properties.get("abi", ""))
+    if abi != EXPECTED_ANDROID_ABI:
+        reasons.append(
+            f"ro.product.cpu.abi is {abi!r}; expected {EXPECTED_ANDROID_ABI!r}"
+        )
+
+    page_size_text = str(properties.get("page_size_bytes", ""))
+    try:
+        page_size_bytes = int(page_size_text)
+    except ValueError:
+        reasons.append(f"PAGE_SIZE is not an integer: {page_size_text!r}")
+    else:
+        if page_size_bytes != EXPECTED_PAGE_SIZE_BYTES:
+            reasons.append(
+                f"PAGE_SIZE is {page_size_bytes} bytes; "
+                f"expected {EXPECTED_PAGE_SIZE_BYTES}"
+            )
+
     for package in REQUIRED_GOOGLE_PACKAGES:
         if packages.get(package) is True:
             continue
@@ -199,6 +219,7 @@ class Handler(BaseHTTPRequestHandler):
             "fingerprint": ADB_CLIENT.shell("getprop", "ro.build.fingerprint"),
             "product": ADB_CLIENT.shell("getprop", "ro.product.name"),
             "abi": ADB_CLIENT.shell("getprop", "ro.product.cpu.abi"),
+            "page_size_bytes": ADB_CLIENT.shell("getconf", "PAGE_SIZE"),
         }
         return {"serial": ADB_SERIAL, "state": state, "properties": props}
 

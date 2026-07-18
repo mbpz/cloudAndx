@@ -5,16 +5,21 @@ OrbStack，不会改 macOS 的网络、DNS、路由、防火墙、虚拟化设�
 运行时只创建当前项目的 Docker 镜像、容器、网络和命名卷；所有宿主端口仅绑定
 `127.0.0.1`。
 
-系统镜像固定为 Google 官方发布的 Android 17 / API 37.0 Google Play PS16K
-x86_64 r06，包含 Google Play Store 和 Google Play services。Emulator 固定为
-36.6.11，Platform Tools 固定为 37.0.0；下载文件均校验 Google 仓库公布的 SHA-1。
+系统镜像固定为 Google 官方 Android 17 base final/stable release 的 API 37.0 Google
+Play PS16K arm64-v8a r06，包含 Google Play Store 和 Google Play services。Google 已于
+[2026-06-16 正式发布 Android 17](https://developer.android.com/blog/posts/android-17-is-here)。
+Android 17 QPR1 仍为 Beta，因此不在当前 pin 中。产品发布状态与 SDK repository
+`channel-0`（文本值 `stable`）是两项独立证据，不能由其中一项推断另一项。Google
+Linux Emulator SDK 资源包固定为 36.6.11，实际执行的 native AEMU 源码 revision 固定为
+37.1.7，Platform Tools 固定为 37.0.0；下载文件均校验 Google 仓库公布的 SHA-1。
 
-支持 **Linux x86_64 或 ARM64 Docker Engine**。在 x86_64 上保留 Google 下载包中的
-上游 AEMU 子进程，并可使用宿主已经具备的 `/dev/kvm`；在 ARM64（包括 Apple
-Silicon 上的 OrbStack Docker Engine）上，Google 的 x86_64 launcher 只负责参数和
-AVD 兼容层，实际 guest 执行由容器内从 Android Emulator 官方源码固定版本构建的
-原生 AArch64 AEMU 子进程完成。Android system/vendor 镜像不修改，仍是 Google 官方
-Google Play x86_64 r06。ARM64 路径固定使用软件翻译，不映射 KVM。
+当前默认且已进入本机验收范围的是 **ARM64 Docker Engine**。在 ARM64（包括 Apple
+Silicon 上的 OrbStack Docker Engine）上，amd64 容器用户态只提供固定的 SDK、ADB
+和代理工具；entrypoint 绕过会拒绝 ARM64 AVD 的 x86_64 launcher，直接执行从 Android
+Emulator 官方源码固定版本构建的 native AArch64 runner。guest 同样是 Google 官方
+arm64-v8a r06，system/vendor 镜像不修改。ARM64 路径固定使用软件执行，不映射 KVM。
+x86_64 host 构建和运行验证当前 deferred；控制面在该架构上失败关闭，不把尚未构建、
+尚未验证的 fallback 声明为可运行。
 
 ## 启动
 
@@ -29,8 +34,8 @@ ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl up
 
 也可以复制 [.env.example](.env.example) 为工作区内的 `.env`，将
 `ACCEPT_ANDROID_SDK_LICENSES` 改为 `yes`。首次构建会在 Docker 内编译固定源码的
-ARM64 AEMU，并下载约 2.31 GB 的完整系统镜像。原生 x86_64 Linux 且已经存在可用
-`/dev/kvm` 时，可改用 `./androidctl up-kvm`；该命令只映射现有设备。
+ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与 `up-kvm` 运行验证
+当前 deferred，待切换到 x86_64 电脑后执行；本机不会尝试编译或运行 x86 AEMU。
 
 启动后：
 
@@ -59,21 +64,23 @@ bearer token；运行 `./androidctl token` 后只把它粘贴到控制台当前�
 
 ## ARM64 / OrbStack 执行边界
 
-ARM64 路径不是把整个 Google Emulator 再套一层 qemu-user。镜像会保留 Google
-launcher 和原始 x86_64 child，在固定 child 路径安装 dispatcher：x86_64 Docker
-Engine 执行原始 child；ARM64 Docker Engine 执行带独立 AArch64 loader/共享库闭包的
-原生 child。运行时 preflight 校验 bundle 的 SHA-256 清单，健康检查核对实际
+ARM64 路径不是把整个 Google Emulator 再套一层 qemu-user，也不让 x86_64 launcher
+解析 ARM64 AVD。amd64 容器 entrypoint 直接执行带独立 AArch64 loader/共享库闭包的
+native runner，由它启动原生 `qemu-system-aarch64-headless`。运行时 preflight 校验
+bundle 的 SHA-256 清单，健康检查核对实际
 `/proc/*/exe`，再要求 ADB、`sys.boot_completed`、API 37、Play Store 与 GMS 全部通过。
-`androidctl` 会根据 Docker Engine 架构自动选择 `native` 或
-`hybrid-aemu-arm64` 声明，未知组合一律失败关闭。
+由于 Linux AArch64 AEMU 的 `gic-version=host` 和 `-cpu host` 默认都依赖 KVM，
+软件执行路径会在所有 Android/图形参数之后强制追加
+`-qemu -machine gic-version=3 -cpu cortex-a57`，并拒绝用户注入另一个 `-qemu`。
+`androidctl` 只在 ARM64 Docker Engine 上选择 `hybrid-aemu-arm64`；x86_64、缺失和
+未知架构组合一律失败关闭。
 
 Compose 只创建当前项目的 IPv6 Docker bridge，供 AEMU 虚拟 modem 使用；不会修改
 OrbStack 配置，也不会改 macOS 的 DNS、路由、防火墙或其他网络设置。ARM64 上
 `up-kvm` 和 `preflight-kvm` 仍会在探测或映射 `/dev/kvm` 之前失败关闭。
 
-在受支持的主机上，`up-kvm` 只用临时 Docker 容器读取 `/dev/kvm` 的组 ID，并把
-设备映射给两个非 root 容器；设备缺失或不可用时直接失败，不修改宿主权限或
-虚拟化配置。
+`up-kvm` 与 `preflight-kvm` 目前是保留命令，均在读取或映射 `/dev/kvm` 前失败关闭；
+只有未来在 x86_64 硬件上完成独立构建和验证后，才能重新声明该路径。
 
 ## 实现内容
 
@@ -86,8 +93,8 @@ OrbStack 配置，也不会改 macOS 的 DNS、路由、防火墙或其他网络
 - `services/device-bridge/`：无任意 shell 的 allowlist API，覆盖截图、APK、应用列表、
   logcat、触控、按键、GPS、短信、来电、网络、电量、旋转和重启。
 - `docker/dashboard/`：设备画面、交互控制、会话、平台事实和能力边界。
-- `compose.yaml` / `compose.kvm.yaml`：x86_64 上游/KVM 路径、ARM64 原生 AEMU
-  软件翻译路径，以及仅限项目范围的 IPv6 bridge。
+- `compose.yaml` / `compose.kvm.yaml`：默认 ARM64 guest/AEMU 软件执行路径、失败关闭且
+  延后验证的 x86_64 路径，以及仅限项目范围的 IPv6 bridge。
 
 ## “Google 原生体验”的准确含义
 

@@ -11,18 +11,15 @@ fi
 
 case "${architecture}" in
   x86_64|amd64)
-    if [ "${implementation}" != native ]; then
-      printf 'ERROR: runtime architecture %s requires ANDROID_RUNTIME_IMPLEMENTATION=native.\n' "${architecture}" >&2
-      exit 78
-    fi
-    printf 'runtime-architecture=%s supported engine=upstream-x86_64\n' "${architecture}"
+    printf 'ERROR: runtime architecture %s is deferred until the x86_64 path is built and verified on x86_64 hardware.\n' "${architecture}" >&2
+    exit 78
     ;;
   arm64|aarch64)
     if [ "${implementation}" != hybrid-aemu-arm64 ]; then
       printf 'ERROR: runtime architecture %s requires ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64.\n' "${architecture}" >&2
       exit 78
     fi
-    printf 'runtime-architecture=%s supported engine=native-aemu-arm64 guest=x86_64\n' "${architecture}"
+    printf 'runtime-architecture=%s supported engine=native-aemu-arm64 guest=arm64-v8a\n' "${architecture}"
     ;;
   *)
     printf 'ERROR: unknown runtime architecture %s; refusing to start.\n' "${architecture}" >&2

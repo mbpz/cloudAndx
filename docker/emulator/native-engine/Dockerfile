@@ -51,7 +51,7 @@ COPY scripts/ ./scripts/
 COPY bin/ ./bin/
 COPY probes/ ./probes/
 
-RUN chmod 0755 ./scripts/*.sh ./bin/run-qemu-system-x86_64-headless ./bin/netsimd \
+RUN chmod 0755 ./scripts/*.sh ./bin/run-qemu-system-aarch64-headless ./bin/netsimd \
     && ./scripts/fetch-sources.sh \
     && ./scripts/apply-patches.sh
 
@@ -72,9 +72,13 @@ FROM --platform=${BUNDLE_PLATFORM} ${BUILD_BASE} AS vulkan-smoke
 COPY --from=build-tools /out/bundle/opt/cloudandx/native-aemu /opt/cloudandx/native-aemu
 
 RUN probe_output=$(env -i \
-      LD_LIBRARY_PATH=/opt/cloudandx/native-aemu/lib64 \
+      TMPDIR=/tmp \
       VK_DRIVER_FILES=/opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json \
       VK_LOADER_DEBUG=error,warn \
+      /usr/bin/timeout --signal=TERM --kill-after=5s 120s \
+      /opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1 \
+      --library-path \
+      /opt/cloudandx/native-aemu/lib64/vulkan:/opt/cloudandx/native-aemu/lib64 \
       /opt/cloudandx/native-aemu/vulkan-smoke) \
     && printf '%s\n' "${probe_output}" \
     && printf '%s\n' "${probe_output}" | grep -Fq ' PASS'

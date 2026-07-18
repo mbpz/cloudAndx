@@ -1,6 +1,6 @@
 # Native Linux ARM64 AEMU engine bundle
 
-This build context cross-compiles the Google AEMU 37.1.7 headless x86_64 guest
+This build context cross-compiles the Google AEMU 37.1.7 headless AArch64 guest
 engine for a Linux ARM64 runtime. It produces an engine bundle; it does not
 contain an Android system image or start an emulator by itself.
 
@@ -17,12 +17,13 @@ The ARM64 X11 link libraries are a blob-verified minimal closure from Google's
 locked Emulator Qt prebuilt rather than mutable distribution packages.
 The three GLES SwiftShader libraries are individually blob-verified AArch64
 artifacts from the same locked common revision. VirtualScene data and the
-Android 36 x86_64 guest skin are verified as complete Git subtrees; no x86_64
-Vulkan loader or ICD is included in the ARM bundle.
+legacy-named Android 36 skin resource tree are verified as complete Git
+subtrees. A separately locked AArch64 Khronos Vulkan loader and SwiftShader ICD
+are packaged and probed; no x86_64 Vulkan loader or ICD is included in the ARM bundle.
 The same common revision supplies Google `netsimd` 0.3.112 as one independently
 blob-verified x86_64 helper. It is classified outside the AArch64 `DT_NEEDED`
-closure and is retained only because the amd64 parent runtime already executes
-the official Google x86_64 launcher.
+closure and is retained because the amd64 parent runtime executes Google's
+x86_64 SDK tools while the AArch64 engine runs natively.
 
 Build the final stage through the Docker-only controller. It derives the
 immutable build arguments from the current source lock and ordered patch list:
@@ -34,8 +35,8 @@ immutable build arguments from the current source lock and ordered patch list:
 The final image is a scratch carrier whose exact bundle root is
 `/opt/cloudandx/native-aemu/`. Its stable integration paths are:
 
-- Engine: `/opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-x86_64-headless`
-- Runner: `/opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless`
+- Engine: `/opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-aarch64-headless`
+- Runner: `/opt/cloudandx/native-aemu/bin/run-qemu-system-aarch64-headless`
 - Native helpers: `/opt/cloudandx/native-aemu/{crashpad_handler,qemu-img,nimble_bridge}`
 - Netsim launcher: `/opt/cloudandx/native-aemu/netsimd`
 - Mixed-architecture netsim binary: `/opt/cloudandx/native-aemu/libexec/linux-x86_64/netsimd`
@@ -43,6 +44,8 @@ The final image is a scratch carrier whose exact bundle root is
 - Renderer X11/XCB dlopen support: `/opt/cloudandx/native-aemu/lib64/libX11-xcb.so.1`
 - ARM ELF closure: `/opt/cloudandx/native-aemu/lib64/`
 - SwiftShader GLES: `/opt/cloudandx/native-aemu/lib64/gles_swiftshader/`
+- Vulkan loader and SwiftShader ICD: `/opt/cloudandx/native-aemu/lib64/vulkan/`
+- Vulkan execution probe: `/opt/cloudandx/native-aemu/vulkan-smoke`
 - Locked data and firmware: `/opt/cloudandx/native-aemu/lib/` and `lib/pc-bios/`
 - Scene and guest-skin data: `/opt/cloudandx/native-aemu/resources/`
 - Identity: `/opt/cloudandx/native-aemu/identity.properties`
@@ -50,9 +53,12 @@ The final image is a scratch carrier whose exact bundle root is
 - Checksums: `/opt/cloudandx/native-aemu/SHA256SUMS`
 
 The runner removes inherited x86_64 dynamic-loader, GLES, and Vulkan variables,
-sets `ANDROID_EMULATOR_LAUNCHER_DIR` to the bundle root, installs a controlled
-`lib64` plus `gles_swiftshader` search path, fixes `QEMU_AUDIO_DRV=none`, and
-directly executes the engine. The explicit audio driver avoids probing the
+sets `ANDROID_EMULATOR_LAUNCHER_DIR` to the bundle root, selects the packaged
+AArch64 Vulkan loader and SwiftShader ICD, installs a controlled `lib64` plus
+`gles_swiftshader` search path, fixes `QEMU_AUDIO_DRV=none`, and directly executes
+the engine. Packaging and the ARM64 Docker stage execute `vulkan-smoke` through
+the bundle loader with an explicit library path and 120-second timeout; only a
+reported `PASS` is accepted. The explicit audio driver avoids probing the
 container for the unavailable OSS `/dev/dsp`; guest PCM output and microphone
 injection remain available through AEMU's gRPC audio streams.
 The parent runtime

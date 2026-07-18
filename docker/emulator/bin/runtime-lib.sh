@@ -40,12 +40,21 @@ validate_avd_name() {
 }
 
 validate_engine_architecture() {
-  case ${1-} in
+  architecture=${1-}
+  implementation=${2:-${ANDROID_RUNTIME_IMPLEMENTATION-}}
+
+  case ${architecture} in
     x86_64|amd64)
-      return 0
+      if [ "${implementation}" = native ]; then
+        return 0
+      fi
+      runtime_die "x86_64 requires ANDROID_RUNTIME_IMPLEMENTATION=native."
       ;;
     arm64|aarch64)
-      runtime_die "Google does not publish a Linux ARM64 Android Emulator; refusing cross-architecture startup."
+      if [ "${implementation}" = hybrid-aemu-arm64 ]; then
+        return 0
+      fi
+      runtime_die "ARM64 requires the verified hybrid-aemu-arm64 implementation."
       ;;
     '')
       runtime_die "DOCKER_ENGINE_ARCHITECTURE is required; start through androidctl."
@@ -54,6 +63,59 @@ validate_engine_architecture() {
       runtime_die "Unsupported Docker Engine architecture '${1}'."
       ;;
   esac
+}
+
+selected_engine_kind() {
+  architecture=${1-}
+  implementation=${2:-${ANDROID_RUNTIME_IMPLEMENTATION-}}
+
+  validate_engine_architecture "${architecture}" "${implementation}" || return 1
+  case ${architecture} in
+    x86_64|amd64) printf '%s\n' upstream-x86_64 ;;
+    arm64|aarch64) printf '%s\n' native-aemu-arm64 ;;
+  esac
+}
+
+validate_native_aemu_bundle() {
+  bundle_root=${1:-/opt/cloudandx/native-aemu}
+  runner=${bundle_root}/bin/run-qemu-system-x86_64-headless
+  engine=${bundle_root}/bin/qemu-system-x86_64-headless
+  manifest=${bundle_root}/manifest.json
+  checksums=${bundle_root}/SHA256SUMS
+
+  [ -x "${runner}" ] || runtime_die "Native AEMU runner is missing or not executable: ${runner}" || return 1
+  [ -x "${engine}" ] || runtime_die "Native AEMU engine is missing or not executable: ${engine}" || return 1
+  [ -s "${manifest}" ] || runtime_die "Native AEMU provenance manifest is missing: ${manifest}" || return 1
+  [ -s "${checksums}" ] || runtime_die "Native AEMU checksum manifest is missing: ${checksums}" || return 1
+  (cd "${bundle_root}" && sha256sum -c SHA256SUMS >/dev/null 2>&1) \
+    || runtime_die "Native AEMU bundle checksum verification failed." \
+    || return 1
+}
+
+expected_engine_executable() {
+  architecture=${1-}
+  case ${architecture} in
+    x86_64|amd64)
+      printf '%s\n' "${UPSTREAM_QEMU_ENGINE:-/opt/android-sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64}"
+      ;;
+    arm64|aarch64)
+      printf '%s\n' "${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}/bin/qemu-system-x86_64-headless"
+      ;;
+    *)
+      runtime_die "Cannot select an engine executable for architecture '${architecture}'."
+      ;;
+  esac
+}
+
+engine_process_matches_expected() {
+  expected=$1
+  for executable_link in /proc/[0-9]*/exe; do
+    executable=$(readlink "${executable_link}" 2>/dev/null || true)
+    if [ "${executable}" = "${expected}" ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # Emulator lock files contain PIDs from the previous container PID namespace.
@@ -105,6 +167,35 @@ resolve_acceleration() {
       ;;
     *)
       runtime_die "EMULATOR_ACCEL must be one of auto, kvm, or off; got '${requested}'."
+      ;;
+  esac
+}
+
+resolve_runtime_acceleration() {
+  architecture=$1
+  requested=${2:-auto}
+  kvm_device=${3:-/dev/kvm}
+
+  case ${architecture} in
+    arm64|aarch64)
+      case ${requested} in
+        auto|off) printf '%s\n' off ;;
+        kvm)
+          runtime_die "KVM cannot accelerate the official x86_64 guest on an ARM64 Docker Engine."
+          return 1
+          ;;
+        *)
+          runtime_die "EMULATOR_ACCEL must be one of auto, kvm, or off; got '${requested}'."
+          return 1
+          ;;
+      esac
+      ;;
+    x86_64|amd64)
+      resolve_acceleration "${requested}" "${kvm_device}"
+      ;;
+    *)
+      runtime_die "Cannot resolve acceleration for unsupported architecture '${architecture}'."
+      return 1
       ;;
   esac
 }

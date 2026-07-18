@@ -55,11 +55,18 @@ assert_eq on "$(resolve_acceleration kvm /dev/null)" 'explicit kvm selects accel
 assert_eq off "$(resolve_acceleration off /dev/null)" 'off remains off'
 assert_fails 'forced kvm rejects missing device' resolve_acceleration kvm /path/that/does/not/exist
 assert_fails 'invalid acceleration rejected' resolve_acceleration turbo /dev/null
-validate_engine_architecture x86_64
+assert_eq off "$(resolve_runtime_acceleration arm64 auto /dev/null)" 'ARM64 auto always selects software translation'
+assert_eq off "$(resolve_runtime_acceleration aarch64 off /dev/null)" 'ARM64 explicit software mode is accepted'
+assert_fails 'ARM64 rejects KVM for the x86_64 guest' resolve_runtime_acceleration arm64 kvm /dev/null
+validate_engine_architecture x86_64 native
 pass
-validate_engine_architecture amd64
+validate_engine_architecture amd64 native
 pass
-assert_fails 'ARM64 Docker Engine rejected by runtime' validate_engine_architecture arm64
+validate_engine_architecture arm64 hybrid-aemu-arm64
+pass
+assert_eq native-aemu-arm64 "$(selected_engine_kind aarch64 hybrid-aemu-arm64)" 'ARM64 selects native AEMU child'
+assert_eq upstream-x86_64 "$(selected_engine_kind amd64 native)" 'x86_64 selects upstream AEMU child'
+assert_fails 'ARM64 rejects an undeclared hybrid runtime' validate_engine_architecture arm64 native
 assert_fails 'missing Docker Engine architecture rejected by runtime' validate_engine_architecture ''
 assert_fails 'unsafe AVD name rejected' validate_avd_name '../escape'
 validate_avd_name Pixel_9_Android_17_Play
@@ -70,6 +77,7 @@ trap 'rm -rf "${tmp}"' EXIT INT TERM
 sdk=${tmp}/sdk
 data=${tmp}/data
 template=${tmp}/template
+native_aemu=${tmp}/native-aemu
 
 stale_avd=${tmp}/stale.avd
 mkdir -p "${stale_avd}"
@@ -86,8 +94,10 @@ pass
 
 mkdir -p \
   "${sdk}/emulator" \
+  "${sdk}/emulator/qemu/linux-x86_64" \
   "${sdk}/platform-tools" \
   "${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64" \
+  "${native_aemu}/bin" \
   "${data}" \
   "${template}"
 
@@ -105,6 +115,32 @@ printf '%s\n' \
   '  start-server|kill-server) ;;' \
   'esac' >"${sdk}/platform-tools/adb"
 chmod 0755 "${sdk}/emulator/emulator" "${sdk}/platform-tools/adb"
+printf '%s\n' '#!/bin/sh' 'printf "upstream:%s\n" "$*"' \
+  >"${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64"
+cp "${ROOT}/bin/qemu-system-x86_64-headless-dispatcher.sh" \
+  "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless"
+printf '%s\n' '#!/bin/sh' 'printf "native:%s\n" "$*"' \
+  >"${native_aemu}/bin/run-qemu-system-x86_64-headless"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"${native_aemu}/bin/qemu-system-x86_64-headless"
+printf '%s\n' '{"revision":"test","elf_machine":"AArch64"}' >"${native_aemu}/manifest.json"
+chmod 0755 \
+  "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless" \
+  "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless.upstream-x86_64" \
+  "${native_aemu}/bin/run-qemu-system-x86_64-headless" \
+  "${native_aemu}/bin/qemu-system-x86_64-headless"
+(cd "${native_aemu}" && sha256sum \
+  bin/qemu-system-x86_64-headless \
+  bin/run-qemu-system-x86_64-headless \
+  manifest.json >SHA256SUMS)
+validate_native_aemu_bundle "${native_aemu}"
+pass
+dispatcher=${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless
+assert_contains "$(DOCKER_ENGINE_ARCHITECTURE=x86_64 UPSTREAM_QEMU_ENGINE=${dispatcher}.upstream-x86_64 "${dispatcher}" one two 2>/dev/null)" \
+  'upstream:one two' 'dispatcher preserves args for the upstream x86_64 child'
+assert_contains "$(DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} "${dispatcher}" three four 2>/dev/null)" \
+  'native:three four' 'dispatcher preserves args for the native ARM64 child'
+assert_fails 'dispatcher fails closed for undeclared ARM64 hybrid mode' \
+  env DOCKER_ENGINE_ARCHITECTURE=arm64 NATIVE_AEMU_ROOT="${native_aemu}" "${dispatcher}"
 printf '%s\n' system >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/system.img"
 printf '%s\n' vendor >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/vendor.img"
 cp "${ROOT}/avd/config.ini" "${template}/config.ini"
@@ -117,12 +153,13 @@ printf '%s\n' \
   'if [ -n "${FAKE_SOCAT_PID_DIR-}" ]; then printf "%s\\n" "$$" >"${FAKE_SOCAT_PID_DIR}/$$"; fi' \
   'exec sleep 30' >"${socat_stub}"
 chmod 0755 "${socat_stub}"
-common_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm"
+common_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native NATIVE_AEMU_ROOT=${native_aemu} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm"
 
 preflight_output=$(env ${common_env} EMULATOR_ACCEL=auto "${ROOT}/bin/runtime-preflight.sh" 2>&1)
 assert_contains "${preflight_output}" 'android.release=17' 'preflight reports Android release'
 assert_contains "${preflight_output}" 'android.api=37.0' 'preflight reports API release'
 assert_contains "${preflight_output}" 'accel.effective=off' 'preflight reports software fallback'
+assert_contains "${preflight_output}" 'engine.selected=upstream-x86_64' 'preflight reports the selected child engine'
 assert_contains "${preflight_output}" 'android.release-policy=base-stable-qpr1-beta-excluded' 'preflight reports release policy'
 
 assert_fails 'preflight fails closed for unavailable forced KVM' \
@@ -189,12 +226,18 @@ tcp_probe=${tmp}/fake-tcp-probe
 printf '%s\n' '#!/bin/sh' '[ "${FAKE_GRPC:-1}" = 1 ]' >"${tcp_probe}"
 chmod 0755 "${tcp_probe}"
 
-ADB_BIN=${fake_adb} SOCAT_BIN=${tcp_probe} "${ROOT}/bin/healthcheck.sh"
+expected_process=$(readlink /proc/$$/exe)
+health_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native UPSTREAM_QEMU_ENGINE=${expected_process} ADB_BIN=${fake_adb} SOCAT_BIN=${tcp_probe}"
+env ${health_env} "${ROOT}/bin/healthcheck.sh"
 pass
-assert_fails 'healthcheck requires gRPC proxy' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_GRPC=0 "${ROOT}/bin/healthcheck.sh"
-assert_fails 'healthcheck rejects incomplete boot' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_BOOT=0 "${ROOT}/bin/healthcheck.sh"
-assert_fails 'healthcheck rejects wrong API' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_SDK=36 "${ROOT}/bin/healthcheck.sh"
-assert_fails 'healthcheck requires Play Store' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_PLAY=0 "${ROOT}/bin/healthcheck.sh"
-assert_fails 'healthcheck requires Google Play services' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_GMS=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires the selected child process' \
+  env DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native \
+    UPSTREAM_QEMU_ENGINE="${tmp}/not-running" ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" \
+    "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires gRPC proxy' env ${health_env} FAKE_GRPC=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects incomplete boot' env ${health_env} FAKE_BOOT=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects wrong API' env ${health_env} FAKE_SDK=36 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires Play Store' env ${health_env} FAKE_PLAY=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires Google Play services' env ${health_env} FAKE_GMS=0 "${ROOT}/bin/healthcheck.sh"
 
 printf 'PASS: %s assertions\n' "${passed}"

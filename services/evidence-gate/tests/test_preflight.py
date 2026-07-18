@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from evidence_gate.preflight import PreflightSettings, run_preflight
+from evidence_gate.preflight import (
+    HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+    NATIVE_RUNTIME_IMPLEMENTATION,
+    PreflightSettings,
+    detect_architecture,
+    run_preflight,
+)
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "repository-stable.xml"
@@ -18,6 +26,15 @@ def architecture(supported: bool = True) -> dict[str, object]:
         "normalized": "x86_64" if supported else "mips64",
         "supported": supported,
         "google_play_abi": "x86_64" if supported else None,
+    }
+
+
+def arm_architecture(raw: str = "aarch64") -> dict[str, object]:
+    return {
+        "raw": raw,
+        "normalized": "arm64",
+        "supported": True,
+        "google_play_abi": "arm64-v8a",
     }
 
 
@@ -46,7 +63,13 @@ class PreflightTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def settings(self, urls: tuple[str, ...], allow_software: bool = False) -> PreflightSettings:
+    def settings(
+        self,
+        urls: tuple[str, ...],
+        allow_software: bool = False,
+        runtime_implementation: str = NATIVE_RUNTIME_IMPLEMENTATION,
+        guest_abi: str = "x86_64",
+    ) -> PreflightSettings:
         return PreflightSettings(
             contracts_dir=self.contracts,
             evidence_path=self.root / "evidence" / "preflight.json",
@@ -55,17 +78,56 @@ class PreflightTests(unittest.TestCase):
             api_level=37,
             google_play_tag="google_apis_playstore",
             google_play_package_path="system-images;android-37.0;google_apis_playstore_ps16k;x86_64",
-            google_play_abi="x86_64",
+            google_play_abi=guest_abi,
             expected_channel="stable",
             expected_revision="6",
             expected_url="https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-playstore-ps16k-37.0_r06.zip",
             expected_checksum="sha1:8eaeeceb77452c018c3f6b589913cdc45222a87f",
             fetch_timeout_seconds=1,
             allow_software_emulation_only=allow_software,
+            runtime_implementation=runtime_implementation,
             image_manifest_path=None,
             capability_evidence_path=None,
             kvm_path=Path("/dev/kvm"),
         )
+
+    def test_runtime_implementation_defaults_to_native(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            settings = PreflightSettings.from_env(self.root / "preflight.json")
+
+        self.assertEqual(NATIVE_RUNTIME_IMPLEMENTATION, settings.runtime_implementation)
+
+    def test_arm64_machine_aliases_normalize_to_hybrid_host_architecture(self) -> None:
+        for machine in ("arm64", "aarch64"):
+            with self.subTest(machine=machine):
+                detected = detect_architecture(machine)
+                self.assertTrue(detected["supported"])
+                self.assertEqual("arm64", detected["normalized"])
+
+    def test_hybrid_runtime_implementation_is_allowlisted(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"ANDROID_RUNTIME_IMPLEMENTATION": HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION},
+            clear=True,
+        ):
+            settings = PreflightSettings.from_env(self.root / "preflight.json")
+
+        self.assertEqual(
+            HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+            settings.runtime_implementation,
+        )
+
+    def test_unknown_runtime_implementation_is_rejected(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"ANDROID_RUNTIME_IMPLEMENTATION": "qemu-user"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "ANDROID_RUNTIME_IMPLEMENTATION must be one of: native, hybrid-aemu-arm64",
+            ):
+                PreflightSettings.from_env(self.root / "preflight.json")
 
     @staticmethod
     def fetcher(url: str, timeout: float) -> tuple[str, bytes]:
@@ -122,16 +184,10 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(report["ready"])
 
     def test_arm_host_with_x86_64_guest_is_blocked_even_when_software_is_allowed(self) -> None:
-        arm_architecture = {
-            "raw": "arm64",
-            "normalized": "arm64",
-            "supported": True,
-            "google_play_abi": "arm64-v8a",
-        }
         report = run_preflight(
             self.settings((SOURCE_URL,), allow_software=True),
             fetcher=self.fetcher,
-            architecture=arm_architecture,
+            architecture=arm_architecture(),
             kvm=kvm(True),
         )
         self.assertEqual("BLOCKED", report["state"])
@@ -145,6 +201,108 @@ class PreflightTests(unittest.TestCase):
         )
         self.assertEqual("FAIL", compatibility["status"])
         self.assertFalse(compatibility["details"]["native_virtualization_compatible"])
+
+    def test_declared_hybrid_arm_runtime_is_software_only_and_fails_by_default(self) -> None:
+        report = run_preflight(
+            self.settings(
+                (SOURCE_URL,),
+                runtime_implementation=HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+            ),
+            fetcher=self.fetcher,
+            architecture=arm_architecture(),
+            kvm=kvm(True),
+        )
+
+        self.assertEqual("SOFTWARE_EMULATION_ONLY", report["state"])
+        self.assertFalse(report["ready"])
+        self.assertEqual(
+            HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+            report["policy"]["runtime"]["implementation"],
+        )
+        self.assertEqual("arm64", report["policy"]["runtime"]["host_architecture"])
+        self.assertEqual("x86_64", report["policy"]["runtime"]["guest_abi"])
+        self.assertFalse(report["policy"]["runtime"]["kvm_readiness_eligible"])
+
+    def test_declared_hybrid_arm_runtime_requires_explicit_software_policy(self) -> None:
+        report = run_preflight(
+            self.settings(
+                (SOURCE_URL,),
+                allow_software=True,
+                runtime_implementation=HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+            ),
+            fetcher=self.fetcher,
+            architecture=arm_architecture("arm64"),
+            kvm=kvm(True),
+        )
+
+        self.assertEqual("SOFTWARE_EMULATION_ONLY", report["state"])
+        self.assertTrue(report["ready"])
+        runtime_check = next(
+            check for check in report["checks"] if check["check_id"] == "runtime_implementation"
+        )
+        self.assertEqual("PASS", runtime_check["status"])
+        self.assertTrue(runtime_check["details"]["hybrid_software_emulation_compatible"])
+        kvm_check = next(
+            check for check in report["checks"] if check["check_id"] == "kvm"
+        )
+        native_compatibility_check = next(
+            check
+            for check in report["checks"]
+            if check["check_id"] == "native_kvm_compatibility"
+        )
+        self.assertEqual("SKIP", kvm_check["status"])
+        self.assertEqual("SKIP", native_compatibility_check["status"])
+
+    def test_hybrid_runtime_is_blocked_on_x86_64_host(self) -> None:
+        report = run_preflight(
+            self.settings(
+                (SOURCE_URL,),
+                allow_software=True,
+                runtime_implementation=HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+            ),
+            fetcher=self.fetcher,
+            architecture=architecture(),
+            kvm=kvm(False),
+        )
+
+        self.assertEqual("BLOCKED", report["state"])
+        self.assertFalse(report["ready"])
+        self.assertIn(
+            "runtime implementation hybrid-aemu-arm64 requires an arm64 host and the selected "
+            "x86_64 Google Play guest",
+            report["blockers"],
+        )
+
+    def test_hybrid_runtime_is_blocked_for_non_x86_64_guest(self) -> None:
+        report = run_preflight(
+            self.settings(
+                (),
+                allow_software=True,
+                runtime_implementation=HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+                guest_abi="arm64-v8a",
+            ),
+            architecture=arm_architecture(),
+            kvm=kvm(False),
+        )
+
+        self.assertEqual("BLOCKED", report["state"])
+        self.assertFalse(report["ready"])
+
+    def test_unallowlisted_runtime_is_blocked_when_settings_are_constructed_directly(self) -> None:
+        report = run_preflight(
+            self.settings((SOURCE_URL,), allow_software=True, runtime_implementation="qemu-user"),
+            fetcher=self.fetcher,
+            architecture=arm_architecture(),
+            kvm=kvm(False),
+        )
+
+        self.assertEqual("BLOCKED", report["state"])
+        self.assertFalse(report["ready"])
+        self.assertIn(
+            "unsupported Android runtime implementation 'qemu-user'; expected one of: "
+            "native, hybrid-aemu-arm64",
+            report["blockers"],
+        )
 
 
 if __name__ == "__main__":

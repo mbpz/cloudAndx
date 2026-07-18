@@ -27,6 +27,12 @@ from .validation import validate_instance, validate_schema_file
 
 IMAGE_SCHEMA = "android-image-manifest.schema.json"
 CAPABILITY_SCHEMA = "android-capability-evidence.schema.json"
+NATIVE_RUNTIME_IMPLEMENTATION = "native"
+HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION = "hybrid-aemu-arm64"
+RUNTIME_IMPLEMENTATIONS = (
+    NATIVE_RUNTIME_IMPLEMENTATION,
+    HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION,
+)
 
 
 def _truthy(value: str | None) -> bool:
@@ -39,6 +45,16 @@ def _integer_env(name: str, default: int) -> int:
         return int(value) if value is not None else default
     except ValueError as error:
         raise ValueError(f"{name} must be an integer") from error
+
+
+def _runtime_implementation_env() -> str:
+    implementation = os.environ.get(
+        "ANDROID_RUNTIME_IMPLEMENTATION", NATIVE_RUNTIME_IMPLEMENTATION
+    ).strip()
+    if implementation not in RUNTIME_IMPLEMENTATIONS:
+        allowed = ", ".join(RUNTIME_IMPLEMENTATIONS)
+        raise ValueError(f"ANDROID_RUNTIME_IMPLEMENTATION must be one of: {allowed}")
+    return implementation
 
 
 @dataclass(frozen=True)
@@ -57,6 +73,7 @@ class PreflightSettings:
     expected_checksum: str | None
     fetch_timeout_seconds: float
     allow_software_emulation_only: bool
+    runtime_implementation: str
     image_manifest_path: Path | None
     capability_evidence_path: Path | None
     kvm_path: Path
@@ -92,6 +109,7 @@ class PreflightSettings:
             expected_checksum=os.environ.get("GOOGLE_PLAY_EXPECTED_CHECKSUM", GOOGLE_PLAY_CHECKSUM),
             fetch_timeout_seconds=timeout,
             allow_software_emulation_only=_truthy(os.environ.get("ALLOW_SOFTWARE_EMULATION_ONLY")),
+            runtime_implementation=_runtime_implementation_env(),
             image_manifest_path=Path(image_path) if image_path else None,
             capability_evidence_path=Path(capability_path) if capability_path else None,
             kvm_path=Path(os.environ.get("KVM_PATH", "/dev/kvm")),
@@ -152,6 +170,40 @@ def native_kvm_compatible(host_architecture: str, guest_abi: str) -> bool:
     }
 
 
+def evaluate_runtime_compatibility(
+    implementation: str, host_architecture: str, guest_abi: str
+) -> dict[str, Any]:
+    implementation_supported = implementation in RUNTIME_IMPLEMENTATIONS
+    native_compatible = native_kvm_compatible(host_architecture, guest_abi)
+    hybrid_compatible = (
+        implementation == HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION
+        and host_architecture == "arm64"
+        and guest_abi == "x86_64"
+    )
+    if implementation == NATIVE_RUNTIME_IMPLEMENTATION:
+        execution_mode = "native-virtualization"
+        runtime_compatible = native_compatible
+    elif implementation == HYBRID_AEMU_ARM64_RUNTIME_IMPLEMENTATION:
+        execution_mode = "hybrid-software-emulation"
+        runtime_compatible = hybrid_compatible
+    else:
+        execution_mode = "unsupported"
+        runtime_compatible = False
+    return {
+        "implementation": implementation,
+        "implementation_supported": implementation_supported,
+        "execution_mode": execution_mode,
+        "host_architecture": host_architecture,
+        "guest_abi": guest_abi,
+        "native_virtualization_compatible": native_compatible,
+        "hybrid_software_emulation_compatible": hybrid_compatible,
+        "runtime_compatible": runtime_compatible,
+        "kvm_readiness_eligible": bool(
+            implementation == NATIVE_RUNTIME_IMPLEMENTATION and native_compatible
+        ),
+    }
+
+
 def run_preflight(
     settings: PreflightSettings,
     fetcher: Callable[[str, float], tuple[str, bytes]] = fetch_repository_xml,
@@ -163,10 +215,42 @@ def run_preflight(
     checks: list[dict[str, Any]] = []
     blockers: list[str] = []
 
+    runtime = evaluate_runtime_compatibility(
+        settings.runtime_implementation,
+        str(architecture["normalized"]),
+        settings.google_play_abi,
+    )
+
     architecture_status = "PASS" if architecture["supported"] else "FAIL"
     checks.append({"check_id": "architecture", "status": architecture_status, "details": architecture})
     if architecture_status == "FAIL":
         blockers.append(f"unsupported host architecture: {architecture['raw']}")
+
+    runtime_status = "PASS" if runtime["runtime_compatible"] else "FAIL"
+    checks.append(
+        {
+            "check_id": "runtime_implementation",
+            "status": runtime_status,
+            "details": runtime,
+        }
+    )
+    if not runtime["implementation_supported"]:
+        allowed = ", ".join(RUNTIME_IMPLEMENTATIONS)
+        blockers.append(
+            f"unsupported Android runtime implementation {settings.runtime_implementation!r}; "
+            f"expected one of: {allowed}"
+        )
+    elif not runtime["runtime_compatible"]:
+        if settings.runtime_implementation == NATIVE_RUNTIME_IMPLEMENTATION:
+            blockers.append(
+                f"host architecture {architecture['normalized']} cannot run the selected "
+                f"{settings.google_play_abi} Google Android Emulator natively"
+            )
+        else:
+            blockers.append(
+                f"runtime implementation {settings.runtime_implementation} requires an arm64 "
+                "host and the selected x86_64 Google Play guest"
+            )
 
     schema_reports = [
         validate_schema_file(settings.contracts_dir / IMAGE_SCHEMA),
@@ -229,39 +313,51 @@ def run_preflight(
                 }
             )
 
+    if not runtime["kvm_readiness_eligible"]:
+        kvm_status = "SKIP"
+    elif kvm["usable"]:
+        kvm_status = "PASS"
+    else:
+        kvm_status = "WARN"
     checks.append(
         {
             "check_id": "kvm",
-            "status": "PASS" if kvm["usable"] else "WARN",
-            "details": kvm,
-        }
-    )
-
-    native_compatible = native_kvm_compatible(
-        str(architecture["normalized"]), settings.google_play_abi
-    )
-    checks.append(
-        {
-            "check_id": "native_kvm_compatibility",
-            "status": "PASS" if native_compatible else "FAIL",
+            "status": kvm_status,
             "details": {
-                "host_architecture": architecture["normalized"],
-                "guest_abi": settings.google_play_abi,
-                "native_virtualization_compatible": native_compatible,
+                **kvm,
+                "native_runtime_only": True,
+                "readiness_eligible": runtime["kvm_readiness_eligible"],
             },
         }
     )
-    if not native_compatible:
-        blockers.append(
-            f"host architecture {architecture['normalized']} cannot run the selected "
-            f"{settings.google_play_abi} Google Android Emulator natively"
-        )
+
+    if settings.runtime_implementation != NATIVE_RUNTIME_IMPLEMENTATION:
+        native_compatibility_status = "SKIP"
+    elif runtime["native_virtualization_compatible"]:
+        native_compatibility_status = "PASS"
+    else:
+        native_compatibility_status = "FAIL"
+    checks.append(
+        {
+            "check_id": "native_kvm_compatibility",
+            "status": native_compatibility_status,
+            "details": {
+                "host_architecture": architecture["normalized"],
+                "guest_abi": settings.google_play_abi,
+                "runtime_implementation": settings.runtime_implementation,
+                "native_virtualization_compatible": runtime[
+                    "native_virtualization_compatible"
+                ],
+                "kvm_readiness_eligible": runtime["kvm_readiness_eligible"],
+            },
+        }
+    )
 
     if blockers:
         state = "BLOCKED"
     elif not settings.repository_urls:
         state = "DESIGN_READY"
-    elif kvm["usable"] and native_compatible:
+    elif kvm["usable"] and runtime["kvm_readiness_eligible"]:
         state = "KVM_READY"
     else:
         state = "SOFTWARE_EMULATION_ONLY"
@@ -276,6 +372,7 @@ def run_preflight(
         "fail_closed": True,
         "policy": {
             "allow_software_emulation_only": settings.allow_software_emulation_only,
+            "runtime": runtime,
             "android_version": settings.android_version,
             "api_level": settings.api_level,
             "google_play_tag": settings.google_play_tag,
@@ -284,6 +381,7 @@ def run_preflight(
             "expected_channel": settings.expected_channel,
         },
         "architecture": architecture,
+        "runtime": runtime,
         "kvm": kvm,
         "google_play_repository": repository_report,
         "checks": checks,

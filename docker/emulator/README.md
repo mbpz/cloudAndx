@@ -12,10 +12,11 @@ The API 37.0 image is the Android 17 base stable release used by this design. An
 
 This is the official Google Play AVD software experience: Android 17 framework/UI, Google Play services, and Play Store. It is not a Pixel hardware clone and does not provide physical modem/eSIM, hardware-backed StrongBox, certified Widevine L1, real biometrics, or a production Play Integrity verdict.
 
-Google's upstream Android Emulator container tooling requires Linux/KVM and explicitly does
-not support Docker on macOS or Windows. Google publishes the Linux Emulator host package only
-for x86_64. This image is therefore supported by this project only on a native x86_64 Linux
-Docker Engine; a native x86_64 no-KVM software mode remains available for slow validation.
+Google publishes the Linux Emulator host package only for x86_64. This project keeps that
+official launcher and Google Play guest unchanged, but replaces its fixed headless child path
+on ARM64 with a native AArch64 `qemu-system-x86_64-headless` built from pinned Android Emulator
+source. A dispatcher preserves the upstream child on x86_64. The image therefore supports
+Linux x86_64 and ARM64 Docker Engines without a host SDK or host configuration changes.
 
 ## Safety boundary
 
@@ -36,14 +37,20 @@ The Android SDK artifacts are checksum-pinned. The runtime base is also pinned t
 Review the Android SDK license first, then explicitly acknowledge it:
 
 ```sh
-cd docker/emulator
-./preflight.sh
+cd ../..
+docker build --platform linux/amd64 --target bundle \
+  --tag cloudandx/aemu-native-engine:37.1.7 \
+  docker/emulator/native-engine
 docker build \
   --platform linux/amd64 \
   --build-arg ACCEPT_ANDROID_SDK_LICENSES=yes \
   --tag cloudandx/android17-play-emulator:37.0-r06 \
-  .
+  docker/emulator
 ```
+
+The supported entry point is `ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl build-emulator`,
+which performs those builds in dependency order. The native-engine build and all source
+fetching remain inside Docker.
 
 The system image download is about 2.31 GB. The offline self-test target avoids all Android downloads:
 
@@ -60,7 +67,7 @@ docker build --pull=false --platform linux/amd64 \
   --tag android17-emulator-runtime-tools-smoke .
 ```
 
-## Run on native x86_64 Linux
+## Run
 
 Use the root Compose stack so architecture, Google metadata, ADB keys, loopback ports, and KVM
 permissions are all gated consistently:
@@ -68,24 +75,27 @@ permissions are all gated consistently:
 ```sh
 cd ../..
 ./androidctl doctor
-./androidctl preflight-kvm
-ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl up-kvm
+./androidctl preflight
+ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl up
 ```
 
-`up-kvm` maps an already-present `/dev/kvm`; it never installs a driver or changes host
-permissions. On a native x86_64 Linux engine without KVM, `./androidctl up` selects
-`-accel off`. That mode is substantially slower and intended for validation.
+On a native x86_64 Linux engine, `up-kvm` maps an already-present `/dev/kvm`; it never
+installs a driver or changes host permissions. `up` selects software translation on both
+x86_64 without KVM and ARM64. ARM64 uses the native AEMU child and never attempts KVM for the
+official x86_64 guest.
 
-## ARM64 / OrbStack is deliberately blocked
+## ARM64 / OrbStack hybrid engine
 
-The full image was launched on the current ARM64 OrbStack engine. Google Emulator 36.6.11
-exited before Android boot with `rosetta error: Unimplemented syscall number 282`. There was
-no successful ADB, `sys.boot_completed`, Play Store, or GMS proof.
+The official x86_64 launcher still parses the AVD and command line. Its fixed headless-child
+path is an immutable dispatcher. On ARM64 it executes the bundled native AArch64 AEMU binary
+through a bundle-local loader/library closure; on x86_64 it executes the renamed Google
+upstream child. This removes the double-translation hotspot while retaining the unmodified
+official Google Play guest. Bundle source commits, patches, DT_NEEDED closure and SHA-256
+digests are recorded under `native-engine/`.
 
-A Docker-contained qemu-user experiment got the host process farther, but requires double
-dynamic translation and manual wrapping of Emulator child processes. It does not meet the
-full-function or stability contract and is not shipped. The root CLI and Compose runtime gate
-both fail closed on ARM64 without changing OrbStack or macOS.
+Compose enables IPv6 only on this project's Docker bridge for the virtual modem. It does not
+invoke `orb`/`orbctl` or change macOS/OrbStack networking, DNS, routes, firewall, or
+virtualization settings.
 
 ## Access without host installs
 
@@ -113,8 +123,9 @@ Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control a
 
 | Variable | Values/default | Behavior |
 |---|---|---|
-| `DOCKER_ENGINE_ARCHITECTURE` | supplied by `androidctl` | Must be `x86_64`/`amd64`; missing or ARM values fail before Emulator execution. |
-| `EMULATOR_ACCEL` | `auto` (default), `kvm`, `off` | `auto` uses KVM only when `/dev/kvm` is a usable character device; otherwise it explicitly selects `-accel off`. `kvm` fails closed without the device. |
+| `DOCKER_ENGINE_ARCHITECTURE` | supplied by `androidctl` | Accepts x86_64/amd64 or ARM64/aarch64; missing and unknown values fail closed. |
+| `ANDROID_RUNTIME_IMPLEMENTATION` | derived by `androidctl` | `native` on x86_64; exactly `hybrid-aemu-arm64` on ARM64. Other cross-architecture declarations fail closed. |
+| `EMULATOR_ACCEL` | `auto` (default), `kvm`, `off` | ARM64 always resolves to `off`; x86_64 `auto` uses usable KVM. Explicit KVM fails without a native-compatible device. |
 | `EMULATOR_GPU` | `swiftshader` | Also accepts `auto`, `software`, `swangle`, or `lavapipe`. |
 | `EMULATOR_CORES` | `4` | Validated in the range 1–32. |
 | `EMULATOR_MEMORY_MB` | `4096` | Validated in the emulator-supported range 1536–8192. |
@@ -127,19 +138,21 @@ docker run ... cloudandx/android17-play-emulator:37.0-r06 -camera-back emulated
 ```
 
 `./androidctl preflight` performs the repository gate. The image's `preflight` and
-`print-command` entrypoints also require `DOCKER_ENGINE_ARCHITECTURE=x86_64`; the root CLI
+`print-command` entrypoints also require a supported `DOCKER_ENGINE_ARCHITECTURE`; the root CLI
 supplies this fact from Docker Engine metadata rather than trusting a persisted `.env` value.
 
 ## Health contract
 
 The image becomes healthy only after all of the following are true:
 
-1. ADB reports `device`.
-2. `sys.boot_completed=1`.
-3. `ro.build.version.sdk=37`.
-4. `com.android.vending` (Play Store) is installed.
-5. `com.google.android.gms` (Google Play services) is installed.
+1. `/proc/*/exe` proves the dispatcher selected the expected upstream x86_64 or native
+   AArch64 child executable.
+2. ADB reports `device`.
+3. `sys.boot_completed=1`.
+4. `ro.build.version.sdk=37`.
+5. `com.android.vending` (Play Store) is installed.
+6. `com.google.android.gms` (Google Play services) is installed.
 
-The 30-minute health start period accommodates the native x86_64 no-KVM software path. A
+The 30-minute health start period accommodates software translation. A
 successful health check proves the pinned Google Play AVD booted; it does not prove
 physical-hardware parity or Google device certification.

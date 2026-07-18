@@ -37,6 +37,11 @@ MAX_APK_BYTES = 256 * 1024 * 1024
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
 PHONE_RE = re.compile(r"^[+0-9*#]{1,32}$")
 SESSION_HEALTH_RE = re.compile(r"^/sessions/(ses_[a-f0-9]{32})/healthz$")
+MIN_ANDROID_API_LEVEL = 37
+REQUIRED_GOOGLE_PACKAGES = (
+    "com.android.vending",
+    "com.google.android.gms",
+)
 
 
 class AdbError(RuntimeError):
@@ -105,6 +110,40 @@ def _bounded_float(value: Any, name: str, minimum: float, maximum: float) -> flo
     return float(value)
 
 
+def _assess_runtime_health(observed: dict[str, Any]) -> tuple[bool, str]:
+    reasons: list[str] = []
+    state = str(observed.get("state", ""))
+    properties = observed.get("properties", {})
+    packages = observed.get("packages", {})
+    package_errors = observed.get("package_errors", {})
+
+    if state != "device":
+        reasons.append(f"ADB state is {state!r}; expected 'device'")
+
+    boot_completed = str(properties.get("boot_completed", ""))
+    if boot_completed != "1":
+        reasons.append(f"sys.boot_completed is {boot_completed!r}; expected '1'")
+
+    api_text = str(properties.get("api_level", ""))
+    try:
+        api_level = int(api_text)
+    except ValueError:
+        reasons.append(f"API level is not an integer: {api_text!r}")
+    else:
+        if api_level < MIN_ANDROID_API_LEVEL:
+            reasons.append(f"API level {api_level} is below required {MIN_ANDROID_API_LEVEL}")
+
+    for package in REQUIRED_GOOGLE_PACKAGES:
+        if packages.get(package) is True:
+            continue
+        if package in package_errors:
+            reasons.append(f"could not verify required package {package}: {package_errors[package]}")
+        else:
+            reasons.append(f"required package {package} is not installed")
+
+    return not reasons, "ready" if not reasons else "; ".join(reasons)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "android-device-bridge/1.0"
 
@@ -163,25 +202,53 @@ class Handler(BaseHTTPRequestHandler):
         }
         return {"serial": ADB_SERIAL, "state": state, "properties": props}
 
+    def _runtime_health(self) -> tuple[bool, str, dict[str, Any]]:
+        observed = self._device_summary()
+        packages: dict[str, bool | None] = {}
+        package_errors: dict[str, str] = {}
+        for package in REQUIRED_GOOGLE_PACKAGES:
+            try:
+                output = ADB_CLIENT.shell("pm", "path", package, timeout=10)
+                packages[package] = any(line.startswith("package:") for line in output.splitlines())
+            except AdbError as exc:
+                packages[package] = None
+                package_errors[package] = str(exc)
+        observed["packages"] = packages
+        if package_errors:
+            observed["package_errors"] = package_errors
+        ready, reason = _assess_runtime_health(observed)
+        return ready, reason, observed
+
+    def _session_health(self, session_id: str) -> None:
+        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            ready, reason, observed = self._runtime_health()
+        except (AdbError, ValueError) as exc:
+            ready = False
+            reason = f"device evidence unavailable: {exc}"
+            observed = {"serial": ADB_SERIAL}
+
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "healthy": ready,
+            "observed_at": observed_at,
+        }
+        if not ready:
+            payload.update({"reason": reason, "observed": observed})
+        self._json(HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE, payload)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         try:
             session_match = SESSION_HEALTH_RE.fullmatch(parsed.path)
             if session_match:
-                summary = self._device_summary()
-                ready = summary["state"] == "device" and summary["properties"]["boot_completed"] == "1"
+                self._session_health(session_match.group(1))
+            elif parsed.path == "/healthz":
+                ready, reason, observed = self._runtime_health()
                 self._json(
                     HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
-                    {
-                        "session_id": session_match.group(1),
-                        "healthy": ready,
-                        "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    },
+                    {"ready": ready, "reason": reason, **observed},
                 )
-            elif parsed.path == "/healthz":
-                summary = self._device_summary()
-                ready = summary["state"] == "device" and summary["properties"]["boot_completed"] == "1"
-                self._json(HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE, {"ready": ready, **summary})
             elif parsed.path == "/v1/device":
                 self._json(HTTPStatus.OK, self._device_summary())
             elif parsed.path == "/v1/screenshot.png":

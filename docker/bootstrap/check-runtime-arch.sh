@@ -2,6 +2,7 @@
 set -eu
 
 architecture=${1:-${DOCKER_ENGINE_ARCHITECTURE:-}}
+implementation=${ANDROID_RUNTIME_IMPLEMENTATION:-}
 
 if [ -z "${architecture}" ]; then
   printf '%s\n' 'ERROR: Docker Engine architecture was not supplied by androidctl; refusing direct startup.' >&2
@@ -10,13 +11,18 @@ fi
 
 case "${architecture}" in
   x86_64|amd64)
-    printf 'runtime-architecture=%s supported\n' "${architecture}"
+    if [ "${implementation}" != native ]; then
+      printf 'ERROR: runtime architecture %s requires ANDROID_RUNTIME_IMPLEMENTATION=native.\n' "${architecture}" >&2
+      exit 78
+    fi
+    printf 'runtime-architecture=%s supported engine=upstream-x86_64\n' "${architecture}"
     ;;
   arm64|aarch64)
-    printf 'ERROR: runtime architecture %s is unsupported.\n' "${architecture}" >&2
-    printf '%s\n' 'Google does not publish a Linux ARM64 Android Emulator host binary.' >&2
-    printf '%s\n' 'Cross-architecture Rosetta/QEMU execution is not a full-function runtime.' >&2
-    exit 78
+    if [ "${implementation}" != hybrid-aemu-arm64 ]; then
+      printf 'ERROR: runtime architecture %s requires ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64.\n' "${architecture}" >&2
+      exit 78
+    fi
+    printf 'runtime-architecture=%s supported engine=native-aemu-arm64 guest=x86_64\n' "${architecture}"
     ;;
   *)
     printf 'ERROR: unknown runtime architecture %s; refusing to start.\n' "${architecture}" >&2

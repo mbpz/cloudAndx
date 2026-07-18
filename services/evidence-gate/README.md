@@ -6,7 +6,7 @@ This directory contains a Docker-only, fail-closed preflight and evidence valida
 
 The service performs four independent checks:
 
-1. normalizes the container architecture and opens `/dev/kvm` read/write;
+1. normalizes the container architecture, validates the declared Android runtime implementation, and inspects `/dev/kvm` while accepting it as readiness evidence only for an eligible native runtime;
 2. fetches only allowlisted Google HTTPS repository XML, then requires the stable Android 17 Play tuple `system-images;android-37.0;google_apis_playstore_ps16k;x86_64` with a valid revision, archive URL, and SHA-1 or SHA-256 checksum;
 3. validates image-manifest and capability-evidence JSON instances against Draft 2020-12 contracts mounted read-only at `/contracts`;
 4. atomically writes `/evidence/preflight.json` and exits nonzero unless the selected readiness policy passes.
@@ -18,13 +18,14 @@ Repository metadata verification proves that an advertised package tuple exists.
 | State | Meaning | Default exit |
 |---|---|---:|
 | `DESIGN_READY` | Both contract schemas are valid, but no repository URL was supplied | 2 |
-| `SOFTWARE_EMULATION_ONLY` | On native x86_64 Linux, stable Google Play metadata is valid but `/dev/kvm` is unavailable | 2 |
+| `SOFTWARE_EMULATION_ONLY` | Stable Google Play metadata is valid and either native x86_64 lacks usable KVM or the exact ARM64 hybrid runtime was declared | 2 |
 | `KVM_READY` | Metadata is valid, `/dev/kvm` is usable, and guest ABI matches the host architecture | 0 |
 | `BLOCKED` | Architecture, contracts, repository metadata, or an optional evidence instance failed | 2 |
 
-`ALLOW_SOFTWARE_EMULATION_ONLY=true` changes only the exit policy for native x86_64
-`SOFTWARE_EMULATION_ONLY`; it does not relabel that state as KVM-ready. A cross-architecture
-host/guest combination is always `BLOCKED`, and `DESIGN_READY` never passes a runtime preflight.
+`ALLOW_SOFTWARE_EMULATION_ONLY=true` changes only the exit policy for
+`SOFTWARE_EMULATION_ONLY`; it does not relabel that state as KVM-ready. Cross-architecture
+host/guest combinations are `BLOCKED` except for the exact, explicitly declared
+`hybrid-aemu-arm64` pairing described below. `DESIGN_READY` never passes a runtime preflight.
 
 ## Build and test
 
@@ -61,13 +62,29 @@ Optional exact-match pins make repository changes fail closed:
 - `GOOGLE_PLAY_EXPECTED_URL`
 - `GOOGLE_PLAY_EXPECTED_CHECKSUM` (`sha1:<hex>`, `sha256:<hex>`, or bare hex)
 - `GOOGLE_REPOSITORY_TIMEOUT_SECONDS` (default `20`, maximum `120`)
+- `ANDROID_RUNTIME_IMPLEMENTATION` (exact allowlist: `native` or `hybrid-aemu-arm64`; default `native`)
 
 The exact defaults are revision `6`, archive `x86_64-playstore-ps16k-37.0_r06.zip`, SHA-1 `8eaeeceb77452c018c3f6b589913cdc45222a87f`, and channel `stable`; each may be overridden explicitly for a newly observed official revision. `ANDROID_VERSION`, `ANDROID_API_LEVEL`, and the XML type-details `GOOGLE_PLAY_TAG` default to `17`, `37`, and `google_apis_playstore`. The package path is independently pinned to the PS16K variant because the official XML's tag ID does not include the `_ps16k` suffix. Any other Android version/API pair or non-stable channel is blocked by this version of the gate.
 
-This runtime is pinned to Google's Linux x86_64 Emulator and x86_64 Play image. Its KVM
-readiness therefore requires an x86_64 host. An ARM host running the default x86_64 image is
-`BLOCKED` even when software emulation is allowed; Google does not currently publish a Linux
-ARM64 Emulator host package.
+This runtime is pinned to Google's Linux x86_64 Emulator and x86_64 Play image. The default
+`ANDROID_RUNTIME_IMPLEMENTATION=native` behavior is unchanged: KVM readiness requires an
+x86_64 host, and an ARM64 host with the selected x86_64 guest is `BLOCKED` even when software
+emulation is allowed.
+
+The one cross-architecture exception must be declared explicitly with
+`ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64`. It is valid only when the normalized
+container host architecture is `arm64` (both `arm64` and `aarch64` machine names normalize to
+that value) and the selected official Google Play guest ABI is `x86_64`. This declaration
+represents the x86_64 Google Emulator launcher integrated with a native ARM64 AEMU engine. The
+gate always reports that pairing as `SOFTWARE_EMULATION_ONLY`, never `KVM_READY`, even if
+`/dev/kvm` is visible. A successful exit additionally requires
+`ALLOW_SOFTWARE_EMULATION_ONLY=true`.
+
+Any unknown implementation value, hybrid use on x86_64, hybrid use with a non-x86_64 guest,
+unsupported host architecture, or any other cross-architecture pairing remains fail-closed as
+`BLOCKED`. The emitted `runtime_implementation` check and `policy.runtime` object record the
+implementation, execution mode, normalized host architecture, guest ABI, native/hybrid
+compatibility, and KVM-readiness eligibility.
 
 Set `IMAGE_MANIFEST_PATH` and/or `CAPABILITY_EVIDENCE_PATH` to validate those mounted JSON instances as part of preflight. A failed optional instance changes the state to `BLOCKED`.
 

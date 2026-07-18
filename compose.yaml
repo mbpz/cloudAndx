@@ -19,6 +19,7 @@ services:
       - ALL
     environment:
       DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-}
+      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-native}
     volumes:
       - ./docker/bootstrap/check-runtime-arch.sh:/usr/local/bin/check-runtime-arch.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/check-runtime-arch.sh"]
@@ -92,6 +93,7 @@ services:
       GOOGLE_PLAY_EXPECTED_CHECKSUM: sha1:8eaeeceb77452c018c3f6b589913cdc45222a87f
       GOOGLE_REPOSITORY_URLS: https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-4.xml
       ALLOW_SOFTWARE_EMULATION_ONLY: "true"
+      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-native}
       PREFLIGHT_OUTPUT: /evidence/preflight.json
     volumes:
       - ./contracts:/contracts:ro
@@ -109,11 +111,13 @@ services:
       target: runtime
       args:
         ACCEPT_ANDROID_SDK_LICENSES: ${ACCEPT_ANDROID_SDK_LICENSES:-no}
+        NATIVE_ENGINE_IMAGE: ${NATIVE_ENGINE_IMAGE:-cloudandx/aemu-native-engine:37.1.7}
     <<: *service-security
     init: true
     shm_size: 2gb
     environment:
       DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-}
+      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-native}
       EMULATOR_ACCEL: "off"
       EMULATOR_CORES: ${EMULATOR_CORES:-4}
       EMULATOR_MEMORY_MB: ${EMULATOR_MEMORY_MB:-4096}
@@ -157,7 +161,7 @@ services:
       - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
     depends_on:
       emulator:
-        condition: service_started
+        condition: service_healthy
       adb-key-init:
         condition: service_completed_successfully
     restart: unless-stopped
@@ -210,3 +214,11 @@ volumes:
   bridge-secrets:
   emulator-data:
   adb-keys:
+
+networks:
+  default:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd37:17:37::/64

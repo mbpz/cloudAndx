@@ -4,7 +4,7 @@ import json
 import os
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 os.environ.setdefault("BRIDGE_TOKEN", "test-token")
@@ -52,6 +52,162 @@ class FakeAdb:
     def text(self, args, timeout=30):
         self.calls.append(("text", tuple(args)))
         return "ok"
+
+
+class RuntimeAdb:
+    def __init__(self, installed_packages=None):
+        if installed_packages is None:
+            installed_packages = bridge.REQUIRED_GOOGLE_PACKAGES
+        self.installed_packages = set(installed_packages)
+        self.properties = {
+            "sys.boot_completed": "1",
+            "ro.build.version.release": "17",
+            "ro.build.version.sdk": "37",
+            "ro.build.version.security_patch": "2026-07-01",
+            "ro.build.fingerprint": "google/sdk_gphone64_x86_64/test",
+            "ro.product.name": "sdk_gphone64_x86_64",
+            "ro.product.cpu.abi": "x86_64",
+        }
+
+    def text(self, args, timeout=30):
+        if args == ["get-state"]:
+            return "device"
+        raise AssertionError(f"unexpected text call: {args}")
+
+    def shell(self, *args, **kwargs):
+        if args[:1] == ("getprop",):
+            return self.properties[args[1]]
+        if args[:2] == ("pm", "path"):
+            package = args[2]
+            return f"package:/system/{package}.apk" if package in self.installed_packages else ""
+        raise AssertionError(f"unexpected shell call: {args}")
+
+
+def healthy_observation():
+    return {
+        "serial": "emulator:5555",
+        "state": "device",
+        "properties": {"boot_completed": "1", "api_level": "37"},
+        "packages": {
+            "com.android.vending": True,
+            "com.google.android.gms": True,
+        },
+    }
+
+
+class RuntimeHealthTests(unittest.TestCase):
+    def test_runtime_probe_collects_required_package_evidence(self):
+        handler = object.__new__(bridge.Handler)
+        adb = RuntimeAdb()
+        with patch.object(bridge, "ADB_CLIENT", adb):
+            healthy, reason, observed = handler._runtime_health()
+
+        self.assertTrue(healthy)
+        self.assertEqual(reason, "ready")
+        self.assertEqual(observed["properties"]["api_level"], "37")
+        self.assertEqual(
+            observed["packages"],
+            {
+                "com.android.vending": True,
+                "com.google.android.gms": True,
+            },
+        )
+
+    def test_runtime_probe_rejects_a_missing_google_package(self):
+        handler = object.__new__(bridge.Handler)
+        adb = RuntimeAdb(installed_packages={"com.google.android.gms"})
+        with patch.object(bridge, "ADB_CLIENT", adb):
+            healthy, reason, observed = handler._runtime_health()
+
+        self.assertFalse(healthy)
+        self.assertFalse(observed["packages"]["com.android.vending"])
+        self.assertIn("com.android.vending is not installed", reason)
+
+    def test_all_required_evidence_is_healthy(self):
+        healthy, reason = bridge._assess_runtime_health(healthy_observation())
+        self.assertTrue(healthy)
+        self.assertEqual(reason, "ready")
+
+    def test_each_required_evidence_failure_is_unhealthy(self):
+        cases = {
+            "adb state": (lambda observed: observed.update(state="offline"), "ADB state"),
+            "boot complete": (
+                lambda observed: observed["properties"].update(boot_completed="0"),
+                "sys.boot_completed",
+            ),
+            "minimum API": (
+                lambda observed: observed["properties"].update(api_level="36"),
+                "below required 37",
+            ),
+            "Play Store": (
+                lambda observed: observed["packages"].update({"com.android.vending": False}),
+                "com.android.vending is not installed",
+            ),
+            "Google Play services": (
+                lambda observed: observed["packages"].update({"com.google.android.gms": False}),
+                "com.google.android.gms is not installed",
+            ),
+        }
+        for name, (mutate, expected_reason) in cases.items():
+            with self.subTest(name=name):
+                observed = healthy_observation()
+                mutate(observed)
+                healthy, reason = bridge._assess_runtime_health(observed)
+                self.assertFalse(healthy)
+                self.assertIn(expected_reason, reason)
+
+    def test_malformed_api_and_package_probe_error_are_unhealthy(self):
+        observed = healthy_observation()
+        observed["properties"]["api_level"] = "unknown"
+        observed["packages"]["com.google.android.gms"] = None
+        observed["package_errors"] = {"com.google.android.gms": "package manager unavailable"}
+
+        healthy, reason = bridge._assess_runtime_health(observed)
+
+        self.assertFalse(healthy)
+        self.assertIn("API level is not an integer", reason)
+        self.assertIn("could not verify required package com.google.android.gms", reason)
+
+    def test_healthy_session_envelope_remains_controller_compatible(self):
+        handler = object.__new__(bridge.Handler)
+        handler._runtime_health = Mock(return_value=(True, "ready", healthy_observation()))
+        handler._json = Mock()
+        session_id = "ses_" + "a" * 32
+
+        handler._session_health(session_id)
+
+        status, payload = handler._json.call_args.args
+        self.assertEqual(status, 200)
+        self.assertEqual(set(payload), {"session_id", "healthy", "observed_at"})
+        self.assertEqual(payload["session_id"], session_id)
+        self.assertTrue(payload["healthy"])
+
+    def test_unhealthy_session_exposes_reason_and_observations(self):
+        handler = object.__new__(bridge.Handler)
+        observed = healthy_observation()
+        observed["packages"]["com.android.vending"] = False
+        handler._runtime_health = Mock(return_value=(False, "Play Store missing", observed))
+        handler._json = Mock()
+
+        handler._session_health("ses_" + "b" * 32)
+
+        status, payload = handler._json.call_args.args
+        self.assertEqual(status, 503)
+        self.assertFalse(payload["healthy"])
+        self.assertEqual(payload["reason"], "Play Store missing")
+        self.assertEqual(payload["observed"], observed)
+
+    def test_adb_failure_cannot_produce_healthy_session_evidence(self):
+        handler = object.__new__(bridge.Handler)
+        handler._runtime_health = Mock(side_effect=bridge.AdbError("transport offline"))
+        handler._json = Mock()
+
+        handler._session_health("ses_" + "c" * 32)
+
+        status, payload = handler._json.call_args.args
+        self.assertEqual(status, 503)
+        self.assertFalse(payload["healthy"])
+        self.assertIn("transport offline", payload["reason"])
 
 
 class MutationTests(unittest.TestCase):

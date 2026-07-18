@@ -1,0 +1,69 @@
+diff --git a/minidump/minidump_extensions.h b/minidump/minidump_extensions.h
+--- a/minidump/minidump_extensions.h
++++ b/minidump/minidump_extensions.h
+@@ -34,8 +34,8 @@
+ #pragma warning(push)
+ #pragma warning(disable: 4200)
+ 
+-#define PACKED
++#define PACKED alignas(4)
+ #pragma pack(push, 1)
+ #else
+-#define PACKED __attribute__((packed))
++#define PACKED __attribute__((packed, aligned(4)))
+ #endif  // COMPILER_MSVC
+@@ -118,3 +118,3 @@
+ //! \sa MINIDUMP_STRING
+-struct alignas(4) PACKED MinidumpUTF8String {
++struct PACKED MinidumpUTF8String {
+   // The field names do not conform to typical style, they match the names used
+@@ -137,3 +137,3 @@
+ //!     to their referencing context.
+-struct alignas(4) PACKED MinidumpByteArray {
++struct PACKED MinidumpByteArray {
+   //! \brief The length of the #data field.
+@@ -275,3 +275,3 @@
+ //! \brief A list of ::RVA pointers.
+-struct alignas(4) PACKED MinidumpRVAList {
++struct PACKED MinidumpRVAList {
+   //! \brief The number of children present in the #children array.
+@@ -284,3 +284,3 @@
+ //! \brief A key-value pair.
+-struct alignas(4) PACKED MinidumpSimpleStringDictionaryEntry {
++struct PACKED MinidumpSimpleStringDictionaryEntry {
+   //! \brief ::RVA of a MinidumpUTF8String containing the key of a key-value
+@@ -295,3 +295,3 @@
+ //! \brief A list of key-value pairs.
+-struct alignas(4) PACKED MinidumpSimpleStringDictionary {
++struct PACKED MinidumpSimpleStringDictionary {
+   //! \brief The number of key-value pairs present.
+@@ -304,3 +304,3 @@
+ //! \brief A typed annotation object.
+-struct alignas(4) PACKED MinidumpAnnotation {
++struct PACKED MinidumpAnnotation {
+   //! \brief ::RVA of a MinidumpUTF8String containing the name of the
+@@ -321,3 +321,3 @@
+ //! \brief A list of annotation objects.
+-struct alignas(4) PACKED MinidumpAnnotationList {
++struct PACKED MinidumpAnnotationList {
+   //! \brief The number of annotation objects present.
+@@ -344,3 +344,3 @@
+ //! \sa MinidumpModuleCrashpadInfoList
+-struct alignas(4) PACKED MinidumpModuleCrashpadInfo {
++struct PACKED MinidumpModuleCrashpadInfo {
+   //! \brief The structure’s currently-defined version number.
+@@ -394,3 +394,3 @@
+ //!     file.
+-struct alignas(4) PACKED MinidumpModuleCrashpadInfoLink {
++struct PACKED MinidumpModuleCrashpadInfoLink {
+   //! \brief A link to a MINIDUMP_MODULE structure in the module list stream.
+@@ -421,3 +421,3 @@
+ //! structure.
+-struct alignas(4) PACKED MinidumpModuleCrashpadInfoList {
++struct PACKED MinidumpModuleCrashpadInfoList {
+   //! \brief The number of children present in the #modules array.
+@@ -440,3 +440,3 @@
+ //! fields are valid or not.
+-struct alignas(4) PACKED MinidumpCrashpadInfo {
++struct PACKED MinidumpCrashpadInfo {
+   // UUID has a constructor, which makes it non-POD, which makes this structure

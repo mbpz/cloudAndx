@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+ROOT=/opt/cloudandx/native-aemu
+LOADER=${ROOT}/lib/ld-linux-aarch64.so.1
+LIBRARY_PATH=${ROOT}/lib
+ENGINE=${ROOT}/bin/qemu-system-x86_64-headless
+
+unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT LD_DEBUG LD_PROFILE LD_ASSUME_KERNEL GLIBC_TUNABLES
+
+exec "${LOADER}" --library-path "${LIBRARY_PATH}" "${ENGINE}" "$@"

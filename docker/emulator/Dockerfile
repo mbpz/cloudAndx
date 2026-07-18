@@ -1,6 +1,7 @@
 ARG TEST_BASE_IMAGE=alpine@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
 ARG RUNTIME_BASE_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ARG RUNTIME_PLATFORM=linux/amd64
+ARG NATIVE_ENGINE_IMAGE=cloudandx/aemu-native-engine:37.1.7
 
 # This target deliberately has no network or Android artifact dependency. It is
 # used to validate the runtime scripts and the complete Dockerfile on any host.
@@ -117,6 +118,8 @@ RUN set -eu; \
     printf '%s\n' "${adb_version}"; \
     printf '%s\n' "${adb_version}" | grep -q 'Version 37\.0\.0'
 
+FROM --platform=${RUNTIME_PLATFORM} ${NATIVE_ENGINE_IMAGE} AS native-engine-bundle
+
 FROM runtime-base AS runtime
 
 ARG EMULATOR_URL=https://dl.google.com/android/repository/emulator-linux_x64-15507667.zip
@@ -125,6 +128,8 @@ ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r
 ARG PLATFORM_TOOLS_SHA1=bcf323933980a59dccc3f14c339aed5fb2171163
 ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-playstore-ps16k-37.0_r06.zip
 ARG SYSTEM_IMAGE_SHA1=8eaeeceb77452c018c3f6b589913cdc45222a87f
+ARG NATIVE_AEMU_REVISION=37.1.7
+ARG NATIVE_AEMU_QEMU_COMMIT=98f7f6ffcc4e6ce513a8b978323c3b961dc58143
 
 LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-only)" \
       org.opencontainers.image.description="Google Android Emulator 36.6.11 with Android 17 API 37.0 Google Play x86_64 16 KB r06" \
@@ -136,20 +141,34 @@ LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-on
       io.cloudandx.android.platform-tools.url="${PLATFORM_TOOLS_URL}" \
       io.cloudandx.android.platform-tools.sha1="${PLATFORM_TOOLS_SHA1}" \
       io.cloudandx.android.system-image.url="${SYSTEM_IMAGE_URL}" \
-      io.cloudandx.android.system-image.sha1="${SYSTEM_IMAGE_SHA1}"
+      io.cloudandx.android.system-image.sha1="${SYSTEM_IMAGE_SHA1}" \
+      io.cloudandx.android.native-aemu.revision="${NATIVE_AEMU_REVISION}" \
+      io.cloudandx.android.native-aemu.qemu-commit="${NATIVE_AEMU_QEMU_COMMIT}"
 
 COPY --from=tool-fetcher /opt/android-sdk/ /opt/android-sdk/
 COPY --from=system-image-fetcher /opt/android-sdk/system-images/ /opt/android-sdk/system-images/
+COPY --from=native-engine-bundle /opt/cloudandx/native-aemu/ /opt/cloudandx/native-aemu/
 COPY avd/ /opt/android-avd-template/
-COPY bin/entrypoint.sh bin/healthcheck.sh bin/runtime-lib.sh bin/runtime-preflight.sh /usr/local/bin/
+COPY bin/entrypoint.sh bin/healthcheck.sh bin/runtime-lib.sh bin/runtime-preflight.sh bin/qemu-system-x86_64-headless-dispatcher.sh /usr/local/bin/
 
-RUN chmod 0555 /usr/local/bin/entrypoint.sh \
+RUN set -eu; \
+    qemu_child=/opt/android-sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless; \
+    test -x "${qemu_child}"; \
+    mv "${qemu_child}" "${qemu_child}.upstream-x86_64"; \
+    install -m 0555 /usr/local/bin/qemu-system-x86_64-headless-dispatcher.sh "${qemu_child}"; \
+    rm -f /usr/local/bin/qemu-system-x86_64-headless-dispatcher.sh; \
+    chmod 0555 /usr/local/bin/entrypoint.sh \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/runtime-lib.sh \
       /usr/local/bin/runtime-preflight.sh \
+    && (cd /opt/cloudandx/native-aemu && sha256sum -c SHA256SUMS) \
     && chmod -R a-w /opt/android-sdk /opt/android-avd-template \
+      /opt/cloudandx/native-aemu \
     && test -x /opt/android-sdk/emulator/emulator \
     && test -x /opt/android-sdk/platform-tools/adb \
+    && test -x "${qemu_child}" \
+    && test -x "${qemu_child}.upstream-x86_64" \
+    && test -x /opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless \
     && test -s /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/system.img
 
 ENV ANDROID_SDK_ROOT=/opt/android-sdk \
@@ -170,6 +189,8 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     EMULATOR_GRPC_INTERNAL_PORT=8556 \
     EMULATOR_GRPC_PORT=8554 \
     EMULATOR_WIPE_DATA=0 \
+    ANDROID_RUNTIME_IMPLEMENTATION=native \
+    NATIVE_AEMU_ROOT=/opt/cloudandx/native-aemu \
     ADB_MDNS_OPENSCREEN=0
 
 USER android:android

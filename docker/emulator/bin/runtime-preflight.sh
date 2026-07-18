@@ -19,17 +19,26 @@ EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
 EMULATOR_WIPE_DATA=${EMULATOR_WIPE_DATA:-0}
 KVM_DEVICE=${KVM_DEVICE:-/dev/kvm}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
+ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-native}
+NATIVE_AEMU_ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}
 EMULATOR_BIN=${EMULATOR_BIN:-${ANDROID_SDK_ROOT}/emulator/emulator}
 ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 SOCAT_BIN=${SOCAT_BIN:-socat}
 SYSTEM_IMAGE_DIR=${SYSTEM_IMAGE_DIR:-${ANDROID_SDK_ROOT}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64}
+QEMU_DISPATCHER=${QEMU_DISPATCHER:-${ANDROID_SDK_ROOT}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless}
+UPSTREAM_QEMU_ENGINE=${UPSTREAM_QEMU_ENGINE:-${QEMU_DISPATCHER}.upstream-x86_64}
 
-validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}"
+validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}"
 validate_runtime_settings
-effective_accel=$(resolve_acceleration "${EMULATOR_ACCEL}" "${KVM_DEVICE}")
+effective_accel=$(resolve_runtime_acceleration "${DOCKER_ENGINE_ARCHITECTURE}" "${EMULATOR_ACCEL}" "${KVM_DEVICE}")
+engine_kind=$(selected_engine_kind "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}")
+engine_executable=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 
 [ -x "${EMULATOR_BIN}" ] || runtime_die "Android Emulator is missing or not executable: ${EMULATOR_BIN}"
 [ -x "${ADB_BIN}" ] || runtime_die "adb is missing or not executable: ${ADB_BIN}"
+[ -x "${QEMU_DISPATCHER}" ] || runtime_die "AEMU child dispatcher is missing or not executable: ${QEMU_DISPATCHER}"
+[ -x "${UPSTREAM_QEMU_ENGINE}" ] || runtime_die "Upstream Google x86_64 AEMU child is missing or not executable: ${UPSTREAM_QEMU_ENGINE}"
+validate_native_aemu_bundle "${NATIVE_AEMU_ROOT}"
 if [ "${SOCAT_BIN}" = "socat" ]; then
   command -v socat >/dev/null 2>&1 || runtime_die "socat is not installed."
 else
@@ -51,6 +60,9 @@ printf '%s\n' \
   "runtime.os=$(uname -s)" \
   "runtime.arch=$(uname -m)" \
   "docker.engine-arch=${DOCKER_ENGINE_ARCHITECTURE}" \
+  "runtime.implementation=${ANDROID_RUNTIME_IMPLEMENTATION}" \
+  "engine.selected=${engine_kind}" \
+  "engine.executable=${engine_executable}" \
   "runtime.uid=$(id -u)" \
   "android.release=17" \
   "android.api=37.0" \
@@ -66,5 +78,5 @@ printf '%s\n' \
   "grpc.proxy-port=${EMULATOR_GRPC_PORT}"
 
 if [ "${effective_accel}" = off ]; then
-  runtime_log "KVM is unavailable or disabled; using -accel off. Android 17 x86_64 will be very slow under software translation."
+  runtime_log "KVM is unavailable, incompatible, or disabled; using the verified software-emulation engine path."
 fi

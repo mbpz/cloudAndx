@@ -25,6 +25,8 @@ EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
 EMULATOR_WIPE_DATA=${EMULATOR_WIPE_DATA:-0}
 KVM_DEVICE=${KVM_DEVICE:-/dev/kvm}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
+ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-native}
+NATIVE_AEMU_ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}
 EMULATOR_BIN=${EMULATOR_BIN:-${ANDROID_SDK_ROOT}/emulator/emulator}
 ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 SOCAT_BIN=${SOCAT_BIN:-socat}
@@ -34,7 +36,8 @@ ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
 export ANDROID_SDK_ROOT ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT HOME
 export AVD_NAME EMULATOR_ACCEL EMULATOR_CORES EMULATOR_MEMORY_MB EMULATOR_GPU
 export EMULATOR_CONSOLE_PORT EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
-export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE EMULATOR_BIN ADB_BIN SOCAT_BIN
+export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE ANDROID_RUNTIME_IMPLEMENTATION NATIVE_AEMU_ROOT
+export EMULATOR_BIN ADB_BIN SOCAT_BIN
 
 MODE=run
 case ${1-} in
@@ -176,7 +179,8 @@ start_emulator() {
     return 0
   fi
 
-  runtime_log "Starting Android 17 API 37.0 Google Play r06 with acceleration=${effective_accel}, gpu=${EMULATOR_GPU}."
+  engine_kind=$(selected_engine_kind "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}")
+  runtime_log "Starting Android 17 API 37.0 Google Play r06 with engine=${engine_kind}, acceleration=${effective_accel}, gpu=${EMULATOR_GPU}."
   runtime_log "gRPC is enabled internally on ${EMULATOR_GRPC_INTERNAL_PORT}; a supervised proxy exposes container port ${EMULATOR_GRPC_PORT}. Publish it to host loopback only."
   "$@" &
   EMULATOR_PID=$!
@@ -224,7 +228,7 @@ if [ "${MODE}" = run ]; then
   remove_stale_avd_locks "${ANDROID_AVD_HOME}/${AVD_NAME}.avd"
 fi
 "${SCRIPT_DIR}/runtime-preflight.sh"
-effective_accel=$(resolve_acceleration "${EMULATOR_ACCEL}" "${KVM_DEVICE}")
+effective_accel=$(resolve_runtime_acceleration "${DOCKER_ENGINE_ARCHITECTURE}" "${EMULATOR_ACCEL}" "${KVM_DEVICE}")
 
 if [ "${MODE}" = print ]; then
   start_emulator "${effective_accel}" "$@"

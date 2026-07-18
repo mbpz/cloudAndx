@@ -2,14 +2,36 @@
 set -eu
 
 ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd)
+NATIVE_ENGINE_IMAGE=${NATIVE_ENGINE_IMAGE:-cloudandx/aemu-native-engine:37.1.7}
+export NATIVE_ENGINE_IMAGE
+
+runtime_implementation_for_engine() {
+  if [ -n "${ANDROID_RUNTIME_IMPLEMENTATION-}" ]; then
+    printf '%s\n' "${ANDROID_RUNTIME_IMPLEMENTATION}"
+    return 0
+  fi
+  case $1 in
+    x86_64|amd64) printf '%s\n' native ;;
+    arm64|aarch64) printf '%s\n' hybrid-aemu-arm64 ;;
+    *) printf '%s\n' unsupported ;;
+  esac
+}
 
 compose() {
-  DOCKER_ENGINE_ARCHITECTURE=$(docker_engine_architecture) \
+  compose_engine_arch=$(docker_engine_architecture)
+  compose_runtime_implementation=$(runtime_implementation_for_engine "${compose_engine_arch}")
+  DOCKER_ENGINE_ARCHITECTURE=${compose_engine_arch} \
+    ANDROID_RUNTIME_IMPLEMENTATION=${compose_runtime_implementation} \
+    NATIVE_ENGINE_IMAGE=${NATIVE_ENGINE_IMAGE} \
     docker compose --project-directory "${ROOT}" -f "${ROOT}/compose.yaml" "$@"
 }
 
 compose_kvm() {
-  DOCKER_ENGINE_ARCHITECTURE=$(docker_engine_architecture) \
+  compose_engine_arch=$(docker_engine_architecture)
+  compose_runtime_implementation=$(runtime_implementation_for_engine "${compose_engine_arch}")
+  DOCKER_ENGINE_ARCHITECTURE=${compose_engine_arch} \
+    ANDROID_RUNTIME_IMPLEMENTATION=${compose_runtime_implementation} \
+    NATIVE_ENGINE_IMAGE=${NATIVE_ENGINE_IMAGE} \
     docker compose --project-directory "${ROOT}" -f "${ROOT}/compose.yaml" -f "${ROOT}/compose.kvm.yaml" "$@"
 }
 
@@ -42,22 +64,43 @@ docker_engine_architecture() {
   docker info --format '{{.Architecture}}'
 }
 
+require_supported_linux_engine() {
+  engine_os=$(docker_engine_os)
+  engine_arch=$(docker_engine_architecture)
+
+  case "${engine_os}/${engine_arch}" in
+    linux/amd64|linux/x86_64|linux/arm64|linux/aarch64)
+      return 0
+      ;;
+    *)
+      printf 'ERROR: unsupported Docker Engine %s/%s.\n' "${engine_os}" "${engine_arch}" >&2
+      printf '%s\n' 'Supported Docker Engine architectures are x86_64 and ARM64.' >&2
+      printf '%s\n' 'No host, network, or OrbStack change was attempted.' >&2
+      exit 78
+      ;;
+  esac
+}
+
 require_native_x86_linux_engine() {
   engine_os=$(docker_engine_os)
   engine_arch=$(docker_engine_architecture)
 
   case "${engine_os}/${engine_arch}" in
-    linux/amd64|linux/x86_64)
-      return 0
-      ;;
+    linux/amd64|linux/x86_64) return 0 ;;
     *)
-      printf 'ERROR: unsupported Docker Engine %s/%s.\n' "${engine_os}" "${engine_arch}" >&2
-      printf '%s\n' 'Google publishes the Linux Android Emulator host binary only for x86_64.' >&2
-      printf '%s\n' 'ARM64 cross-architecture translation cannot provide a reliable, full Google Android runtime.' >&2
-      printf '%s\n' 'Use a native x86_64 Linux Docker engine; no host or OrbStack change was attempted.' >&2
+      printf 'ERROR: KVM mode requires a native x86_64 Linux Docker Engine; got %s/%s.\n' "${engine_os}" "${engine_arch}" >&2
+      printf '%s\n' 'No host, network, KVM, or OrbStack change was attempted.' >&2
       exit 78
       ;;
   esac
+}
+
+build_native_engine() {
+  docker build \
+    --platform linux/amd64 \
+    --target bundle \
+    --tag "${NATIVE_ENGINE_IMAGE}" \
+    "${ROOT}/docker/emulator/native-engine"
 }
 
 init() {
@@ -75,8 +118,8 @@ Usage: ./androidctl COMMAND [ARGS...]
   preflight          Verify the official Android 17 image metadata (no KVM required)
   preflight-kvm      Require an already-present /dev/kvm; never changes the host
   build-core         Build controller, bridge, dashboard, evidence gate, and tests
-  build-emulator     Build the pinned Google Android image (license acknowledgement required)
-  up                 Start software emulation on a native x86_64 Linux Docker engine
+  build-emulator     Build the native ARM64 AEMU bundle and pinned Google Android image
+  up                 Start software emulation on x86_64 or ARM64 Docker Engine
   up-kvm             Start on native x86_64 Linux with an existing /dev/kvm
   status             Show containers and the recorded evidence decision
   logs [SERVICE]     Follow stack logs
@@ -84,6 +127,7 @@ Usage: ./androidctl COMMAND [ARGS...]
   shell [ARGS...]    Run an Android shell command through bundled adb
   token              Print the local bridge bearer token
   evidence           Print the preflight evidence JSON
+  verify-runtime     Prove engine process, ADB, API 37, Play Store, and GMS
   down               Stop containers while preserving guest data
   destroy            Stop containers and delete this project's Docker volumes
   test               Run all offline tests inside Docker
@@ -98,8 +142,9 @@ case ${1-} in
     docker info --format 'engine={{.OSType}}/{{.Architecture}} cpus={{.NCPU}} memory={{.MemTotal}}'
     compose config --quiet
     case "$(docker_engine_os)/$(docker_engine_architecture)" in
-      linux/amd64|linux/x86_64) runtime_support=supported ;;
-      *) runtime_support=blocked-requires-native-x86_64-linux ;;
+      linux/amd64|linux/x86_64) runtime_support=supported-upstream-x86_64 ;;
+      linux/arm64|linux/aarch64) runtime_support=supported-native-aemu-arm64 ;;
+      *) runtime_support=blocked-unsupported-engine ;;
     esac
     printf 'compose=valid runtime=%s host-mutations=none\n' "${runtime_support}"
     ;;
@@ -124,17 +169,20 @@ case ${1-} in
     docker run --rm --platform linux/amd64 cloudandx/android-device-bridge:test
     ;;
   build-emulator)
+    build_native_engine
     compose build emulator
     ;;
   up)
-    require_native_x86_linux_engine
+    require_supported_linux_engine
     init
+    build_native_engine
     compose up -d --build
     ;;
   up-kvm)
     require_native_x86_linux_engine
     init
     configure_kvm_group
+    build_native_engine
     compose_kvm run --rm evidence-gate
     compose_kvm up -d --build
     ;;
@@ -160,6 +208,11 @@ case ${1-} in
     ;;
   evidence)
     compose run --rm --no-deps --entrypoint /bin/sh volume-init -c 'cat /volumes/evidence/preflight.json'
+    ;;
+  verify-runtime)
+    compose exec -T emulator /usr/local/bin/runtime-preflight.sh
+    compose exec -T emulator /usr/local/bin/healthcheck.sh
+    printf '%s\n' 'runtime=verified engine-process=verified adb=device api>=37 play-store=present gms=present'
     ;;
   down)
     compose down --remove-orphans

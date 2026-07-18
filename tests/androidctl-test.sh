@@ -10,7 +10,7 @@ cat >"${tmp}/bin/docker" <<'EOF'
 #!/bin/sh
 set -eu
 
-printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG}"
+printf 'runtime_implementation=%s args=%s\n' "${ANDROID_RUNTIME_IMPLEMENTATION-}" "$*" >>"${FAKE_DOCKER_LOG}"
 
 if [ "${1-}" = info ] && [ "${2-}" = --format ]; then
   case ${3-} in
@@ -23,13 +23,18 @@ exit 0
 EOF
 chmod 0755 "${tmp}/bin/docker"
 
-sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" x86_64 >"${tmp}/runtime-x86.out"
+ANDROID_RUNTIME_IMPLEMENTATION=native \
+  sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" x86_64 >"${tmp}/runtime-x86.out"
 grep -q 'supported' "${tmp}/runtime-x86.out"
-if sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" arm64 >"${tmp}/runtime-arm.out" 2>&1; then
-  printf '%s\n' 'FAIL: Compose runtime architecture gate accepted ARM64.' >&2
+ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \
+  sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" arm64 >"${tmp}/runtime-arm.out"
+grep -q 'engine=native-aemu-arm64' "${tmp}/runtime-arm.out"
+if ANDROID_RUNTIME_IMPLEMENTATION=native \
+  sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" arm64 >"${tmp}/runtime-arm-native.out" 2>&1; then
+  printf '%s\n' 'FAIL: Compose runtime architecture gate accepted ARM64 without the hybrid declaration.' >&2
   exit 1
 fi
-grep -q 'Google does not publish a Linux ARM64 Android Emulator' "${tmp}/runtime-arm.out"
+grep -q 'hybrid-aemu-arm64' "${tmp}/runtime-arm-native.out"
 if sh "${ROOT}/docker/bootstrap/check-runtime-arch.sh" >"${tmp}/runtime-missing.out" 2>&1; then
   printf '%s\n' 'FAIL: Compose runtime architecture gate accepted a missing engine fact.' >&2
   exit 1
@@ -45,33 +50,21 @@ run_ctl() {
 }
 
 : >"${tmp}/docker.log"
-if env FAKE_DOCKER_ARCH=arm64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
+env FAKE_DOCKER_ARCH=arm64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
   PATH="${tmp}/bin:${PATH}" sh "${ROOT}/docker/emulator/preflight.sh" \
-  >"${tmp}/standalone-preflight-arm.out" 2>&1; then
-  printf '%s\n' 'FAIL: standalone Emulator preflight accepted ARM64.' >&2
-  exit 1
-fi
-grep -q 'native x86_64' "${tmp}/standalone-preflight-arm.out"
+  >"${tmp}/standalone-preflight-arm.out" 2>&1
+grep -q 'required.arm64-child-platform=linux/arm64' "${tmp}/standalone-preflight-arm.out"
+grep -q 'required.host-mutations=none' "${tmp}/standalone-preflight-arm.out"
 
 env FAKE_DOCKER_ARCH=x86_64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
   PATH="${tmp}/bin:${PATH}" sh "${ROOT}/docker/emulator/preflight.sh" \
   >"${tmp}/standalone-preflight-x86.out" 2>&1
 
 : >"${tmp}/docker.log"
-if run_ctl arm64 up >"${tmp}/arm.out" 2>&1; then
-  printf '%s\n' 'FAIL: ARM64 software-mode startup unexpectedly succeeded.' >&2
-  exit 1
-fi
-if ! grep -q 'ARM64' "${tmp}/arm.out"; then
-  printf '%s\n' 'FAIL: ARM64 rejection did not explain the architecture mismatch:' >&2
-  sed -n '1,80p' "${tmp}/arm.out" >&2
-  exit 1
-fi
-grep -q 'native x86_64 Linux Docker engine' "${tmp}/arm.out"
-if grep -q 'compose .* up' "${tmp}/docker.log"; then
-  printf '%s\n' 'FAIL: ARM64 guard ran after Compose startup.' >&2
-  exit 1
-fi
+run_ctl arm64 up >"${tmp}/arm.out" 2>&1
+grep -q 'build --platform linux/amd64 --target bundle --tag cloudandx/aemu-native-engine:37.1.7' "${tmp}/docker.log"
+grep -q 'compose .* up -d --build' "${tmp}/docker.log"
+grep -q 'runtime_implementation=hybrid-aemu-arm64' "${tmp}/docker.log"
 
 : >"${tmp}/docker.log"
 if run_ctl aarch64 up-kvm >"${tmp}/arm-kvm.out" 2>&1; then

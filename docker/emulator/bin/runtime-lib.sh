@@ -85,8 +85,17 @@ validate_native_aemu_bundle() {
   crashpad_handler=${bundle_root}/crashpad_handler
   qemu_img=${bundle_root}/qemu-img
   nimble_bridge=${bundle_root}/nimble_bridge
+  netsimd_launcher=${bundle_root}/netsimd
+  netsimd_binary=${bundle_root}/libexec/linux-x86_64/netsimd
   pc_bios=${bundle_root}/lib/pc-bios
   swiftshader=${bundle_root}/lib64/gles_swiftshader
+  vulkan_dir=${bundle_root}/lib64/vulkan
+  vulkan_loader=${vulkan_dir}/libvulkan.so
+  vulkan_loader_soname=${vulkan_dir}/libvulkan.so.1
+  vulkan_loader_real=${vulkan_dir}/libvulkan.so.1.4.344
+  vulkan_icd=${vulkan_dir}/libvk_swiftshader.so
+  vulkan_icd_json=${vulkan_dir}/vk_swiftshader_icd.json
+  vulkan_probe=${bundle_root}/vulkan-smoke
   resources=${bundle_root}/resources
   sdk_resource_checksums=${bundle_root}/sdk-resources.SHA256SUMS
   manifest=${bundle_root}/manifest.json
@@ -116,6 +125,12 @@ validate_native_aemu_bundle() {
   [ -x "${crashpad_handler}" ] || runtime_die "Native AEMU crashpad handler is missing: ${crashpad_handler}" || return 1
   [ -x "${qemu_img}" ] || runtime_die "Native AEMU qemu-img is missing: ${qemu_img}" || return 1
   [ -x "${nimble_bridge}" ] || runtime_die "Native AEMU NimBLE bridge is missing: ${nimble_bridge}" || return 1
+  [ -x "${netsimd_launcher}" ] \
+    || runtime_die "Native AEMU netsimd launcher is missing: ${netsimd_launcher}" \
+    || return 1
+  [ -x "${netsimd_binary}" ] \
+    || runtime_die "Native AEMU mixed-architecture netsimd helper is missing: ${netsimd_binary}" \
+    || return 1
   [ -d "${pc_bios}" ] || runtime_die "Native AEMU pc-bios data is missing: ${pc_bios}" || return 1
   find "${pc_bios}" -type f -print -quit | grep -q . \
     || runtime_die "Native AEMU pc-bios data is empty." \
@@ -141,11 +156,43 @@ validate_native_aemu_bundle() {
       || runtime_die "Native AEMU SwiftShader library is missing: ${swiftshader_library}" \
       || return 1
   done
+  [ -s "${vulkan_loader_real}" ] \
+    || runtime_die "Native AEMU Vulkan loader is missing: ${vulkan_loader_real}" \
+    || return 1
+  [ -L "${vulkan_loader_soname}" ] \
+    && [ "$(readlink "${vulkan_loader_soname}")" = libvulkan.so.1.4.344 ] \
+    || runtime_die "Native AEMU Vulkan loader SONAME link is invalid." \
+    || return 1
+  [ -L "${vulkan_loader}" ] \
+    && [ "$(readlink "${vulkan_loader}")" = libvulkan.so.1 ] \
+    || runtime_die "Native AEMU Vulkan loader link is invalid." \
+    || return 1
+  [ -s "${vulkan_icd}" ] \
+    || runtime_die "Native AEMU SwiftShader Vulkan ICD is missing: ${vulkan_icd}" \
+    || return 1
+  [ -s "${vulkan_icd_json}" ] \
+    || runtime_die "Native AEMU SwiftShader Vulkan manifest is missing: ${vulkan_icd_json}" \
+    || return 1
+  grep -Fq '"library_path": "./libvk_swiftshader.so"' "${vulkan_icd_json}" \
+    || runtime_die "Native AEMU SwiftShader Vulkan manifest selects an unexpected ICD." \
+    || return 1
+  [ -x "${vulkan_probe}" ] \
+    || runtime_die "Native AEMU Vulkan smoke probe is missing: ${vulkan_probe}" \
+    || return 1
   [ -s "${manifest}" ] || runtime_die "Native AEMU provenance manifest is missing: ${manifest}" || return 1
   [ -s "${checksums}" ] || runtime_die "Native AEMU checksum manifest is missing: ${checksums}" || return 1
   [ -s "${identity}" ] || runtime_die "Native AEMU immutable identity is missing: ${identity}" || return 1
   (cd "${bundle_root}" && sha256sum -c SHA256SUMS >/dev/null 2>&1) \
     || runtime_die "Native AEMU bundle checksum verification failed." \
+    || return 1
+  if ! netsimd_version=$(NATIVE_AEMU_ROOT="${bundle_root}" \
+    "${netsimd_launcher}" --version 2>&1); then
+    runtime_die "Native AEMU netsimd helper cannot execute in the amd64 runtime." \
+      || return 1
+  fi
+  printf '%s\n' "${netsimd_version}" \
+    | grep -Eq '(^|[^0-9])0\.3\.112([^0-9]|$)' \
+    || runtime_die "Native AEMU netsimd helper is not the locked 0.3.112 release." \
     || return 1
   [ -d "${resources}" ] \
     || runtime_die "Google Emulator runtime resources are missing: ${resources}" \
@@ -170,6 +217,26 @@ validate_native_aemu_bundle() {
     || return 1
   grep -Fxq "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" "${identity}" \
     || runtime_die "Native AEMU patch-set identity does not match the required bundle." \
+    || return 1
+}
+
+validate_native_aemu_vulkan() {
+  bundle_root=${1:-/opt/cloudandx/native-aemu}
+  probe=${bundle_root}/vulkan-smoke
+  icd_manifest=${bundle_root}/lib64/vulkan/vk_swiftshader_icd.json
+
+  if ! probe_output=$(env -i \
+    PATH=/usr/bin:/bin \
+    TMPDIR=/tmp \
+    LD_LIBRARY_PATH="${bundle_root}/lib64" \
+    VK_DRIVER_FILES="${icd_manifest}" \
+    VK_LOADER_DEBUG=error,warn \
+    "${probe}" 2>&1); then
+    runtime_die "Native AEMU Vulkan host probe failed: ${probe_output}" \
+      || return 1
+  fi
+  printf '%s\n' "${probe_output}" | grep -Fq ' PASS' \
+    || runtime_die "Native AEMU Vulkan host probe returned no PASS result." \
     || return 1
 }
 
@@ -229,7 +296,6 @@ validate_runtime_gpu_mode() {
 native_aemu_graphics_args() {
   printf '%s\n' \
     -gpu swiftshader \
-    -feature -Vulkan \
     -feature -GuestAngle \
     -feature -GuestUsesAngle \
     -feature -VulkanNativeSwapchain \

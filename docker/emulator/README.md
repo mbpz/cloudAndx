@@ -47,6 +47,8 @@ The native-engine build and all source fetching remain inside Docker.
 The main image verifies that bundle before merging only the pinned Google SDK
 `macros/` and `macroPreviews/` resource directories. Those additions receive a
 separate sorted SHA-256 manifest that runtime preflight checks again.
+The amd64 runtime also executes the bundle's locked Google `netsimd --version`
+and requires 0.3.112 before the image can be produced.
 
 The system image download is about 2.31 GB. The offline self-test target avoids all Android downloads:
 
@@ -94,6 +96,15 @@ ICD are separately locked; x86_64 retains its existing GPU behavior. This
 removes the double-translation hotspot while retaining the unmodified
 official Google Play guest. Bundle source commits, patches, DT_NEEDED closure, immutable
 identity labels and SHA-256 digests are recorded under `native-engine/`.
+
+Bluetooth, UWB, and netsim Wi-Fi packet streams use the official Google
+`netsimd` 0.3.112 helper locked from the same common revision. A launcher-root
+wrapper runs it in the existing container loopback namespace after removing the
+ARM engine's loader/GPU environment. The helper is explicitly mixed-architecture,
+excluded from the ARM ELF closure, checksum-covered, and does not add a host port
+or sidecar. The native runner fixes `QEMU_AUDIO_DRV=none` because Docker exposes
+no OSS `/dev/dsp`; this keeps guest audio timing and AEMU gRPC PCM/microphone
+paths without changing the guest or binding host audio devices.
 
 Compose enables IPv6 only on this project's Docker bridge for the virtual modem. It does not
 invoke `orb`/`orbctl` or change macOS/OrbStack networking, DNS, routes, firewall, or
@@ -155,6 +166,14 @@ The image becomes healthy only after all of the following are true:
 5. `com.android.vending` (Play Store) is installed.
 6. `com.google.android.gms` (Google Play services) is installed.
 
-The 30-minute health start period accommodates software translation. A
-successful health check proves the pinned Google Play AVD booted; it does not prove
-physical-hardware parity or Google device certification.
+Before evaluating ADB state, the internal health check makes a five-second-bounded
+connection to `127.0.0.1:${EMULATOR_ADB_PORT}` and then checks only
+`emulator-${EMULATOR_CONSOLE_PORT}`. This prevents an ADB server rescan of proxy
+port `5555` as `emulator-5554` from controlling readiness; the device bridge keeps
+using its external `emulator:5555` endpoint.
+
+The 60-minute health start period accommodates cold ARM64 TCG initialization,
+which can continue making guest disk and renderer progress beyond 30 minutes.
+Checks still run and fail closed during that window. A successful health check
+proves the pinned Google Play AVD booted; it does not prove physical-hardware
+parity or Google device certification.

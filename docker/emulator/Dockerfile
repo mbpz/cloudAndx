@@ -15,8 +15,9 @@ COPY bin/ ./bin/
 COPY avd/ ./avd/
 COPY tests/ ./tests/
 COPY native-engine/bin/run-qemu-system-x86_64-headless ./native-engine/bin/run-qemu-system-x86_64-headless
+COPY native-engine/bin/netsimd ./native-engine/bin/netsimd
 RUN chmod 0555 bin/*.sh tests/*.sh \
-      native-engine/bin/run-qemu-system-x86_64-headless \
+      native-engine/bin/run-qemu-system-x86_64-headless native-engine/bin/netsimd \
     && tests/self-test.sh
 
 FROM --platform=${RUNTIME_PLATFORM} ${RUNTIME_BASE_IMAGE} AS artifact-download-base
@@ -152,6 +153,9 @@ LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-on
       io.cloudandx.android.system-image.url="${SYSTEM_IMAGE_URL}" \
       io.cloudandx.android.system-image.sha1="${SYSTEM_IMAGE_SHA1}" \
       io.cloudandx.android.native-aemu.revision="${NATIVE_AEMU_REVISION}" \
+      io.cloudandx.android.native-aemu.netsimd.version="0.3.112" \
+      io.cloudandx.android.native-aemu.vulkan-loader.commit="bac41319cafb4527a2a959237b17611dd08bfe11" \
+      io.cloudandx.android.native-aemu.vulkan-swiftshader.commit="9a22bb9de00f5d8ddf4fc5ba5c2f425c2816e679" \
       io.cloudandx.android.native-aemu.source-lock-sha256="${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
       io.cloudandx.android.native-aemu.patch-set-sha256="${NATIVE_AEMU_PATCH_SET_SHA256}" \
       io.cloudandx.android.native-aemu.qemu-commit="${NATIVE_AEMU_QEMU_COMMIT}"
@@ -194,6 +198,12 @@ RUN set -eu; \
     && test -x /opt/cloudandx/native-aemu/crashpad_handler \
     && test -x /opt/cloudandx/native-aemu/qemu-img \
     && test -x /opt/cloudandx/native-aemu/nimble_bridge \
+    && test -x /opt/cloudandx/native-aemu/netsimd \
+    && test -x /opt/cloudandx/native-aemu/libexec/linux-x86_64/netsimd \
+    && netsimd_version=$(/opt/cloudandx/native-aemu/netsimd --version 2>&1) \
+    && printf '%s\n' "${netsimd_version}" \
+    && printf '%s\n' "${netsimd_version}" \
+      | grep -Eq '(^|[^0-9])0\.3\.112([^0-9]|$)' \
     && test -s /opt/cloudandx/native-aemu/lib/advancedFeatures.ini \
     && test -s /opt/cloudandx/native-aemu/lib/emu-original-feature-flags.protobuf \
     && test -s /opt/cloudandx/native-aemu/lib/ca-bundle.pem \
@@ -202,6 +212,16 @@ RUN set -eu; \
     && test -s /opt/cloudandx/native-aemu/lib64/gles_swiftshader/libEGL.so \
     && test -s /opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLES_CM.so \
     && test -s /opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLESv2.so \
+    && test -s /opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so.1.4.344 \
+    && test -L /opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so.1 \
+    && test "$(readlink /opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so.1)" = libvulkan.so.1.4.344 \
+    && test -L /opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so \
+    && test "$(readlink /opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so)" = libvulkan.so.1 \
+    && test -s /opt/cloudandx/native-aemu/lib64/vulkan/libvk_swiftshader.so \
+    && test -s /opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json \
+    && grep -Fq '"library_path": "./libvk_swiftshader.so"' \
+      /opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json \
+    && test -x /opt/cloudandx/native-aemu/vulkan-smoke \
     && test -d /opt/android-sdk/emulator/resources \
     && test -d /opt/cloudandx/native-aemu/resources \
     && for resource_dir in macros macroPreviews; do \
@@ -255,7 +275,7 @@ WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 5555/tcp 8554/tcp
 
-HEALTHCHECK --start-period=30m --interval=30s --timeout=15s --retries=10 \
+HEALTHCHECK --start-period=60m --interval=30s --timeout=15s --retries=10 \
   CMD ["/usr/local/bin/healthcheck.sh"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

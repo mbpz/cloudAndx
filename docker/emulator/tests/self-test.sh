@@ -73,8 +73,9 @@ assert_eq on "$(resolve_acceleration kvm /dev/null)" 'explicit kvm selects accel
 assert_eq off "$(resolve_acceleration off /dev/null)" 'off remains off'
 assert_fails 'forced kvm rejects missing device' resolve_acceleration kvm /path/that/does/not/exist
 assert_fails 'invalid acceleration rejected' resolve_acceleration turbo /dev/null
-assert_eq off "$(resolve_runtime_acceleration arm64 auto /dev/null)" 'ARM64 auto always selects software translation'
-assert_eq off "$(resolve_runtime_acceleration aarch64 off /dev/null)" 'ARM64 explicit software mode is accepted'
+assert_eq off "$(resolve_runtime_acceleration arm64 auto /dev/null)" 'ARM64 auto selects software TCG for the AEMU NONE-accelerator guard'
+assert_eq off "$(resolve_runtime_acceleration aarch64 off /dev/null)" 'ARM64 explicit software TCG is accepted'
+assert_eq on "$(resolve_runtime_acceleration x86_64 kvm /dev/null)" 'x86_64 KVM remains accelerated'
 assert_fails 'ARM64 rejects KVM for the x86_64 guest' resolve_runtime_acceleration arm64 kvm /dev/null
 validate_engine_architecture x86_64 native
 pass
@@ -134,6 +135,7 @@ mkdir -p \
   "${native_aemu}/qemu/linux-aarch64" \
   "${native_aemu}/lib/pc-bios" \
   "${native_aemu}/lib64/gles_swiftshader" \
+  "${native_aemu}/libexec/linux-x86_64" \
   "${native_aemu}/resources/skins/android-36" \
   "${native_aemu}/resources/macros" \
   "${native_aemu}/resources/macroPreviews" \
@@ -160,8 +162,21 @@ cp "${ROOT}/bin/qemu-system-x86_64-headless-dispatcher.sh" \
   "${sdk}/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless"
 printf '%s\n' '#!/bin/sh' 'printf "native:%s\n" "$*"' \
   >"${native_aemu}/bin/run-qemu-system-x86_64-headless"
-printf '%s\n' '#!/bin/sh' 'exit 0' \
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ "${1-}" = --print-audio-driver ]; then printf "%s\n" "${QEMU_AUDIO_DRV-}"; fi' \
+  'exit 0' \
   >"${native_aemu}/qemu/linux-aarch64/qemu-system-x86_64-headless"
+cp "${ROOT}/native-engine/bin/netsimd" "${native_aemu}/netsimd"
+printf '%s\n' \
+  '#!/bin/sh' \
+  '[ -z "${LD_LIBRARY_PATH-}" ] || exit 81' \
+  '[ -z "${ANDROID_EGL_LIB-}" ] || exit 82' \
+  '[ -z "${VK_DRIVER_FILES-}" ] || exit 83' \
+  '[ -z "${LIBGL_DRIVERS_PATH-}" ] || exit 84' \
+  '[ "${1-}" = --version ] || exit 85' \
+  'printf "%s\n" "netsimd 0.3.112"' \
+  >"${native_aemu}/libexec/linux-x86_64/netsimd"
 for helper in crashpad_handler qemu-img nimble_bridge; do
   printf '%s\n' '#!/bin/sh' 'exit 0' >"${native_aemu}/${helper}"
 done
@@ -196,6 +211,8 @@ chmod 0755 \
   "${native_aemu}/crashpad_handler" \
   "${native_aemu}/qemu-img" \
   "${native_aemu}/nimble_bridge" \
+  "${native_aemu}/netsimd" \
+  "${native_aemu}/libexec/linux-x86_64/netsimd" \
   "${native_aemu}/lib64/ld-linux-aarch64.so.1"
 
 write_fake_bundle_checksums() {
@@ -216,8 +233,30 @@ write_fake_bundle_checksums() {
 }
 
 write_fake_bundle_checksums
+mixed_helper_output=$(env \
+  NATIVE_AEMU_ROOT="${native_aemu}" \
+  LD_LIBRARY_PATH=/arm64/lib \
+  ANDROID_EGL_LIB=/arm64/libEGL.so \
+  VK_DRIVER_FILES=/arm64/vk.json \
+  LIBGL_DRIVERS_PATH=/arm64/dri \
+  "${native_aemu}/netsimd" --version)
+assert_contains "${mixed_helper_output}" 'netsimd 0.3.112' \
+  'netsimd launcher clears ARM loader and GPU variables before the x86_64 helper'
+runner_audio_output=$(env NATIVE_AEMU_ROOT="${native_aemu}" QEMU_AUDIO_DRV=oss \
+  "${ROOT}/native-engine/bin/run-qemu-system-x86_64-headless" \
+  --print-audio-driver)
+assert_eq none "${runner_audio_output}" \
+  'native runner replaces inherited OSS audio with the no-host-device backend'
 validate_native_aemu_bundle "${native_aemu}"
 pass
+mv "${native_aemu}/libexec/linux-x86_64/netsimd" \
+  "${native_aemu}/libexec/linux-x86_64/netsimd.missing"
+write_fake_bundle_checksums
+assert_fails 'native bundle rejects a checksum-valid missing mixed-architecture netsimd helper' \
+  validate_native_aemu_bundle "${native_aemu}"
+mv "${native_aemu}/libexec/linux-x86_64/netsimd.missing" \
+  "${native_aemu}/libexec/linux-x86_64/netsimd"
+write_fake_bundle_checksums
 mv "${native_aemu}/lib64/libX11-xcb.so.1" \
   "${native_aemu}/lib64/libX11-xcb.so.1.missing"
 write_fake_bundle_checksums
@@ -336,17 +375,26 @@ fi
 pass
 
 fake_adb=${tmp}/fake-adb
+fake_adb_log=${tmp}/fake-adb.log
 printf '%s\n' \
   '#!/bin/sh' \
+  'expected_endpoint=${FAKE_ADB_ENDPOINT:-127.0.0.1:5557}' \
+  'expected_serial=${FAKE_ADB_SERIAL:-emulator-5556}' \
+  '[ -z "${FAKE_ADB_LOG:-}" ] || printf "%s\\n" "$*" >>"${FAKE_ADB_LOG}"' \
   'case "$*" in' \
-  '  *"get-state"*) printf "%s\\n" device ;;' \
-  '  *"getprop sys.boot_completed"*) printf "%s\\n" "${FAKE_BOOT:-1}" ;;' \
-  '  *"getprop ro.build.version.sdk"*) printf "%s\\n" "${FAKE_SDK:-37}" ;;' \
-  '  *"pm path com.android.vending"*) [ "${FAKE_PLAY:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/Phonesky/Phonesky.apk ;;' \
-  '  *"pm path com.google.android.gms"*) [ "${FAKE_GMS:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk ;;' \
+  '  "connect ${expected_endpoint}")' \
+  '    [ "${FAKE_CONNECT:-1}" = 1 ] || exit 1' \
+  '    printf "connected to %s\\n" "${expected_endpoint}"' \
+  '    ;;' \
+  '  "-s ${expected_serial} get-state") printf "%s\\n" "${FAKE_STATE:-device}" ;;' \
+  '  "-s ${expected_serial} shell getprop sys.boot_completed") printf "%s\\n" "${FAKE_BOOT:-1}" ;;' \
+  '  "-s ${expected_serial} shell getprop ro.build.version.sdk") printf "%s\\n" "${FAKE_SDK:-37}" ;;' \
+  '  "-s ${expected_serial} shell pm path com.android.vending") [ "${FAKE_PLAY:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/Phonesky/Phonesky.apk ;;' \
+  '  "-s ${expected_serial} shell pm path com.google.android.gms") [ "${FAKE_GMS:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk ;;' \
   '  *) exit 1 ;;' \
   'esac' >"${fake_adb}"
 chmod 0755 "${fake_adb}"
+: >"${fake_adb_log}"
 
 tcp_probe=${tmp}/fake-tcp-probe
 printf '%s\n' '#!/bin/sh' '[ "${FAKE_GRPC:-1}" = 1 ]' >"${tcp_probe}"
@@ -365,6 +413,7 @@ NATIVE_AEMU_ROOT=${real_native_aemu} \
   ANDROID_EMU_VK_LOADER_PATH=/inherited/x86/libvulkan.so \
   VK_ICD_FILENAMES=/inherited/x86/icd.json \
   VK_ADD_DRIVER_FILES=/inherited/x86/additional-icd.json \
+  QEMU_AUDIO_DRV=oss \
   "${ROOT}/native-engine/bin/run-qemu-system-x86_64-headless" 30 &
 real_engine_pid=$!
 attempt=0
@@ -384,6 +433,9 @@ pass
 tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
   | grep -Fxq "ANDROID_EMULATOR_LAUNCHER_DIR=${real_native_aemu}"
 pass
+tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
+  | grep -Fxq 'QEMU_AUDIO_DRV=none'
+pass
 if tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
   | grep -Eq '^(ANDROID_EGL_LIB|ANDROID_EMU_VK_LOADER_PATH|VK_ICD_FILENAMES|VK_ADD_DRIVER_FILES)='; then
   printf '%s\n' 'FAIL: native runner preserved inherited x86 graphics environment.' >&2
@@ -393,7 +445,7 @@ pass
 env DOCKER_ENGINE_ARCHITECTURE=arm64 \
   ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \
   NATIVE_AEMU_ROOT="${real_native_aemu}" \
-  ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" \
+  ADB_BIN="${fake_adb}" FAKE_ADB_LOG="${fake_adb_log}" SOCAT_BIN="${tcp_probe}" \
   "${ROOT}/bin/healthcheck.sh"
 pass
 kill "${real_engine_pid}"
@@ -401,14 +453,38 @@ wait "${real_engine_pid}" 2>/dev/null || true
 real_engine_pid=
 
 expected_process=$(readlink /proc/$$/exe)
-health_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native UPSTREAM_QEMU_ENGINE=${expected_process} ADB_BIN=${fake_adb} SOCAT_BIN=${tcp_probe}"
+health_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native UPSTREAM_QEMU_ENGINE=${expected_process} ADB_BIN=${fake_adb} FAKE_ADB_LOG=${fake_adb_log} SOCAT_BIN=${tcp_probe}"
+: >"${fake_adb_log}"
 env ${health_env} "${ROOT}/bin/healthcheck.sh"
+pass
+grep -Fxq 'connect 127.0.0.1:5557' "${fake_adb_log}"
+pass
+grep -Fxq -- '-s emulator-5556 get-state' "${fake_adb_log}"
+pass
+if grep -Eq -- '^-s (127\.0\.0\.1:5557|emulator-5554) ' "${fake_adb_log}"; then
+  printf '%s\n' 'FAIL: healthcheck selected a direct TCP or proxy-discovered ADB serial.' >&2
+  exit 1
+fi
+pass
+: >"${fake_adb_log}"
+env ${health_env} \
+  EMULATOR_CONSOLE_PORT=5580 EMULATOR_ADB_PORT=5581 \
+  FAKE_ADB_ENDPOINT=127.0.0.1:5581 FAKE_ADB_SERIAL=emulator-5580 \
+  "${ROOT}/bin/healthcheck.sh"
+grep -Fxq 'connect 127.0.0.1:5581' "${fake_adb_log}"
+grep -Fxq -- '-s emulator-5580 get-state' "${fake_adb_log}"
 pass
 assert_fails 'healthcheck requires the selected child process' \
   env DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_RUNTIME_IMPLEMENTATION=native \
     UPSTREAM_QEMU_ENGINE="${tmp}/not-running" ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" \
     "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires gRPC proxy' env ${health_env} FAKE_GRPC=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires the internal ADB connect to succeed' \
+  env ${health_env} FAKE_CONNECT=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires the configured emulator serial after connect' \
+  env ${health_env} FAKE_ADB_SERIAL=emulator-5554 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects an offline configured emulator serial' \
+  env ${health_env} FAKE_STATE=offline "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck rejects incomplete boot' env ${health_env} FAKE_BOOT=0 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck rejects wrong API' env ${health_env} FAKE_SDK=36 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires Play Store' env ${health_env} FAKE_PLAY=0 "${ROOT}/bin/healthcheck.sh"

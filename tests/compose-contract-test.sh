@@ -3,6 +3,8 @@ set -eu
 
 ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 compose_file=${ROOT}/compose.yaml
+emulator_dockerfile=${ROOT}/docker/emulator/Dockerfile
+emulator_readme=${ROOT}/docker/emulator/README.md
 
 grep -q '^  runtime-compatibility:$' "${compose_file}"
 grep -q 'DOCKER_ENGINE_ARCHITECTURE:' "${compose_file}"
@@ -29,6 +31,14 @@ case "${bridge_block}" in
     ;;
 esac
 
+case "${bridge_block}" in
+  *'ADB_SERIAL: emulator:5555'*) ;;
+  *)
+    printf '%s\n' 'FAIL: device bridge no longer uses the external emulator ADB proxy.' >&2
+    exit 1
+    ;;
+esac
+
 case "${emulator_block}" in
   *'restart: "on-failure:3"'*) ;;
   *)
@@ -47,6 +57,10 @@ esac
 grep -q 'ARM64 / OrbStack hybrid engine' "${ROOT}/docker/emulator/README.md"
 grep -q 'hybrid-aemu-arm64' "${ROOT}/README.md"
 grep -q '不会修改' "${ROOT}/README.md"
+grep -Fq 'HEALTHCHECK --start-period=60m --interval=30s --timeout=15s --retries=10' \
+  "${emulator_dockerfile}"
+grep -Fq 'The 60-minute health start period accommodates cold ARM64 TCG initialization' \
+  "${emulator_readme}"
 if grep -q 'KVM_GID:-0' "${ROOT}/compose.kvm.yaml"; then
   printf '%s\n' 'FAIL: KVM override silently falls back to the root group.' >&2
   exit 1

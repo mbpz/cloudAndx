@@ -7,16 +7,20 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/opt/android-sdk}
 ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 EMULATOR_CONSOLE_PORT=${EMULATOR_CONSOLE_PORT:-5556}
+EMULATOR_ADB_PORT=${EMULATOR_ADB_PORT:-5557}
 EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
 SOCAT_BIN=${SOCAT_BIN:-socat}
+TIMEOUT_BIN=${TIMEOUT_BIN:-timeout}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
 ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-native}
 serial=emulator-${EMULATOR_CONSOLE_PORT}
+adb_endpoint=127.0.0.1:${EMULATOR_ADB_PORT}
 
 validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}"
 expected_engine=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 engine_process_matches_expected "${expected_engine}"
 "${SOCAT_BIN}" -T2 -u OPEN:/dev/null "TCP4:127.0.0.1:${EMULATOR_GRPC_PORT},connect-timeout=2" >/dev/null 2>&1
+"${TIMEOUT_BIN}" 5s "${ADB_BIN}" connect "${adb_endpoint}" >/dev/null 2>&1
 [ "$("${ADB_BIN}" -s "${serial}" get-state 2>/dev/null)" = device ]
 [ "$("${ADB_BIN}" -s "${serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]
 [ "$("${ADB_BIN}" -s "${serial}" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')" = 37 ]

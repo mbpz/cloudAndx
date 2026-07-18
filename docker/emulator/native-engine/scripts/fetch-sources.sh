@@ -33,6 +33,18 @@ validate_archive_members() {
   done < <(tar -tzf "${archive}")
 }
 
+validate_github_archive_root() {
+  local archive=$1 expected_root=$2 member root
+
+  while IFS= read -r member; do
+    [[ -n "${member}" ]] || continue
+    member=${member#./}
+    root=${member%%/*}
+    [[ "${root}" == "${expected_root}" && "${member}" == */* ]] \
+      || die "GitHub archive member escaped its immutable root: ${member}"
+  done < <(tar -tzf "${archive}")
+}
+
 verify_git_tree() {
   local source_dir=$1 expected_tree=$2 actual_tree
 
@@ -94,20 +106,33 @@ fetch_locked_files() {
 }
 
 fetch_one() {
-  local source_json=$1 id repository commit subtree destination git_tree verify_tree file_count
-  local url temp_dir archive extract_dir target
+  local source_json=$1 id repository commit archive_kind subtree destination git_tree verify_tree file_count
+  local url temp_dir archive archive_root extract_dir target
 
   id=$(jq -r '.id' <<<"${source_json}")
   repository=$(jq -r '.repository' <<<"${source_json}")
   commit=$(jq -r '.commit' <<<"${source_json}")
+  archive_kind=$(jq -r '.archive_kind // "gitiles"' <<<"${source_json}")
   subtree=$(jq -r '.subtree' <<<"${source_json}")
   destination=$(jq -r '.destination' <<<"${source_json}")
   git_tree=$(jq -r '.git_tree // empty' <<<"${source_json}")
   verify_tree=$(jq -r '.verify_tree' <<<"${source_json}")
   file_count=$(jq -r '.files // [] | length' <<<"${source_json}")
 
-  [[ "${repository}" =~ ^https://android\.googlesource\.com/[A-Za-z0-9._/-]+$ ]] \
-    || die "${id}: repository is outside the official allow-list"
+  case ${archive_kind} in
+    gitiles)
+      [[ "${repository}" =~ ^https://android\.googlesource\.com/[A-Za-z0-9._/-]+$ ]] \
+        || die "${id}: Gitiles repository is outside the official allow-list"
+      ;;
+    github)
+      case ${repository} in
+        https://github.com/KhronosGroup/Vulkan-Loader|\
+        https://github.com/KhronosGroup/Vulkan-Headers) ;;
+        *) die "${id}: GitHub repository is outside the official allow-list" ;;
+      esac
+      ;;
+    *) die "${id}: unsupported archive kind: ${archive_kind}" ;;
+  esac
   [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || die "${id}: commit is not a full SHA-1"
   safe_relative_path "${destination}" || die "${id}: unsafe destination"
   temp_dir=$(mktemp -d)
@@ -117,24 +142,42 @@ fetch_one() {
   printf 'fetch-sources: %s\n' "${id}"
 
   if (( file_count > 0 )); then
+    [[ "${archive_kind}" == gitiles ]] \
+      || die "${id}: locked individual files require Gitiles"
     [[ -z "${subtree}" ]] || die "${id}: locked files cannot also use a subtree"
     [[ "${verify_tree}" == false ]] \
       || die "${id}: a partial locked file set cannot verify a whole tree"
     fetch_locked_files "${source_json}" "${repository}" "${commit}" \
       "${temp_dir}" "${extract_dir}"
   else
-    if [[ -n "${subtree}" ]]; then
-      safe_relative_path "${subtree}" || die "${id}: unsafe subtree"
-      url="${repository}/+archive/${commit}/${subtree}.tar.gz"
-    else
-      url="${repository}/+archive/${commit}.tar.gz"
-    fi
+    case ${archive_kind} in
+      gitiles)
+        if [[ -n "${subtree}" ]]; then
+          safe_relative_path "${subtree}" || die "${id}: unsafe subtree"
+          url="${repository}/+archive/${commit}/${subtree}.tar.gz"
+        else
+          url="${repository}/+archive/${commit}.tar.gz"
+        fi
+        ;;
+      github)
+        [[ -z "${subtree}" ]] \
+          || die "${id}: GitHub subtree archives are not supported"
+        url="${repository}/archive/${commit}.tar.gz"
+        archive_root=${repository##*/}-${commit}
+        ;;
+    esac
     curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
       --retry 5 --retry-all-errors --connect-timeout 30 \
       --output "${archive}" "${url}"
     validate_archive_members "${archive}"
-    tar --extract --gzip --file "${archive}" --directory "${extract_dir}" \
-      --no-same-owner --no-same-permissions
+    if [[ "${archive_kind}" == github ]]; then
+      validate_github_archive_root "${archive}" "${archive_root}"
+      tar --extract --gzip --file "${archive}" --directory "${extract_dir}" \
+        --strip-components=1 --no-same-owner --no-same-permissions
+    else
+      tar --extract --gzip --file "${archive}" --directory "${extract_dir}" \
+        --no-same-owner --no-same-permissions
+    fi
 
     if [[ "${verify_tree}" == true ]]; then
       [[ "${git_tree}" =~ ^[0-9a-f]{40}$ ]] \

@@ -41,7 +41,10 @@ engine_executable=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 [ -x "${UPSTREAM_QEMU_ENGINE}" ] || runtime_die "Upstream Google x86_64 AEMU child is missing or not executable: ${UPSTREAM_QEMU_ENGINE}"
 validate_native_aemu_bundle "${NATIVE_AEMU_ROOT}"
 case ${DOCKER_ENGINE_ARCHITECTURE} in
-  arm64|aarch64) validate_native_aemu_direct_execution "${NATIVE_AEMU_ROOT}" ;;
+  arm64|aarch64)
+    validate_native_aemu_direct_execution "${NATIVE_AEMU_ROOT}"
+    validate_native_aemu_vulkan "${NATIVE_AEMU_ROOT}"
+    ;;
 esac
 if [ "${SOCAT_BIN}" = "socat" ]; then
   command -v socat >/dev/null 2>&1 || runtime_die "socat is not installed."

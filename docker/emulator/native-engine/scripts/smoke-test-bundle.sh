@@ -5,6 +5,7 @@ export LC_ALL=C
 
 BUNDLE_DIR=${BUNDLE_DIR:-/out/bundle/opt/cloudandx/native-aemu}
 READELF=${READELF:-aarch64-linux-gnu-readelf}
+HOST_READELF=${HOST_READELF:-readelf}
 NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION:-}
 NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256:-}
 NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256:-}
@@ -17,7 +18,16 @@ X11_XCB=${BUNDLE_DIR}/lib64/libX11-xcb.so.1
 CRASHPAD_HANDLER=${BUNDLE_DIR}/crashpad_handler
 QEMU_IMG=${BUNDLE_DIR}/qemu-img
 NIMBLE_BRIDGE=${BUNDLE_DIR}/nimble_bridge
+NETSIMD_LAUNCHER=${BUNDLE_DIR}/netsimd
+NETSIMD_BINARY=${BUNDLE_DIR}/libexec/linux-x86_64/netsimd
 SWIFTSHADER_DIR=${BUNDLE_DIR}/lib64/gles_swiftshader
+VULKAN_DIR=${BUNDLE_DIR}/lib64/vulkan
+VULKAN_LOADER=${VULKAN_DIR}/libvulkan.so
+VULKAN_LOADER_SONAME=${VULKAN_DIR}/libvulkan.so.1
+VULKAN_LOADER_REAL=${VULKAN_DIR}/libvulkan.so.1.4.344
+VULKAN_ICD=${VULKAN_DIR}/libvk_swiftshader.so
+VULKAN_ICD_JSON=${VULKAN_DIR}/vk_swiftshader_icd.json
+VULKAN_PROBE=${BUNDLE_DIR}/vulkan-smoke
 IDENTITY=${BUNDLE_DIR}/identity.properties
 
 die() {
@@ -75,6 +85,12 @@ for required in \
   "${CRASHPAD_HANDLER}" \
   "${QEMU_IMG}" \
   "${NIMBLE_BRIDGE}" \
+  "${NETSIMD_LAUNCHER}" \
+  "${NETSIMD_BINARY}" \
+  "${VULKAN_LOADER_REAL}" \
+  "${VULKAN_ICD}" \
+  "${VULKAN_ICD_JSON}" \
+  "${VULKAN_PROBE}" \
   "${IDENTITY}" \
   "${BUNDLE_DIR}/manifest.json" \
   "${BUNDLE_DIR}/SHA256SUMS"; do
@@ -82,7 +98,8 @@ for required in \
 done
 
 for executable in "${ENGINE}" "${RUNNER}" "${LOADER}" \
-  "${CRASHPAD_HANDLER}" "${QEMU_IMG}" "${NIMBLE_BRIDGE}"; do
+  "${CRASHPAD_HANDLER}" "${QEMU_IMG}" "${NIMBLE_BRIDGE}" \
+  "${NETSIMD_LAUNCHER}" "${NETSIMD_BINARY}" "${VULKAN_PROBE}"; do
   [[ -x "${executable}" ]] || die "bundle executable is not executable: ${executable}"
 done
 
@@ -92,6 +109,7 @@ done
 )
 
 sh -n "${RUNNER}"
+sh -n "${NETSIMD_LAUNCHER}"
 grep -Fq 'ROOT=${NATIVE_AEMU_ROOT:-/opt/cloudandx/native-aemu}' "${RUNNER}" \
   || die 'runner does not default to the fixed bundle root'
 grep -Fq 'ENGINE=${ROOT}/qemu/linux-aarch64/qemu-system-x86_64-headless' "${RUNNER}" \
@@ -106,15 +124,81 @@ grep -Fq 'unset VK_ICD_FILENAMES VK_DRIVER_FILES' "${RUNNER}" \
   || die 'runner does not clear inherited Vulkan driver selection'
 grep -Fq 'ANDROID_EMULATOR_LAUNCHER_DIR=${ROOT}' "${RUNNER}" \
   || die 'runner does not replace the inherited launcher directory'
+grep -Fq 'ANDROID_EMU_VK_LOADER_PATH=${ROOT}/lib64/vulkan/libvulkan.so' "${RUNNER}" \
+  || die 'runner does not select the locked AArch64 Vulkan loader'
+grep -Fq 'ANDROID_EMU_VK_ICD=swiftshader' "${RUNNER}" \
+  || die 'runner does not select the locked SwiftShader Vulkan ICD'
 grep -Fq 'LIBRARY_PATH=${ROOT}/lib64:${ROOT}/lib64/gles_swiftshader' "${RUNNER}" \
   || die 'runner does not select the ARM64 library and SwiftShader directories'
 grep -Fq 'LD_LIBRARY_PATH=${LIBRARY_PATH}' "${RUNNER}" \
   || die 'runner does not replace the inherited library path'
+grep -Fq 'QEMU_AUDIO_DRV=none' "${RUNNER}" \
+  || die 'runner does not select the host-device-free QEMU audio backend'
+grep -Fq 'export ANDROID_EMULATOR_LAUNCHER_DIR LD_LIBRARY_PATH QEMU_AUDIO_DRV' "${RUNNER}" \
+  || die 'runner does not export the locked audio backend'
 grep -Fq 'exec "${ENGINE}" "$@"' "${RUNNER}" \
   || die 'runner does not directly exec the engine'
 if grep -Fq 'exec "${LOADER}"' "${RUNNER}"; then
   die 'runner still executes the ELF loader as the process image'
 fi
+
+[[ -L "${VULKAN_LOADER}" && $(readlink "${VULKAN_LOADER}") == libvulkan.so.1 ]] \
+  || die 'Vulkan loader unversioned symlink is invalid'
+[[ -L "${VULKAN_LOADER_SONAME}" \
+  && $(readlink "${VULKAN_LOADER_SONAME}") == libvulkan.so.1.4.344 ]] \
+  || die 'Vulkan loader SONAME symlink is invalid'
+[[ $("${READELF}" -d "${VULKAN_LOADER_REAL}" 2>/dev/null \
+  | sed -n 's/.*(SONAME).*\[\([^]]*\)\].*/\1/p') == libvulkan.so.1 ]] \
+  || die 'Vulkan loader ELF SONAME is invalid'
+jq -e '
+  .file_format_version == "1.0.0" and
+  .ICD.library_path == "./libvk_swiftshader.so" and
+  .ICD.api_version == "1.0.5"
+' "${VULKAN_ICD_JSON}" >/dev/null \
+  || die 'SwiftShader Vulkan ICD manifest is invalid'
+VULKAN_PROBE_RUNPATH=$("${READELF}" -d "${VULKAN_PROBE}" 2>/dev/null \
+  | sed -n 's/.*(RUNPATH).*\[\([^]]*\)\].*/\1/p')
+search_path_contains "${VULKAN_PROBE_RUNPATH}" '$ORIGIN/lib64/vulkan' \
+  || die 'Vulkan probe does not use the bundle-local loader path'
+validate_origin_search_path "${VULKAN_PROBE_RUNPATH}" RUNPATH
+
+grep -Fq 'NETSIMD=${ROOT}/libexec/linux-x86_64/netsimd' "${NETSIMD_LAUNCHER}" \
+  || die 'netsimd launcher does not use the classified mixed-architecture helper path'
+grep -Fq 'unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT' "${NETSIMD_LAUNCHER}" \
+  || die 'netsimd launcher does not clear inherited ARM loader variables'
+grep -Fq 'unset ANDROID_EGL_LIB ANDROID_GLESv1_LIB ANDROID_GLESv2_LIB' \
+  "${NETSIMD_LAUNCHER}" \
+  || die 'netsimd launcher does not clear inherited GPU library selection'
+grep -Fq 'unset VK_ICD_FILENAMES VK_DRIVER_FILES' "${NETSIMD_LAUNCHER}" \
+  || die 'netsimd launcher does not clear inherited Vulkan driver selection'
+grep -Fq 'exec "${NETSIMD}" "$@"' "${NETSIMD_LAUNCHER}" \
+  || die 'netsimd launcher does not preserve daemon arguments'
+
+"${HOST_READELF}" -h "${NETSIMD_BINARY}" \
+  | grep -Eq 'Machine:[[:space:]]+Advanced Micro Devices X86-64' \
+  || die 'mixed-architecture netsimd helper is not x86_64'
+NETSIMD_INTERPRETER=$("${HOST_READELF}" -l "${NETSIMD_BINARY}" \
+  | sed -n 's/.*Requesting program interpreter: \([^]]*\)].*/\1/p')
+[[ "${NETSIMD_INTERPRETER}" == /lib64/ld-linux-x86-64.so.2 ]] \
+  || die "unexpected netsimd ELF interpreter: ${NETSIMD_INTERPRETER:-missing}"
+EXPECTED_NETSIMD_NEEDED=$'ld-linux-x86-64.so.2\nlibc.so.6\nlibdl.so.2\nlibm.so.6\nlibpthread.so.0\nlibrt.so.1'
+ACTUAL_NETSIMD_NEEDED=$("${HOST_READELF}" -d "${NETSIMD_BINARY}" 2>/dev/null \
+  | sed -n 's/.*(NEEDED).*\[\([^]]*\)\].*/\1/p' | sort -u)
+[[ "${ACTUAL_NETSIMD_NEEDED}" == "${EXPECTED_NETSIMD_NEEDED}" ]] \
+  || die 'netsimd system-library dependency set changed'
+[[ ! -e "${BUNDLE_DIR}/lib64/netsimd" ]] \
+  || die 'x86_64 netsimd leaked into the AArch64 library closure'
+NETSIMD_VERSION_OUTPUT=$("${NETSIMD_LAUNCHER}" --version 2>&1) \
+  || die 'netsimd launcher did not execute on the amd64 smoke-test platform'
+grep -Eq '(^|[^0-9])0\.3\.112([^0-9]|$)' <<<"${NETSIMD_VERSION_OUTPUT}" \
+  || die "unexpected netsimd version output: ${NETSIMD_VERSION_OUTPUT}"
+NETSIMD_SHA256=$(sha256sum "${NETSIMD_BINARY}" | awk '{print $1}')
+VULKAN_LOADER_SHA256=$(sha256sum "${VULKAN_LOADER_REAL}" | awk '{print $1}')
+VULKAN_ICD_SHA256=$(sha256sum "${VULKAN_ICD}" | awk '{print $1}')
+VULKAN_ICD_JSON_SHA256=$(sha256sum "${VULKAN_ICD_JSON}" | awk '{print $1}')
+VULKAN_PROBE_SHA256=$(sha256sum "${VULKAN_PROBE}" | awk '{print $1}')
+VULKAN_PROBE_BUILD_ID=$(elf_build_id "${VULKAN_PROBE}")
+[[ -n "${VULKAN_PROBE_BUILD_ID}" ]] || die 'Vulkan probe has no GNU Build ID'
 
 [[ -L "${BUNDLE_DIR}/qemu/linux-aarch64/lib64" \
   && $(readlink "${BUNDLE_DIR}/qemu/linux-aarch64/lib64") == ../../lib64 ]] \
@@ -187,7 +271,8 @@ while IFS= read -r elf_file; do
   validate_origin_search_path "${ELF_RUNPATH}" RUNPATH
   while IFS= read -r needed; do
     [[ -f "${BUNDLE_DIR}/lib64/${needed}" \
-      || -f "${SWIFTSHADER_DIR}/${needed}" ]] \
+      || -f "${SWIFTSHADER_DIR}/${needed}" \
+      || -f "${VULKAN_DIR}/${needed}" ]] \
       || die "unresolved bundled DT_NEEDED entry ${needed} from ${elf_file}"
   done < <("${READELF}" -d "${elf_file}" 2>/dev/null \
     | sed -n 's/.*(NEEDED).*\[\([^]]*\)\].*/\1/p' | sort -u)
@@ -196,8 +281,9 @@ done < <(
     "${ENGINE}" \
     "${CRASHPAD_HANDLER}" \
     "${QEMU_IMG}" \
-    "${NIMBLE_BRIDGE}"
-  find "${BUNDLE_DIR}/lib64" -type f -print | sort
+    "${NIMBLE_BRIDGE}" \
+    "${VULKAN_PROBE}"
+  find "${BUNDLE_DIR}/lib64" -type f ! -name '*.json' -print | sort
 )
 
 if grep -Fq '/out/build' "${BUNDLE_DIR}/manifest.json"; then
@@ -208,7 +294,13 @@ jq -e \
   --arg interpreter "${INTERPRETER}" \
   --arg rpath "${RPATH}" \
   --arg runpath "${RUNPATH}" \
-  --arg build_id "${BUILD_ID}" '
+  --arg build_id "${BUILD_ID}" \
+  --arg netsimd_sha256 "${NETSIMD_SHA256}" \
+  --arg vulkan_loader_sha256 "${VULKAN_LOADER_SHA256}" \
+  --arg vulkan_icd_sha256 "${VULKAN_ICD_SHA256}" \
+  --arg vulkan_icd_json_sha256 "${VULKAN_ICD_JSON_SHA256}" \
+  --arg vulkan_probe_sha256 "${VULKAN_PROBE_SHA256}" \
+  --arg vulkan_probe_build_id "${VULKAN_PROBE_BUILD_ID}" '
   .schema_version == 2 and
   .product == "cloudandx-aemu-native-engine" and
   .revision == "37.1.7" and
@@ -220,13 +312,71 @@ jq -e \
   .helpers.crashpad_handler == "/opt/cloudandx/native-aemu/crashpad_handler" and
   .helpers.qemu_img == "/opt/cloudandx/native-aemu/qemu-img" and
   .helpers.nimble_bridge == "/opt/cloudandx/native-aemu/nimble_bridge" and
+  .helpers.netsimd == "/opt/cloudandx/native-aemu/netsimd" and
+  .helpers.vulkan_smoke == "/opt/cloudandx/native-aemu/vulkan-smoke" and
+  .mixed_arch_helpers.netsimd == {
+    "architecture": "x86_64",
+    "version": "0.3.112",
+    "launcher": "/opt/cloudandx/native-aemu/netsimd",
+    "binary": "/opt/cloudandx/native-aemu/libexec/linux-x86_64/netsimd",
+    "interpreter": "/lib64/ld-linux-x86-64.so.2",
+    "sha256": $netsimd_sha256,
+    "dt_needed": [
+      "ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libdl.so.2",
+      "libm.so.6",
+      "libpthread.so.0",
+      "librt.so.1"
+    ],
+    "included_in_aarch64_dt_needed_closure": false,
+    "source": {
+      "lock_id": "common-netsimd-linux-x86_64",
+      "repository": "https://android.googlesource.com/platform/prebuilts/android-emulator-build/common",
+      "commit": "f64c458fc47ac18f738f9c8bdecb64d265f530f4",
+      "tree": "e81f67597e83b179f8aff5417d2282ddb9a1d4e5",
+      "path": "netsim/linux-x86_64/netsimd",
+      "git_blob_sha1": "1f0af5c2d0a266ffbda044cdf7b48cd584608319"
+    }
+  } and
   .runtime_dlopen == {
     "gfxstream_backend": "/opt/cloudandx/native-aemu/lib64/libgfxstream_backend.so",
     "x11_xcb": "/opt/cloudandx/native-aemu/lib64/libX11-xcb.so.1",
     "swiftshader_egl": "/opt/cloudandx/native-aemu/lib64/gles_swiftshader/libEGL.so",
     "swiftshader_gles_cm": "/opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLES_CM.so",
-    "swiftshader_gles_v2": "/opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLESv2.so"
+    "swiftshader_gles_v2": "/opt/cloudandx/native-aemu/lib64/gles_swiftshader/libGLESv2.so",
+    "vulkan_loader": "/opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so",
+    "swiftshader_vulkan_icd": "/opt/cloudandx/native-aemu/lib64/vulkan/libvk_swiftshader.so",
+    "swiftshader_vulkan_manifest": "/opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json"
   } and
+  .vulkan.loader.path == "/opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so" and
+  .vulkan.loader.soname_path == "/opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so.1" and
+  .vulkan.loader.real_path == "/opt/cloudandx/native-aemu/lib64/vulkan/libvulkan.so.1.4.344" and
+  .vulkan.loader.version == "1.4.344" and
+  .vulkan.loader.soname == "libvulkan.so.1" and
+  .vulkan.loader.sha256 == $vulkan_loader_sha256 and
+  (.vulkan.loader.dt_needed | length > 0) and
+  .vulkan.loader.source.repository == "https://github.com/KhronosGroup/Vulkan-Loader" and
+  .vulkan.loader.source.commit == "bac41319cafb4527a2a959237b17611dd08bfe11" and
+  .vulkan.loader.source.git_tree == "179d52738e39d20391e78551ad42d24ed6005663" and
+  .vulkan.headers_source.repository == "https://github.com/KhronosGroup/Vulkan-Headers" and
+  .vulkan.headers_source.commit == "ad9ce1235e88dc09287e19171dfac384db8ec32c" and
+  .vulkan.headers_source.git_tree == "66aac757224c771c25cea6ed942d5bc8483f06eb" and
+  .vulkan.swiftshader_icd.path == "/opt/cloudandx/native-aemu/lib64/vulkan/libvk_swiftshader.so" and
+  .vulkan.swiftshader_icd.manifest == "/opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json" and
+  .vulkan.swiftshader_icd.manifest_file_format_version == "1.0.0" and
+  .vulkan.swiftshader_icd.manifest_api_version == "1.0.5" and
+  .vulkan.swiftshader_icd.manifest_library_path == "./libvk_swiftshader.so" and
+  .vulkan.swiftshader_icd.sha256 == $vulkan_icd_sha256 and
+  .vulkan.swiftshader_icd.manifest_sha256 == $vulkan_icd_json_sha256 and
+  (.vulkan.swiftshader_icd.dt_needed | length > 0) and
+  .vulkan.swiftshader_icd.source.repository == "https://android.googlesource.com/platform/external/swiftshader" and
+  .vulkan.swiftshader_icd.source.commit == "9a22bb9de00f5d8ddf4fc5ba5c2f425c2816e679" and
+  .vulkan.swiftshader_icd.source.git_tree == "bf4997626a7621c64b0dcc57317e7fa6e4b78018" and
+  .vulkan.smoke_probe.path == "/opt/cloudandx/native-aemu/vulkan-smoke" and
+  .vulkan.smoke_probe.sha256 == $vulkan_probe_sha256 and
+  .vulkan.smoke_probe.build_id == $vulkan_probe_build_id and
+  .vulkan.smoke_probe.verifies == ["instance", "physical-device", "device", "queue", "submit", "fence"] and
   .data.pc_bios == "/opt/cloudandx/native-aemu/lib/pc-bios" and
   .data.swiftshader == "/opt/cloudandx/native-aemu/lib64/gles_swiftshader" and
   .data.resources == "/opt/cloudandx/native-aemu/resources" and
@@ -235,7 +385,8 @@ jq -e \
   .execution.rpath == $rpath and
   .execution.runpath == $runpath and
   .execution.build_id == $build_id and
-  .execution.library_path == "/opt/cloudandx/native-aemu/lib64:/opt/cloudandx/native-aemu/lib64/gles_swiftshader"
+  .execution.library_path == "/opt/cloudandx/native-aemu/lib64:/opt/cloudandx/native-aemu/lib64/gles_swiftshader" and
+  .execution.audio_driver == "none"
 ' "${BUNDLE_DIR}/manifest.json" >/dev/null \
   || die 'bundle manifest contract is invalid'
 
@@ -259,4 +410,4 @@ grep -Fxq "patch_set_sha256=${PATCH_SET_SHA256}" "${IDENTITY}" \
   || "${PATCH_SET_SHA256}" == "${NATIVE_AEMU_PATCH_SET_SHA256}" ]] \
   || die 'expected patch-set identity mismatch'
 
-printf 'smoke-test-bundle: launcher layout, stripped ARM64 ELF closure, SwiftShader, identity, and checksums verified\n'
+printf 'smoke-test-bundle: launcher layout, AArch64 closure, mixed-arch netsimd, audio policy, identity, and checksums verified\n'

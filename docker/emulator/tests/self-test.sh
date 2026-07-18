@@ -1,0 +1,200 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+. "${ROOT}/bin/runtime-lib.sh"
+
+passed=0
+
+pass() {
+  passed=$((passed + 1))
+}
+
+assert_eq() {
+  expected=$1
+  actual=$2
+  label=$3
+  if [ "${expected}" != "${actual}" ]; then
+    printf 'FAIL: %s: expected <%s>, got <%s>\n' "${label}" "${expected}" "${actual}" >&2
+    exit 1
+  fi
+  pass
+}
+
+assert_contains() {
+  haystack=$1
+  needle=$2
+  label=$3
+  case "${haystack}" in
+    *"${needle}"*) pass ;;
+    *)
+      printf 'FAIL: %s: output did not contain <%s>\n%s\n' "${label}" "${needle}" "${haystack}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+assert_fails() {
+  label=$1
+  shift
+  if "$@" >/dev/null 2>&1; then
+    printf 'FAIL: %s: command unexpectedly succeeded\n' "${label}" >&2
+    exit 1
+  fi
+  pass
+}
+
+for script in "${ROOT}"/bin/*.sh "${ROOT}"/tests/*.sh; do
+  sh -n "${script}"
+done
+pass
+
+assert_eq off "$(resolve_acceleration auto /path/that/does/not/exist)" 'auto falls back to software'
+assert_eq on "$(resolve_acceleration auto /dev/null)" 'auto selects accessible character device'
+assert_eq on "$(resolve_acceleration kvm /dev/null)" 'explicit kvm selects acceleration'
+assert_eq off "$(resolve_acceleration off /dev/null)" 'off remains off'
+assert_fails 'forced kvm rejects missing device' resolve_acceleration kvm /path/that/does/not/exist
+assert_fails 'invalid acceleration rejected' resolve_acceleration turbo /dev/null
+validate_engine_architecture x86_64
+pass
+validate_engine_architecture amd64
+pass
+assert_fails 'ARM64 Docker Engine rejected by runtime' validate_engine_architecture arm64
+assert_fails 'missing Docker Engine architecture rejected by runtime' validate_engine_architecture ''
+assert_fails 'unsafe AVD name rejected' validate_avd_name '../escape'
+validate_avd_name Pixel_9_Android_17_Play
+pass
+
+tmp=$(mktemp -d)
+trap 'rm -rf "${tmp}"' EXIT INT TERM
+sdk=${tmp}/sdk
+data=${tmp}/data
+template=${tmp}/template
+
+stale_avd=${tmp}/stale.avd
+mkdir -p "${stale_avd}"
+printf '38\0' >"${stale_avd}/hardware-qemu.ini.lock"
+: >"${stale_avd}/multiinstance.lock"
+: >"${stale_avd}/unrelated.lock"
+remove_stale_avd_locks "${stale_avd}"
+[ ! -e "${stale_avd}/hardware-qemu.ini.lock" ]
+pass
+[ ! -e "${stale_avd}/multiinstance.lock" ]
+pass
+[ -e "${stale_avd}/unrelated.lock" ]
+pass
+
+mkdir -p \
+  "${sdk}/emulator" \
+  "${sdk}/platform-tools" \
+  "${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64" \
+  "${data}" \
+  "${template}"
+
+printf '%s\n' \
+  '#!/bin/sh' \
+  '[ -z "${FAKE_EMULATOR_PID_FILE-}" ] || printf "%s\\n" "$$" >"${FAKE_EMULATOR_PID_FILE}"' \
+  'sleep "${FAKE_EMULATOR_SLEEP:-0}"' >"${sdk}/emulator/emulator"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'case ${1-} in' \
+  '  keygen)' \
+  '    printf "%s\\n" private-key >"$2"' \
+  '    printf "%s\\n" public-key >"$2.pub"' \
+  '    ;;' \
+  '  start-server|kill-server) ;;' \
+  'esac' >"${sdk}/platform-tools/adb"
+chmod 0755 "${sdk}/emulator/emulator" "${sdk}/platform-tools/adb"
+printf '%s\n' system >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/system.img"
+printf '%s\n' vendor >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/x86_64/vendor.img"
+cp "${ROOT}/avd/config.ini" "${template}/config.ini"
+cp "${ROOT}/avd/template-version" "${template}/template-version"
+
+socat_stub=${tmp}/fake-socat
+printf '%s\n' \
+  '#!/bin/sh' \
+  '[ "${FAKE_SOCAT_FAIL:-0}" = 0 ] || exit 71' \
+  'if [ -n "${FAKE_SOCAT_PID_DIR-}" ]; then printf "%s\\n" "$$" >"${FAKE_SOCAT_PID_DIR}/$$"; fi' \
+  'exec sleep 30' >"${socat_stub}"
+chmod 0755 "${socat_stub}"
+common_env="DOCKER_ENGINE_ARCHITECTURE=x86_64 ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm"
+
+preflight_output=$(env ${common_env} EMULATOR_ACCEL=auto "${ROOT}/bin/runtime-preflight.sh" 2>&1)
+assert_contains "${preflight_output}" 'android.release=17' 'preflight reports Android release'
+assert_contains "${preflight_output}" 'android.api=37.0' 'preflight reports API release'
+assert_contains "${preflight_output}" 'accel.effective=off' 'preflight reports software fallback'
+assert_contains "${preflight_output}" 'android.release-policy=base-stable-qpr1-beta-excluded' 'preflight reports release policy'
+
+assert_fails 'preflight fails closed for unavailable forced KVM' \
+  env ${common_env} EMULATOR_ACCEL=kvm "${ROOT}/bin/runtime-preflight.sh"
+
+command_output=$(env ${common_env} EMULATOR_ACCEL=auto \
+  "${ROOT}/bin/entrypoint.sh" print-command -prop 'test.value=a b' 2>&1)
+assert_contains "${command_output}" '=-accel' 'entrypoint includes acceleration flag'
+assert_contains "${command_output}" '=off' 'entrypoint uses software acceleration without KVM'
+assert_contains "${command_output}" '=test.value=a b' 'entrypoint preserves one argument containing spaces'
+assert_contains "${command_output}" '=-grpc' 'entrypoint enables gRPC'
+assert_contains "${command_output}" '=8556' 'entrypoint uses isolated internal gRPC port'
+
+proxy_pid_dir=${tmp}/proxy-pids
+mkdir -p "${proxy_pid_dir}"
+env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=1 FAKE_SOCAT_PID_DIR="${proxy_pid_dir}" \
+  "${ROOT}/bin/entrypoint.sh" >/dev/null 2>&1
+[ -s "${data}/home/.android/adbkey" ]
+pass
+[ -s "${data}/home/.android/adbkey.pub" ]
+pass
+proxy_count=$(find "${proxy_pid_dir}" -type f | wc -l | tr -d ' ')
+assert_eq 2 "${proxy_count}" 'entrypoint starts distinct ADB and gRPC proxies'
+
+mounted_private=${tmp}/mounted-adbkey
+mounted_public=${tmp}/mounted-adbkey.pub
+printf '%s\n' mounted-private >"${mounted_private}"
+printf '%s\n' mounted-public >"${mounted_public}"
+env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=1 \
+  ADB_PRIVATE_KEY_FILE="${mounted_private}" ADB_PUBLIC_KEY_FILE="${mounted_public}" \
+  "${ROOT}/bin/entrypoint.sh" >/dev/null 2>&1
+assert_eq mounted-private "$(cat "${data}/home/.android/adbkey")" 'mounted private ADB key is copied'
+assert_eq mounted-public "$(cat "${data}/home/.android/adbkey.pub")" 'mounted public ADB key is copied'
+assert_fails 'entrypoint rejects incomplete ADB key pair' \
+  env ${common_env} EMULATOR_ACCEL=off ADB_PRIVATE_KEY_FILE="${mounted_private}" \
+    ADB_PUBLIC_KEY_FILE="${tmp}/missing-adbkey.pub" "${ROOT}/bin/entrypoint.sh"
+
+emulator_pid_file=${tmp}/emulator.pid
+assert_fails 'entrypoint fails when a supervised proxy exits' \
+  env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 FAKE_SOCAT_FAIL=1 \
+    FAKE_EMULATOR_PID_FILE="${emulator_pid_file}" "${ROOT}/bin/entrypoint.sh"
+[ -s "${emulator_pid_file}" ]
+failed_emulator_pid=$(cat "${emulator_pid_file}")
+if kill -0 "${failed_emulator_pid}" 2>/dev/null; then
+  printf 'FAIL: supervised emulator process %s survived proxy failure\n' "${failed_emulator_pid}" >&2
+  exit 1
+fi
+pass
+
+fake_adb=${tmp}/fake-adb
+printf '%s\n' \
+  '#!/bin/sh' \
+  'case "$*" in' \
+  '  *"get-state"*) printf "%s\\n" device ;;' \
+  '  *"getprop sys.boot_completed"*) printf "%s\\n" "${FAKE_BOOT:-1}" ;;' \
+  '  *"getprop ro.build.version.sdk"*) printf "%s\\n" "${FAKE_SDK:-37}" ;;' \
+  '  *"pm path com.android.vending"*) [ "${FAKE_PLAY:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/Phonesky/Phonesky.apk ;;' \
+  '  *"pm path com.google.android.gms"*) [ "${FAKE_GMS:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk ;;' \
+  '  *) exit 1 ;;' \
+  'esac' >"${fake_adb}"
+chmod 0755 "${fake_adb}"
+
+tcp_probe=${tmp}/fake-tcp-probe
+printf '%s\n' '#!/bin/sh' '[ "${FAKE_GRPC:-1}" = 1 ]' >"${tcp_probe}"
+chmod 0755 "${tcp_probe}"
+
+ADB_BIN=${fake_adb} SOCAT_BIN=${tcp_probe} "${ROOT}/bin/healthcheck.sh"
+pass
+assert_fails 'healthcheck requires gRPC proxy' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_GRPC=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects incomplete boot' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_BOOT=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects wrong API' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_SDK=36 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires Play Store' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_PLAY=0 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires Google Play services' env ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" FAKE_GMS=0 "${ROOT}/bin/healthcheck.sh"
+
+printf 'PASS: %s assertions\n' "${passed}"

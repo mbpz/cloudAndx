@@ -1,0 +1,21 @@
+services:
+  evidence-gate:
+    environment:
+      ALLOW_SOFTWARE_EMULATION_ONLY: "false"
+    devices:
+      - /dev/kvm:/dev/kvm
+    group_add:
+      - "${KVM_GID:?KVM_GID must be supplied by androidctl}"
+
+  emulator:
+    environment:
+      EMULATOR_ACCEL: kvm
+    devices:
+      - /dev/kvm:/dev/kvm
+    group_add:
+      - "${KVM_GID:?KVM_GID must be supplied by androidctl}"
+
+  controller:
+    environment:
+      KVM_AVAILABLE: "true"
+      RUNTIME_MODE: kvm

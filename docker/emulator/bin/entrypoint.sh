@@ -1,0 +1,272 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "${SCRIPT_DIR}/runtime-lib.sh"
+
+umask 077
+
+ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/opt/android-sdk}
+ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-/data/avd}
+ANDROID_EMULATOR_HOME=${ANDROID_EMULATOR_HOME:-/data/emulator-home}
+ANDROID_PREFS_ROOT=${ANDROID_PREFS_ROOT:-/data/prefs}
+HOME=${HOME:-/data/home}
+AVD_TEMPLATE_DIR=${AVD_TEMPLATE_DIR:-/opt/android-avd-template}
+AVD_NAME=${AVD_NAME:-Pixel_9_Android_17_Play}
+EMULATOR_ACCEL=${EMULATOR_ACCEL:-auto}
+EMULATOR_CORES=${EMULATOR_CORES:-4}
+EMULATOR_MEMORY_MB=${EMULATOR_MEMORY_MB:-4096}
+EMULATOR_GPU=${EMULATOR_GPU:-swiftshader}
+EMULATOR_CONSOLE_PORT=${EMULATOR_CONSOLE_PORT:-5556}
+EMULATOR_ADB_PORT=${EMULATOR_ADB_PORT:-5557}
+ADB_PROXY_PORT=${ADB_PROXY_PORT:-5555}
+EMULATOR_GRPC_INTERNAL_PORT=${EMULATOR_GRPC_INTERNAL_PORT:-8556}
+EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
+EMULATOR_WIPE_DATA=${EMULATOR_WIPE_DATA:-0}
+KVM_DEVICE=${KVM_DEVICE:-/dev/kvm}
+DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
+EMULATOR_BIN=${EMULATOR_BIN:-${ANDROID_SDK_ROOT}/emulator/emulator}
+ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
+SOCAT_BIN=${SOCAT_BIN:-socat}
+ADB_PRIVATE_KEY_FILE=${ADB_PRIVATE_KEY_FILE:-/run/secrets/adbkey}
+ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
+
+export ANDROID_SDK_ROOT ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT HOME
+export AVD_NAME EMULATOR_ACCEL EMULATOR_CORES EMULATOR_MEMORY_MB EMULATOR_GPU
+export EMULATOR_CONSOLE_PORT EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
+export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE EMULATOR_BIN ADB_BIN SOCAT_BIN
+
+MODE=run
+case ${1-} in
+  preflight)
+    exec "${SCRIPT_DIR}/runtime-preflight.sh"
+    ;;
+  print-command)
+    MODE=print
+    shift
+    ;;
+  --)
+    shift
+    ;;
+esac
+
+seed_avd() {
+  template_config=${AVD_TEMPLATE_DIR}/config.ini
+  template_version_file=${AVD_TEMPLATE_DIR}/template-version
+  avd_dir=${ANDROID_AVD_HOME}/${AVD_NAME}.avd
+  descriptor=${ANDROID_AVD_HOME}/${AVD_NAME}.ini
+
+  [ -s "${template_config}" ] || runtime_die "AVD template config is missing: ${template_config}"
+  [ -s "${template_version_file}" ] || runtime_die "AVD template version is missing: ${template_version_file}"
+
+  mkdir -p "${ANDROID_AVD_HOME}" "${ANDROID_EMULATOR_HOME}" "${ANDROID_PREFS_ROOT}" "${HOME}/.android"
+
+  if [ ! -e "${avd_dir}" ]; then
+    mkdir -p "${avd_dir}"
+    cp "${template_config}" "${avd_dir}/config.ini"
+    cp "${template_version_file}" "${avd_dir}/template-version"
+  fi
+
+  [ -s "${avd_dir}/config.ini" ] || runtime_die "Persisted AVD is missing config.ini: ${avd_dir}"
+  [ -s "${avd_dir}/template-version" ] || runtime_die "Persisted AVD has no template-version marker; use a fresh Docker volume."
+  cmp -s "${template_version_file}" "${avd_dir}/template-version" \
+    || runtime_die "Persisted AVD belongs to a different image revision; use a fresh Docker volume."
+
+  descriptor_tmp=${descriptor}.tmp.$$
+  {
+    printf '%s\n' 'avd.ini.encoding=UTF-8'
+    printf 'path=%s\n' "${avd_dir}"
+    printf 'path.rel=avd/%s.avd\n' "${AVD_NAME}"
+    printf '%s\n' 'target=android-37.0'
+  } >"${descriptor_tmp}"
+  mv "${descriptor_tmp}" "${descriptor}"
+}
+
+install_adb_keys() {
+  key_dir=${HOME}/.android
+  private_present=0
+  public_present=0
+
+  [ ! -e "${ADB_PRIVATE_KEY_FILE}" ] || [ -r "${ADB_PRIVATE_KEY_FILE}" ] \
+    || runtime_die "ADB private key exists but uid $(id -u) cannot read it: ${ADB_PRIVATE_KEY_FILE}"
+  [ ! -e "${ADB_PUBLIC_KEY_FILE}" ] || [ -r "${ADB_PUBLIC_KEY_FILE}" ] \
+    || runtime_die "ADB public key exists but uid $(id -u) cannot read it: ${ADB_PUBLIC_KEY_FILE}"
+
+  [ -s "${ADB_PRIVATE_KEY_FILE}" ] && private_present=1
+  [ -s "${ADB_PUBLIC_KEY_FILE}" ] && public_present=1
+
+  if [ "${private_present}" -ne "${public_present}" ]; then
+    runtime_die "Mount both ${ADB_PRIVATE_KEY_FILE} and ${ADB_PUBLIC_KEY_FILE}, or mount neither."
+  fi
+
+  if [ "${private_present}" -eq 1 ]; then
+    cp "${ADB_PRIVATE_KEY_FILE}" "${key_dir}/adbkey"
+    cp "${ADB_PUBLIC_KEY_FILE}" "${key_dir}/adbkey.pub"
+  elif [ -n "${ADBKEY-}" ] || [ -n "${ADBKEY_PUB-}" ]; then
+    [ -n "${ADBKEY-}" ] && [ -n "${ADBKEY_PUB-}" ] \
+      || runtime_die "ADBKEY and ADBKEY_PUB must be supplied together. Prefer read-only secret mounts."
+    printf '%s\n' "${ADBKEY}" >"${key_dir}/adbkey"
+    printf '%s\n' "${ADBKEY_PUB}" >"${key_dir}/adbkey.pub"
+  fi
+
+  if [ -s "${key_dir}/adbkey" ]; then
+    chmod 0600 "${key_dir}/adbkey"
+    chmod 0644 "${key_dir}/adbkey.pub"
+  else
+    "${ADB_BIN}" keygen "${key_dir}/adbkey" >/dev/null
+  fi
+
+  [ -s "${key_dir}/adbkey" ] || runtime_die "adb key generation failed in ${key_dir}."
+  [ -s "${key_dir}/adbkey.pub" ] || runtime_die "adb public key generation failed in ${key_dir}."
+  chmod 0600 "${key_dir}/adbkey"
+  chmod 0644 "${key_dir}/adbkey.pub"
+  export ADB_VENDOR_KEYS="${key_dir}"
+  unset ADBKEY ADBKEY_PUB
+
+  "${ADB_BIN}" start-server >/dev/null
+}
+
+print_argv() {
+  index=0
+  for argument do
+    printf 'argv[%s]=%s\n' "${index}" "${argument}"
+    index=$((index + 1))
+  done
+}
+
+start_emulator() {
+  effective_accel=$1
+  shift
+
+  if [ "${EMULATOR_WIPE_DATA}" = 1 ]; then
+    set -- "${EMULATOR_BIN}" \
+      -avd "${AVD_NAME}" \
+      -no-window \
+      -no-snapshot \
+      -no-metrics \
+      -gpu "${EMULATOR_GPU}" \
+      -accel "${effective_accel}" \
+      -cores "${EMULATOR_CORES}" \
+      -memory "${EMULATOR_MEMORY_MB}" \
+      -ports "${EMULATOR_CONSOLE_PORT},${EMULATOR_ADB_PORT}" \
+      -grpc "${EMULATOR_GRPC_INTERNAL_PORT}" \
+      -netdelay none \
+      -netspeed full \
+      -wipe-data \
+      "$@"
+  else
+    set -- "${EMULATOR_BIN}" \
+      -avd "${AVD_NAME}" \
+      -no-window \
+      -no-snapshot \
+      -no-metrics \
+      -gpu "${EMULATOR_GPU}" \
+      -accel "${effective_accel}" \
+      -cores "${EMULATOR_CORES}" \
+      -memory "${EMULATOR_MEMORY_MB}" \
+      -ports "${EMULATOR_CONSOLE_PORT},${EMULATOR_ADB_PORT}" \
+      -grpc "${EMULATOR_GRPC_INTERNAL_PORT}" \
+      -netdelay none \
+      -netspeed full \
+      "$@"
+  fi
+
+  if [ "${MODE}" = print ]; then
+    print_argv "$@"
+    return 0
+  fi
+
+  runtime_log "Starting Android 17 API 37.0 Google Play r06 with acceleration=${effective_accel}, gpu=${EMULATOR_GPU}."
+  runtime_log "gRPC is enabled internally on ${EMULATOR_GRPC_INTERNAL_PORT}; a supervised proxy exposes container port ${EMULATOR_GRPC_PORT}. Publish it to host loopback only."
+  "$@" &
+  EMULATOR_PID=$!
+}
+
+stop_children() {
+  trap - EXIT INT TERM HUP
+
+  for child in "${ADB_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+    if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
+      kill -TERM "${child}" 2>/dev/null || true
+    fi
+  done
+
+  remaining=20
+  while [ "${remaining}" -gt 0 ]; do
+    live=0
+    for child in "${ADB_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+      if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
+        live=1
+      fi
+    done
+    [ "${live}" -eq 0 ] && break
+    sleep 1
+    remaining=$((remaining - 1))
+  done
+
+  for child in "${ADB_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+    if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
+      kill -KILL "${child}" 2>/dev/null || true
+    fi
+  done
+
+  "${ADB_BIN}" kill-server >/dev/null 2>&1 || true
+}
+
+on_signal() {
+  runtime_log "Received termination signal; stopping emulator and ADB proxy."
+  stop_children
+  exit 143
+}
+
+seed_avd
+if [ "${MODE}" = run ]; then
+  remove_stale_avd_locks "${ANDROID_AVD_HOME}/${AVD_NAME}.avd"
+fi
+"${SCRIPT_DIR}/runtime-preflight.sh"
+effective_accel=$(resolve_acceleration "${EMULATOR_ACCEL}" "${KVM_DEVICE}")
+
+if [ "${MODE}" = print ]; then
+  start_emulator "${effective_accel}" "$@"
+  exit 0
+fi
+
+install_adb_keys
+
+trap on_signal INT TERM HUP
+trap stop_children EXIT
+
+start_emulator "${effective_accel}" "$@"
+"${SOCAT_BIN}" "TCP4-LISTEN:${ADB_PROXY_PORT},reuseaddr,fork" "TCP4:127.0.0.1:${EMULATOR_ADB_PORT}" &
+ADB_SOCAT_PID=$!
+runtime_log "ADB proxy is listening on container port ${ADB_PROXY_PORT} and forwarding to emulator loopback port ${EMULATOR_ADB_PORT}."
+"${SOCAT_BIN}" "TCP4-LISTEN:${EMULATOR_GRPC_PORT},reuseaddr,fork" "TCP4:127.0.0.1:${EMULATOR_GRPC_INTERNAL_PORT}" &
+GRPC_SOCAT_PID=$!
+runtime_log "gRPC proxy is listening on container port ${EMULATOR_GRPC_PORT} and forwarding to emulator port ${EMULATOR_GRPC_INTERNAL_PORT}."
+
+status=0
+while :; do
+  if ! kill -0 "${EMULATOR_PID}" 2>/dev/null; then
+    set +e
+    wait "${EMULATOR_PID}"
+    status=$?
+    set -e
+    runtime_log "Emulator exited with status ${status}."
+    break
+  fi
+  if ! kill -0 "${ADB_SOCAT_PID}" 2>/dev/null; then
+    runtime_log "ERROR: ADB proxy exited unexpectedly."
+    status=1
+    break
+  fi
+  if ! kill -0 "${GRPC_SOCAT_PID}" 2>/dev/null; then
+    runtime_log "ERROR: gRPC proxy exited unexpectedly."
+    status=1
+    break
+  fi
+  sleep 2
+done
+
+stop_children
+trap - EXIT
+exit "${status}"

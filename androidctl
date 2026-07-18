@@ -1,0 +1,197 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd)
+
+compose() {
+  DOCKER_ENGINE_ARCHITECTURE=$(docker_engine_architecture) \
+    docker compose --project-directory "${ROOT}" -f "${ROOT}/compose.yaml" "$@"
+}
+
+compose_kvm() {
+  DOCKER_ENGINE_ARCHITECTURE=$(docker_engine_architecture) \
+    docker compose --project-directory "${ROOT}" -f "${ROOT}/compose.yaml" -f "${ROOT}/compose.kvm.yaml" "$@"
+}
+
+configure_kvm_group() {
+  KVM_GID=$(docker run --rm --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges --device /dev/kvm:/dev/kvm \
+    alpine:3.22.1 stat -c %g /dev/kvm) || {
+    printf '%s\n' 'ERROR: Docker cannot map /dev/kvm; KVM mode is unavailable and no host change was attempted.' >&2
+    exit 1
+  }
+  export KVM_GID
+}
+
+require_docker() {
+  command -v docker >/dev/null 2>&1 || {
+    printf '%s\n' 'ERROR: Docker CLI is required.' >&2
+    exit 1
+  }
+  docker info >/dev/null 2>&1 || {
+    printf '%s\n' 'ERROR: Docker Engine is not reachable.' >&2
+    exit 1
+  }
+}
+
+docker_engine_os() {
+  docker info --format '{{.OSType}}'
+}
+
+docker_engine_architecture() {
+  docker info --format '{{.Architecture}}'
+}
+
+require_native_x86_linux_engine() {
+  engine_os=$(docker_engine_os)
+  engine_arch=$(docker_engine_architecture)
+
+  case "${engine_os}/${engine_arch}" in
+    linux/amd64|linux/x86_64)
+      return 0
+      ;;
+    *)
+      printf 'ERROR: unsupported Docker Engine %s/%s.\n' "${engine_os}" "${engine_arch}" >&2
+      printf '%s\n' 'Google publishes the Linux Android Emulator host binary only for x86_64.' >&2
+      printf '%s\n' 'ARM64 cross-architecture translation cannot provide a reliable, full Google Android runtime.' >&2
+      printf '%s\n' 'Use a native x86_64 Linux Docker engine; no host or OrbStack change was attempted.' >&2
+      exit 78
+      ;;
+  esac
+}
+
+init() {
+  compose build device-bridge
+  compose run --rm --no-deps volume-init
+  compose run --rm --no-deps adb-key-init
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./androidctl COMMAND [ARGS...]
+
+  doctor             Validate Docker and the rendered Compose model
+  init               Create Docker volumes, bridge token, and shared ADB key
+  preflight          Verify the official Android 17 image metadata (no KVM required)
+  preflight-kvm      Require an already-present /dev/kvm; never changes the host
+  build-core         Build controller, bridge, dashboard, evidence gate, and tests
+  build-emulator     Build the pinned Google Android image (license acknowledgement required)
+  up                 Start software emulation on a native x86_64 Linux Docker engine
+  up-kvm             Start on native x86_64 Linux with an existing /dev/kvm
+  status             Show containers and the recorded evidence decision
+  logs [SERVICE]     Follow stack logs
+  adb [ARGS...]      Run bundled adb against the emulator
+  shell [ARGS...]    Run an Android shell command through bundled adb
+  token              Print the local bridge bearer token
+  evidence           Print the preflight evidence JSON
+  down               Stop containers while preserving guest data
+  destroy            Stop containers and delete this project's Docker volumes
+  test               Run all offline tests inside Docker
+EOF
+}
+
+require_docker
+
+case ${1-} in
+  doctor)
+    docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+    docker info --format 'engine={{.OSType}}/{{.Architecture}} cpus={{.NCPU}} memory={{.MemTotal}}'
+    compose config --quiet
+    case "$(docker_engine_os)/$(docker_engine_architecture)" in
+      linux/amd64|linux/x86_64) runtime_support=supported ;;
+      *) runtime_support=blocked-requires-native-x86_64-linux ;;
+    esac
+    printf 'compose=valid runtime=%s host-mutations=none\n' "${runtime_support}"
+    ;;
+  init)
+    init
+    ;;
+  preflight)
+    compose build evidence-gate
+    compose run --rm evidence-gate
+    ;;
+  preflight-kvm)
+    require_native_x86_linux_engine
+    configure_kvm_group
+    compose_kvm build evidence-gate
+    compose_kvm run --rm evidence-gate
+    ;;
+  build-core)
+    compose build controller device-bridge dashboard evidence-gate
+    docker build --target test -t cloudandx/android-evidence-gate:test -f "${ROOT}/services/evidence-gate/Dockerfile" "${ROOT}"
+    docker run --rm cloudandx/android-evidence-gate:test
+    docker build --platform linux/amd64 --target test -t cloudandx/android-device-bridge:test "${ROOT}/services/device-bridge"
+    docker run --rm --platform linux/amd64 cloudandx/android-device-bridge:test
+    ;;
+  build-emulator)
+    compose build emulator
+    ;;
+  up)
+    require_native_x86_linux_engine
+    init
+    compose up -d --build
+    ;;
+  up-kvm)
+    require_native_x86_linux_engine
+    init
+    configure_kvm_group
+    compose_kvm run --rm evidence-gate
+    compose_kvm up -d --build
+    ;;
+  status)
+    compose ps -a
+    compose run --rm --no-deps --entrypoint /bin/sh volume-init -c 'if [ -s /volumes/evidence/preflight.json ]; then cat /volumes/evidence/preflight.json; else echo "evidence: unavailable"; fi'
+    ;;
+  logs)
+    shift
+    compose logs --follow --tail 200 "$@"
+    ;;
+  adb)
+    shift
+    compose exec -T emulator adb -s emulator-5556 "$@"
+    ;;
+  shell)
+    shift
+    compose exec -T emulator adb -s emulator-5556 shell "$@"
+    ;;
+  token)
+    compose run --rm --no-deps volume-init >/dev/null
+    compose run --rm --no-deps --entrypoint /bin/sh device-bridge -c 'cat /run/bridge-secrets/token'
+    ;;
+  evidence)
+    compose run --rm --no-deps --entrypoint /bin/sh volume-init -c 'cat /volumes/evidence/preflight.json'
+    ;;
+  down)
+    compose down --remove-orphans
+    ;;
+  destroy)
+    compose down --volumes --remove-orphans
+    ;;
+  test)
+    compose config --quiet
+    docker run --rm --network none --read-only --cap-drop ALL \
+      --security-opt no-new-privileges --tmpfs /tmp:rw,exec,nosuid,nodev,size=8m \
+      -v "${ROOT}:/workspace:ro" -w /workspace alpine:3.22.1 \
+      sh tests/androidctl-test.sh
+    docker run --rm --network none --read-only --cap-drop ALL \
+      --security-opt no-new-privileges \
+      -v "${ROOT}:/workspace:ro" -w /workspace alpine:3.22.1 \
+      sh tests/compose-contract-test.sh
+    docker build --target self-test --pull=false -t cloudandx/android17-emulator:self-test "${ROOT}/docker/emulator"
+    docker build --target test -t cloudandx/android-evidence-gate:test -f "${ROOT}/services/evidence-gate/Dockerfile" "${ROOT}"
+    docker run --rm cloudandx/android-evidence-gate:test
+    docker build --platform linux/amd64 --target test -t cloudandx/android-device-bridge:test "${ROOT}/services/device-bridge"
+    docker run --rm --platform linux/amd64 cloudandx/android-device-bridge:test
+    compose build controller dashboard
+    docker run --rm --add-host controller:127.0.0.1 --add-host device-bridge:127.0.0.1 \
+      --entrypoint /usr/sbin/nginx cloudandx/android-dashboard:1.0.0 -t
+    ;;
+  ''|-h|--help|help)
+    usage
+    ;;
+  *)
+    printf 'ERROR: unknown command: %s\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

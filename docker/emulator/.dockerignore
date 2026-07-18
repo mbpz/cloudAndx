@@ -1,0 +1,8 @@
+*
+!Dockerfile
+!bin/
+!bin/**
+!avd/
+!avd/**
+!tests/
+!tests/**

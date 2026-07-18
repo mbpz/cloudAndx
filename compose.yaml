@@ -1,0 +1,212 @@
+name: cloudandx-android17
+
+x-service-security: &service-security
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  runtime-compatibility:
+    image: alpine:3.22.1
+    user: "65532:65532"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-}
+    volumes:
+      - ./docker/bootstrap/check-runtime-arch.sh:/usr/local/bin/check-runtime-arch.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/check-runtime-arch.sh"]
+    restart: "no"
+
+  volume-init:
+    image: alpine:3.22.1
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - controller-data:/volumes/controller
+      - evidence-data:/volumes/evidence
+      - bridge-secrets:/volumes/bridge-secrets
+      - emulator-data:/volumes/emulator
+      - adb-keys:/volumes/adb-keys
+      - ./docker/bootstrap/init-volumes.sh:/usr/local/bin/init-volumes.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/init-volumes.sh"]
+    restart: "no"
+
+  adb-key-init:
+    image: cloudandx/android-device-bridge:37.0.0
+    platform: linux/amd64
+    build:
+      context: ./services/device-bridge
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    environment:
+      HOME: /tmp/home
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    volumes:
+      - adb-keys:/keys
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        mkdir -p "$$HOME"
+        if [ ! -s /keys/adbkey ] || [ ! -s /keys/adbkey.pub ]; then
+          rm -f /keys/adbkey /keys/adbkey.pub
+          /opt/platform-tools/adb keygen /keys/adbkey >/dev/null
+        fi
+        chown 10001:10001 /keys/adbkey /keys/adbkey.pub
+        chmod 0600 /keys/adbkey
+        chmod 0644 /keys/adbkey.pub
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  evidence-gate:
+    image: cloudandx/android-evidence-gate:1.0.0
+    build:
+      context: .
+      dockerfile: services/evidence-gate/Dockerfile
+      target: runtime
+    <<: *service-security
+    environment:
+      ANDROID_VERSION: "17"
+      ANDROID_API_LEVEL: "37"
+      GOOGLE_PLAY_TAG: google_apis_playstore
+      GOOGLE_PLAY_PACKAGE_PATH: system-images;android-37.0;google_apis_playstore_ps16k;x86_64
+      GOOGLE_PLAY_ABI: x86_64
+      GOOGLE_PLAY_EXPECTED_CHANNEL: stable
+      GOOGLE_PLAY_EXPECTED_REVISION: "6"
+      GOOGLE_PLAY_EXPECTED_URL: https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-playstore-ps16k-37.0_r06.zip
+      GOOGLE_PLAY_EXPECTED_CHECKSUM: sha1:8eaeeceb77452c018c3f6b589913cdc45222a87f
+      GOOGLE_REPOSITORY_URLS: https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-4.xml
+      ALLOW_SOFTWARE_EMULATION_ONLY: "true"
+      PREFLIGHT_OUTPUT: /evidence/preflight.json
+    volumes:
+      - ./contracts:/contracts:ro
+      - evidence-data:/evidence
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  emulator:
+    image: cloudandx/android17-play-emulator:37.0-r06
+    platform: linux/amd64
+    build:
+      context: ./docker/emulator
+      target: runtime
+      args:
+        ACCEPT_ANDROID_SDK_LICENSES: ${ACCEPT_ANDROID_SDK_LICENSES:-no}
+    <<: *service-security
+    init: true
+    shm_size: 2gb
+    environment:
+      DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-}
+      EMULATOR_ACCEL: "off"
+      EMULATOR_CORES: ${EMULATOR_CORES:-4}
+      EMULATOR_MEMORY_MB: ${EMULATOR_MEMORY_MB:-4096}
+      EMULATOR_GPU: ${EMULATOR_GPU:-swiftshader}
+      EMULATOR_WIPE_DATA: ${EMULATOR_WIPE_DATA:-0}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - emulator-data:/data
+      - adb-keys:/run/secrets:ro
+    ports:
+      - 127.0.0.1:${ANDROID_ADB_PORT:-5555}:5555/tcp
+      - 127.0.0.1:${ANDROID_GRPC_PORT:-8554}:8554/tcp
+    depends_on:
+      runtime-compatibility:
+        condition: service_completed_successfully
+      evidence-gate:
+        condition: service_completed_successfully
+      adb-key-init:
+        condition: service_completed_successfully
+    stop_grace_period: 45s
+    restart: "on-failure:3"
+
+  device-bridge:
+    image: cloudandx/android-device-bridge:37.0.0
+    platform: linux/amd64
+    build:
+      context: ./services/device-bridge
+    <<: *service-security
+    environment:
+      ADB_SERIAL: emulator:5555
+      ADB_VENDOR_KEYS: /home/bridge/.android/adbkey
+      BRIDGE_TOKEN_FILE: /run/bridge-secrets/token
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=320m
+    volumes:
+      - adb-keys:/home/bridge/.android:ro
+      - bridge-secrets:/run/bridge-secrets:ro
+    ports:
+      - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
+    depends_on:
+      emulator:
+        condition: service_started
+      adb-key-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  controller:
+    image: cloudandx/android-controller:1.0.0
+    build:
+      context: ./services/controller
+    <<: *service-security
+    environment:
+      ANDROID_VERSION: "17"
+      API_LEVEL: "37"
+      SYSTEM_IMAGE_KIND: google_apis_playstore_ps16k
+      KVM_AVAILABLE: "false"
+      RUNTIME_MODE: software_emulation
+      MAX_ACTIVE_SESSIONS: "1"
+      EMULATOR_HEALTH_URL_TEMPLATE: http://device-bridge:8090/sessions/{id}/healthz
+      PREFLIGHT_EVIDENCE_FILE: /evidence/preflight.json
+    volumes:
+      - controller-data:/data
+      - evidence-data:/evidence:ro
+    ports:
+      - 127.0.0.1:${CONTROLLER_PORT:-18081}:8080/tcp
+    depends_on:
+      evidence-gate:
+        condition: service_completed_successfully
+      device-bridge:
+        condition: service_started
+    restart: unless-stopped
+
+  dashboard:
+    image: cloudandx/android-dashboard:1.0.0
+    build:
+      context: ./docker/dashboard
+    <<: *service-security
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777,size=16m
+    ports:
+      - 127.0.0.1:${DASHBOARD_PORT:-8080}:8080/tcp
+    depends_on:
+      controller:
+        condition: service_healthy
+      device-bridge:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  controller-data:
+  evidence-data:
+  bridge-secrets:
+  emulator-data:
+  adb-keys:

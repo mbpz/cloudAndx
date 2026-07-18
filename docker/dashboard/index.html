@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Android 17 Docker Console</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">GOOGLE ANDROID · DOCKER-ONLY</p>
+        <h1>Android 17 运行控制台</h1>
+        <p class="subtitle">官方 Google Play 系统镜像、真实能力状态与 fail-closed 证据。</p>
+      </div>
+      <div id="overall" class="badge pending">检测中</div>
+    </header>
+
+    <section class="summary-grid">
+      <article><span>Android</span><strong id="android-version">—</strong><small id="image-kind">—</small></article>
+      <article><span>运行模式</span><strong id="runtime-mode">—</strong><small id="kvm-status">—</small></article>
+      <article><span>设备</span><strong id="device-state">—</strong><small id="device-product">—</small></article>
+      <article><span>证据状态</span><strong id="evidence-state">—</strong><small>缺失即阻断</small></article>
+    </section>
+
+    <section class="content-grid">
+      <article class="screen-card">
+        <div class="section-title"><h2>设备画面</h2><button id="refresh-screen" type="button">刷新</button></div>
+        <div class="screen-shell"><img id="screen" alt="Android emulator screenshot" tabindex="0" role="button"><div id="screen-empty">设备启动后显示截图</div></div>
+        <div class="device-controls">
+          <label>本地控制令牌<input id="bridge-token" type="password" autocomplete="off" placeholder="./androidctl token"></label>
+          <button id="save-token" type="button">本标签页使用</button>
+          <div class="nav-controls" aria-label="Android navigation">
+            <button type="button" data-keycode="4">返回</button>
+            <button type="button" data-keycode="3">主页</button>
+            <button type="button" data-keycode="187">最近任务</button>
+            <button type="button" data-keycode="26">电源</button>
+          </div>
+          <label>输入文本<input id="input-text" type="text" maxlength="1000" placeholder="安全 ASCII 文本"></label>
+          <button id="send-text" type="button">发送</button>
+          <small id="control-status">点击设备画面可发送触控坐标；令牌仅保存在当前浏览器标签页。</small>
+        </div>
+        <p class="hint">ADB：127.0.0.1:5555 · Emulator gRPC：127.0.0.1:8554</p>
+      </article>
+
+      <article class="capability-card">
+        <div class="section-title"><h2>能力矩阵</h2><span id="updated-at">—</span></div>
+        <div id="capabilities" class="capabilities"></div>
+      </article>
+    </section>
+
+    <section class="detail-grid">
+      <article><h2>平台事实</h2><pre id="platform-json">加载中…</pre></article>
+      <article><div class="section-title"><h2>会话</h2><button id="create-session" type="button">创建单设备租约</button></div><pre id="sessions-json">加载中…</pre></article>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

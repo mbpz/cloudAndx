@@ -3,7 +3,71 @@ set -eu
 
 ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd)
 NATIVE_ENGINE_IMAGE=${NATIVE_ENGINE_IMAGE:-cloudandx/aemu-native-engine:37.1.7}
-export NATIVE_ENGINE_IMAGE
+NATIVE_AEMU_LOCK=${ROOT}/docker/emulator/native-engine/sources.lock.json
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    printf '%s\n' 'ERROR: sha256sum or shasum is required to identify the native AEMU sources.' >&2
+    exit 69
+  fi
+}
+
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    printf '%s\n' 'ERROR: sha256sum or shasum is required to identify the native AEMU patches.' >&2
+    exit 69
+  fi
+}
+
+locked_native_patch_paths() {
+  sed -n '/^[[:space:]]*"patches": {/,/^[[:space:]]*}[,]*$/p' "${NATIVE_AEMU_LOCK}" \
+    | sed -n 's/^[[:space:]]*"\(patches\/[^" ]*\.patch\)"[,]*$/\1/p'
+}
+
+compute_native_engine_identity() {
+  [ -s "${NATIVE_AEMU_LOCK}" ] || {
+    printf 'ERROR: native AEMU source lock is missing: %s\n' "${NATIVE_AEMU_LOCK}" >&2
+    exit 66
+  }
+  NATIVE_AEMU_REVISION=$(sed -n \
+    's/^[[:space:]]*"aemu_revision": "\([^"]*\)",*$/\1/p' \
+    "${NATIVE_AEMU_LOCK}")
+  [ -n "${NATIVE_AEMU_REVISION}" ] || {
+    printf '%s\n' 'ERROR: native AEMU revision is missing from the source lock.' >&2
+    exit 65
+  }
+  NATIVE_AEMU_SOURCE_LOCK_SHA256=$(sha256_file "${NATIVE_AEMU_LOCK}")
+  native_patch_paths=$(locked_native_patch_paths)
+  [ -n "${native_patch_paths}" ] || {
+    printf '%s\n' 'ERROR: native AEMU patch order is missing from the source lock.' >&2
+    exit 65
+  }
+  for native_patch_path in ${native_patch_paths}; do
+    [ -f "${ROOT}/docker/emulator/native-engine/${native_patch_path}" ] || {
+      printf 'ERROR: locked native AEMU patch is missing: %s\n' "${native_patch_path}" >&2
+      exit 66
+    }
+  done
+  NATIVE_AEMU_PATCH_SET_SHA256=$(
+    for native_patch_path in ${native_patch_paths}; do
+      native_patch_sha256=$(sha256_file \
+        "${ROOT}/docker/emulator/native-engine/${native_patch_path}")
+      printf '%s  %s\n' "${native_patch_sha256}" "${native_patch_path}"
+    done | sha256_stream
+  )
+  export NATIVE_ENGINE_IMAGE NATIVE_AEMU_REVISION \
+    NATIVE_AEMU_SOURCE_LOCK_SHA256 NATIVE_AEMU_PATCH_SET_SHA256
+}
+
+compute_native_engine_identity
 
 runtime_implementation_for_engine() {
   if [ -n "${ANDROID_RUNTIME_IMPLEMENTATION-}" ]; then
@@ -23,6 +87,9 @@ compose() {
   DOCKER_ENGINE_ARCHITECTURE=${compose_engine_arch} \
     ANDROID_RUNTIME_IMPLEMENTATION=${compose_runtime_implementation} \
     NATIVE_ENGINE_IMAGE=${NATIVE_ENGINE_IMAGE} \
+    NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
+    NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
+    NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
     docker compose --project-directory "${ROOT}" -f "${ROOT}/compose.yaml" "$@"
 }
 
@@ -32,6 +99,9 @@ compose_kvm() {
   DOCKER_ENGINE_ARCHITECTURE=${compose_engine_arch} \
     ANDROID_RUNTIME_IMPLEMENTATION=${compose_runtime_implementation} \
     NATIVE_ENGINE_IMAGE=${NATIVE_ENGINE_IMAGE} \
+    NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
+    NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
+    NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
     docker compose --project-directory "${ROOT}" -f "${ROOT}/compose.yaml" -f "${ROOT}/compose.kvm.yaml" "$@"
 }
 
@@ -99,16 +169,24 @@ build_native_engine() {
   docker build \
     --platform linux/arm64 \
     --target bundle \
+    --build-arg "NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION}" \
+    --build-arg "NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
+    --build-arg "NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
     --tag "${NATIVE_ENGINE_IMAGE}" \
     "${ROOT}/docker/emulator/native-engine"
 }
 
 ensure_native_engine() {
-  native_platform=$(docker image inspect "${NATIVE_ENGINE_IMAGE}" \
-    --format '{{.Os}}/{{.Architecture}}' 2>/dev/null || true)
-  if [ "${native_platform}" = linux/arm64 ]; then
-    printf 'native-engine=%s platform=%s reuse=local\n' "${NATIVE_ENGINE_IMAGE}" "${native_platform}"
+  native_identity=$(docker image inspect "${NATIVE_ENGINE_IMAGE}" --format \
+    '{{.Os}}/{{.Architecture}}|{{index .Config.Labels "io.cloudandx.native-aemu.revision"}}|{{index .Config.Labels "io.cloudandx.native-aemu.source-lock-sha256"}}|{{index .Config.Labels "io.cloudandx.native-aemu.patch-set-sha256"}}' \
+    2>/dev/null || true)
+  required_identity="linux/arm64|${NATIVE_AEMU_REVISION}|${NATIVE_AEMU_SOURCE_LOCK_SHA256}|${NATIVE_AEMU_PATCH_SET_SHA256}"
+  if [ "${native_identity}" = "${required_identity}" ]; then
+    printf 'native-engine=%s identity=%s reuse=local\n' "${NATIVE_ENGINE_IMAGE}" "${native_identity}"
     return 0
+  fi
+  if [ -n "${native_identity}" ]; then
+    printf 'native-engine=%s identity=%s reuse=rejected\n' "${NATIVE_ENGINE_IMAGE}" "${native_identity}" >&2
   fi
   build_native_engine
 }

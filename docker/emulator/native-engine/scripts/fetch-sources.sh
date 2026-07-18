@@ -63,8 +63,38 @@ normalize_mtimes() {
   find "${source_dir}" -depth -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 }
 
+fetch_locked_files() {
+  local source_json=$1 repository=$2 commit=$3 temp_dir=$4 extract_dir=$5
+  local source_path relative_destination expected url encoded output actual
+
+  while IFS=$'\t' read -r source_path relative_destination expected; do
+    [[ -n "${source_path}" ]] || continue
+    safe_relative_path "${source_path}" \
+      || die "unsafe locked file path: ${source_path}"
+    [[ "${source_path}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+      || die "locked file path cannot be encoded safely: ${source_path}"
+    safe_relative_path "${relative_destination}" \
+      || die "unsafe locked file destination: ${relative_destination}"
+    [[ "${expected}" =~ ^[0-9a-f]{40}$ ]] \
+      || die "locked file blob is not a full SHA-1: ${source_path}"
+
+    url="${repository}/+/${commit}/${source_path}?format=TEXT"
+    encoded=${temp_dir}/encoded-blob
+    output=${extract_dir}/${relative_destination}
+    mkdir -p "$(dirname -- "${output}")"
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --retry 5 --retry-all-errors --connect-timeout 30 \
+      --output "${encoded}" "${url}"
+    base64 --decode "${encoded}" >"${output}"
+    actual=$(git hash-object --no-filters "${output}")
+    [[ "${actual}" == "${expected}" ]] \
+      || die "blob mismatch for ${source_path}: expected ${expected}, got ${actual}"
+  done < <(jq -r '.files[] | [.path, .destination, .sha1] | @tsv' \
+    <<<"${source_json}")
+}
+
 fetch_one() {
-  local source_json=$1 id repository commit subtree destination git_tree verify_tree
+  local source_json=$1 id repository commit subtree destination git_tree verify_tree file_count
   local url temp_dir archive extract_dir target
 
   id=$(jq -r '.id' <<<"${source_json}")
@@ -74,35 +104,45 @@ fetch_one() {
   destination=$(jq -r '.destination' <<<"${source_json}")
   git_tree=$(jq -r '.git_tree // empty' <<<"${source_json}")
   verify_tree=$(jq -r '.verify_tree' <<<"${source_json}")
+  file_count=$(jq -r '.files // [] | length' <<<"${source_json}")
 
   [[ "${repository}" =~ ^https://android\.googlesource\.com/[A-Za-z0-9._/-]+$ ]] \
     || die "${id}: repository is outside the official allow-list"
   [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || die "${id}: commit is not a full SHA-1"
   safe_relative_path "${destination}" || die "${id}: unsafe destination"
-  if [[ -n "${subtree}" ]]; then
-    safe_relative_path "${subtree}" || die "${id}: unsafe subtree"
-    url="${repository}/+archive/${commit}/${subtree}.tar.gz"
-  else
-    url="${repository}/+archive/${commit}.tar.gz"
-  fi
-
   temp_dir=$(mktemp -d)
   archive=${temp_dir}/source.tar.gz
   extract_dir=${temp_dir}/source
   mkdir -p "${extract_dir}"
   printf 'fetch-sources: %s\n' "${id}"
-  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-    --retry 5 --retry-all-errors --connect-timeout 30 \
-    --output "${archive}" "${url}"
-  validate_archive_members "${archive}"
-  tar --extract --gzip --file "${archive}" --directory "${extract_dir}" \
-    --no-same-owner --no-same-permissions
 
-  if [[ "${verify_tree}" == true ]]; then
-    [[ "${git_tree}" =~ ^[0-9a-f]{40}$ ]] || die "${id}: verified tree is not pinned"
-    verify_git_tree "${extract_dir}" "${git_tree}"
+  if (( file_count > 0 )); then
+    [[ -z "${subtree}" ]] || die "${id}: locked files cannot also use a subtree"
+    [[ "${verify_tree}" == false ]] \
+      || die "${id}: a partial locked file set cannot verify a whole tree"
+    fetch_locked_files "${source_json}" "${repository}" "${commit}" \
+      "${temp_dir}" "${extract_dir}"
+  else
+    if [[ -n "${subtree}" ]]; then
+      safe_relative_path "${subtree}" || die "${id}: unsafe subtree"
+      url="${repository}/+archive/${commit}/${subtree}.tar.gz"
+    else
+      url="${repository}/+archive/${commit}.tar.gz"
+    fi
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --retry 5 --retry-all-errors --connect-timeout 30 \
+      --output "${archive}" "${url}"
+    validate_archive_members "${archive}"
+    tar --extract --gzip --file "${archive}" --directory "${extract_dir}" \
+      --no-same-owner --no-same-permissions
+
+    if [[ "${verify_tree}" == true ]]; then
+      [[ "${git_tree}" =~ ^[0-9a-f]{40}$ ]] \
+        || die "${id}: verified tree is not pinned"
+      verify_git_tree "${extract_dir}" "${git_tree}"
+    fi
+    verify_blobs "${extract_dir}" "${source_json}"
   fi
-  verify_blobs "${extract_dir}" "${source_json}"
   normalize_mtimes "${extract_dir}"
 
   target=${WORKSPACE}/${destination}

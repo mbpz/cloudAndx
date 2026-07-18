@@ -24,6 +24,12 @@
       "git_tree": "a528f26b6f42526e2d4f460aed5aaf5c5d706516"
     },
     {
+      "id": "qt",
+      "repository": "https://android.googlesource.com/platform/prebuilts/android-emulator-build/qt",
+      "commit": "f2d41b8d15c2a628e95c2e755ed92186d03b763c",
+      "git_tree": "e24037912caff0d1333503aec24faafdde8f7921"
+    },
+    {
       "id": "webrtc",
       "repository": "https://android.googlesource.com/platform/external/webrtc",
       "commit": "34c5ae008bf811fce3006818f26f922b3647237a",
@@ -70,6 +76,53 @@
       "git_tree": "0e8ba908ca9f160db2e495511f59790241279c38",
       "verify_tree": false,
       "verification_note": "The exact commit and official tree are pinned; archive tree reconstruction was not independently proven in the build lane."
+    },
+    {
+      "id": "qt-linux-aarch64-x11",
+      "repository": "https://android.googlesource.com/platform/prebuilts/android-emulator-build/qt",
+      "commit": "f2d41b8d15c2a628e95c2e755ed92186d03b763c",
+      "subtree": "",
+      "destination": "prebuilts/android-emulator-build/qt/linux-aarch64/lib",
+      "git_tree": "ce55fd91d181e57515f3833e80a4d1fcc7f732da",
+      "verify_tree": false,
+      "verification_note": "Only the pinned AArch64 X11 link libraries and their non-glibc DT_NEEDED closure are fetched from this official Qt lib tree.",
+      "files": [
+        {
+          "path": "linux-aarch64/lib/libX11.so",
+          "destination": "libX11.so",
+          "sha1": "c6a6bf0eb60353d00ec60df437dab1e16134ed45"
+        },
+        {
+          "path": "linux-aarch64/lib/libX11.so.6",
+          "destination": "libX11.so.6",
+          "sha1": "c6a6bf0eb60353d00ec60df437dab1e16134ed45"
+        },
+        {
+          "path": "linux-aarch64/lib/libXau.so",
+          "destination": "libXau.so",
+          "sha1": "338d63b32fedd3fb45f057bec3ab888c27f5f5ed"
+        },
+        {
+          "path": "linux-aarch64/lib/libXau.so.6",
+          "destination": "libXau.so.6",
+          "sha1": "338d63b32fedd3fb45f057bec3ab888c27f5f5ed"
+        },
+        {
+          "path": "linux-aarch64/lib/libxcb.so.1",
+          "destination": "libxcb.so.1",
+          "sha1": "e8aa539274979031543d77902b9a5ea874ef3aad"
+        },
+        {
+          "path": "linux-aarch64/lib/libXdmcp.so.6",
+          "destination": "libXdmcp.so.6",
+          "sha1": "2c935ce03cc1f358aabb9d00be3bd61538377678"
+        },
+        {
+          "path": "linux-aarch64/lib/libbsd.so.0",
+          "destination": "libbsd.so.0",
+          "sha1": "ec5288fd6b365b24ea1de3650a4ef2d61d3319b4"
+        }
+      ]
     },
     {
       "id": "common-virglrenderer-linux-aarch64",
@@ -452,6 +505,21 @@
       "verify_tree": true
     },
     {
+      "id": "cuttlefish-common-libs-fs",
+      "repository": "https://android.googlesource.com/device/google/cuttlefish",
+      "commit": "7544e817764397f8ed818ea1cd36dde6ab90adf1",
+      "subtree": "common/libs/fs",
+      "destination": "device/google/cuttlefish/common/libs/fs",
+      "git_tree": "eac7967fe51482a31b82b1d506efc41238c9fed4",
+      "verify_tree": true,
+      "blob_checks": [
+        {
+          "path": "shared_buf.h",
+          "sha1": "a4ad2dfe2f00365c4c0ac2cd475a0e67aefa6054"
+        }
+      ]
+    },
+    {
       "id": "cuttlefish-modem-simulator",
       "repository": "https://android.googlesource.com/device/google/cuttlefish",
       "commit": "7544e817764397f8ed818ea1cd36dde6ab90adf1",
@@ -486,7 +554,9 @@
       "patches/0003-fix-gnss-proto-relative-path.patch",
       "patches/0004-use-system-toolchain-for-build-host-tools.patch",
       "patches/0005-build-host-protoc-from-upstream-source.patch",
-      "patches/0006-propagate-host-cmake-context.patch"
+      "patches/0006-propagate-host-cmake-context.patch",
+      "patches/0007-disable-x86-kvm-on-non-x86-linux.patch",
+      "patches/0008-use-tcg-translation-without-kvm.patch"
     ],
     "protobuf": [
       "patches/protobuf-0001-allow-standalone-host-protoc.patch"

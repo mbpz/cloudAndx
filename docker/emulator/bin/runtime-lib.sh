@@ -82,13 +82,63 @@ validate_native_aemu_bundle() {
   engine=${bundle_root}/bin/qemu-system-x86_64-headless
   manifest=${bundle_root}/manifest.json
   checksums=${bundle_root}/SHA256SUMS
+  identity=${bundle_root}/identity.properties
+
+  [ -n "${NATIVE_AEMU_REVISION-}" ] \
+    || runtime_die "Native AEMU required revision is missing from the image environment." \
+    || return 1
+  case ${NATIVE_AEMU_SOURCE_LOCK_SHA256-} in
+    ''|*[!0-9a-f]*) runtime_die "Native AEMU required source-lock digest is invalid."; return 1 ;;
+  esac
+  case ${NATIVE_AEMU_PATCH_SET_SHA256-} in
+    ''|*[!0-9a-f]*) runtime_die "Native AEMU required patch-set digest is invalid."; return 1 ;;
+  esac
+  [ "${#NATIVE_AEMU_SOURCE_LOCK_SHA256}" -eq 64 ] \
+    || runtime_die "Native AEMU required source-lock digest is not SHA-256." \
+    || return 1
+  [ "${#NATIVE_AEMU_PATCH_SET_SHA256}" -eq 64 ] \
+    || runtime_die "Native AEMU required patch-set digest is not SHA-256." \
+    || return 1
 
   [ -x "${runner}" ] || runtime_die "Native AEMU runner is missing or not executable: ${runner}" || return 1
   [ -x "${engine}" ] || runtime_die "Native AEMU engine is missing or not executable: ${engine}" || return 1
   [ -s "${manifest}" ] || runtime_die "Native AEMU provenance manifest is missing: ${manifest}" || return 1
   [ -s "${checksums}" ] || runtime_die "Native AEMU checksum manifest is missing: ${checksums}" || return 1
+  [ -s "${identity}" ] || runtime_die "Native AEMU immutable identity is missing: ${identity}" || return 1
   (cd "${bundle_root}" && sha256sum -c SHA256SUMS >/dev/null 2>&1) \
     || runtime_die "Native AEMU bundle checksum verification failed." \
+    || return 1
+  [ "$(wc -l < "${identity}" | tr -d ' ')" = 3 ] \
+    || runtime_die "Native AEMU identity must contain exactly three fields." \
+    || return 1
+  grep -Fxq "revision=${NATIVE_AEMU_REVISION}" "${identity}" \
+    || runtime_die "Native AEMU revision identity does not match the required bundle." \
+    || return 1
+  grep -Fxq "source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" "${identity}" \
+    || runtime_die "Native AEMU source-lock identity does not match the required bundle." \
+    || return 1
+  grep -Fxq "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" "${identity}" \
+    || runtime_die "Native AEMU patch-set identity does not match the required bundle." \
+    || return 1
+}
+
+validate_native_aemu_direct_execution() {
+  bundle_root=${1:-/opt/cloudandx/native-aemu}
+  bundled_loader=${bundle_root}/lib/ld-linux-aarch64.so.1
+  engine_lib_link=${bundle_root}/bin/lib64
+  interpreter=${2:-/lib/ld-linux-aarch64.so.1}
+
+  [ -x "${interpreter}" ] \
+    || runtime_die "Native AEMU PT_INTERP is unavailable: ${interpreter}" \
+    || return 1
+  cmp -s "${bundled_loader}" "${interpreter}" \
+    || runtime_die "Native AEMU PT_INTERP does not match the locked bundle loader." \
+    || return 1
+  [ -L "${engine_lib_link}" ] \
+    || runtime_die "Native AEMU engine lib64 path is not a symbolic link." \
+    || return 1
+  [ "$(readlink "${engine_lib_link}")" = ../lib ] \
+    || runtime_die "Native AEMU engine lib64 path does not resolve inside the bundle." \
     || return 1
 }
 

@@ -1,8 +1,11 @@
-ARG TEST_BASE_IMAGE=alpine@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+ARG TEST_BASE_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ARG RUNTIME_BASE_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ARG RUNTIME_PLATFORM=linux/amd64
 ARG NATIVE_ENGINE_IMAGE=cloudandx/aemu-native-engine:37.1.7
 ARG NATIVE_ENGINE_PLATFORM=linux/arm64
+ARG NATIVE_AEMU_REVISION
+ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
+ARG NATIVE_AEMU_PATCH_SET_SHA256
 
 # This target deliberately has no network or Android artifact dependency. It is
 # used to validate the runtime scripts and the complete Dockerfile on any host.
@@ -11,7 +14,10 @@ WORKDIR /work
 COPY bin/ ./bin/
 COPY avd/ ./avd/
 COPY tests/ ./tests/
-RUN chmod 0555 bin/*.sh tests/*.sh && tests/self-test.sh
+COPY native-engine/bin/run-qemu-system-x86_64-headless ./native-engine/bin/run-qemu-system-x86_64-headless
+RUN chmod 0555 bin/*.sh tests/*.sh \
+      native-engine/bin/run-qemu-system-x86_64-headless \
+    && tests/self-test.sh
 
 FROM --platform=${RUNTIME_PLATFORM} ${RUNTIME_BASE_IMAGE} AS artifact-download-base
 
@@ -129,7 +135,9 @@ ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r
 ARG PLATFORM_TOOLS_SHA1=bcf323933980a59dccc3f14c339aed5fb2171163
 ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-playstore-ps16k-37.0_r06.zip
 ARG SYSTEM_IMAGE_SHA1=8eaeeceb77452c018c3f6b589913cdc45222a87f
-ARG NATIVE_AEMU_REVISION=37.1.7
+ARG NATIVE_AEMU_REVISION
+ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
+ARG NATIVE_AEMU_PATCH_SET_SHA256
 ARG NATIVE_AEMU_QEMU_COMMIT=98f7f6ffcc4e6ce513a8b978323c3b961dc58143
 
 LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-only)" \
@@ -144,6 +152,8 @@ LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-on
       io.cloudandx.android.system-image.url="${SYSTEM_IMAGE_URL}" \
       io.cloudandx.android.system-image.sha1="${SYSTEM_IMAGE_SHA1}" \
       io.cloudandx.android.native-aemu.revision="${NATIVE_AEMU_REVISION}" \
+      io.cloudandx.android.native-aemu.source-lock-sha256="${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
+      io.cloudandx.android.native-aemu.patch-set-sha256="${NATIVE_AEMU_PATCH_SET_SHA256}" \
       io.cloudandx.android.native-aemu.qemu-commit="${NATIVE_AEMU_QEMU_COMMIT}"
 
 COPY --from=tool-fetcher /opt/android-sdk/ /opt/android-sdk/
@@ -153,6 +163,9 @@ COPY avd/ /opt/android-avd-template/
 COPY bin/entrypoint.sh bin/healthcheck.sh bin/runtime-lib.sh bin/runtime-preflight.sh bin/qemu-system-x86_64-headless-dispatcher.sh /usr/local/bin/
 
 RUN set -eu; \
+    test -n "${NATIVE_AEMU_REVISION}"; \
+    test "${#NATIVE_AEMU_SOURCE_LOCK_SHA256}" -eq 64; \
+    test "${#NATIVE_AEMU_PATCH_SET_SHA256}" -eq 64; \
     qemu_child=/opt/android-sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless; \
     test -x "${qemu_child}"; \
     mv "${qemu_child}" "${qemu_child}.upstream-x86_64"; \
@@ -162,7 +175,19 @@ RUN set -eu; \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/runtime-lib.sh \
       /usr/local/bin/runtime-preflight.sh \
+    && install -m 0555 /opt/cloudandx/native-aemu/lib/ld-linux-aarch64.so.1 \
+      /lib/ld-linux-aarch64.so.1 \
+    && cmp -s /opt/cloudandx/native-aemu/lib/ld-linux-aarch64.so.1 \
+      /lib/ld-linux-aarch64.so.1 \
     && (cd /opt/cloudandx/native-aemu && sha256sum -c SHA256SUMS) \
+    && grep -Fxq "revision=${NATIVE_AEMU_REVISION}" \
+      /opt/cloudandx/native-aemu/identity.properties \
+    && grep -Fxq "source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
+      /opt/cloudandx/native-aemu/identity.properties \
+    && grep -Fxq "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
+      /opt/cloudandx/native-aemu/identity.properties \
+    && test -L /opt/cloudandx/native-aemu/bin/lib64 \
+    && test "$(readlink /opt/cloudandx/native-aemu/bin/lib64)" = ../lib \
     && chmod -R a-w /opt/android-sdk /opt/android-avd-template \
       /opt/cloudandx/native-aemu \
     && test -x /opt/android-sdk/emulator/emulator \
@@ -192,6 +217,9 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     EMULATOR_WIPE_DATA=0 \
     ANDROID_RUNTIME_IMPLEMENTATION=native \
     NATIVE_AEMU_ROOT=/opt/cloudandx/native-aemu \
+    NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
+    NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
+    NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
     ADB_MDNS_OPENSCREEN=0
 
 USER android:android

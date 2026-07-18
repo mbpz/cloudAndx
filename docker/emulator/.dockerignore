@@ -6,3 +6,6 @@
 !avd/**
 !tests/
 !tests/**
+!native-engine/
+!native-engine/bin/
+!native-engine/bin/run-qemu-system-x86_64-headless

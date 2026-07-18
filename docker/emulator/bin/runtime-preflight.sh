@@ -39,6 +39,9 @@ engine_executable=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 [ -x "${QEMU_DISPATCHER}" ] || runtime_die "AEMU child dispatcher is missing or not executable: ${QEMU_DISPATCHER}"
 [ -x "${UPSTREAM_QEMU_ENGINE}" ] || runtime_die "Upstream Google x86_64 AEMU child is missing or not executable: ${UPSTREAM_QEMU_ENGINE}"
 validate_native_aemu_bundle "${NATIVE_AEMU_ROOT}"
+case ${DOCKER_ENGINE_ARCHITECTURE} in
+  arm64|aarch64) validate_native_aemu_direct_execution "${NATIVE_AEMU_ROOT}" ;;
+esac
 if [ "${SOCAT_BIN}" = "socat" ]; then
   command -v socat >/dev/null 2>&1 || runtime_die "socat is not installed."
 else
@@ -63,6 +66,9 @@ printf '%s\n' \
   "runtime.implementation=${ANDROID_RUNTIME_IMPLEMENTATION}" \
   "engine.selected=${engine_kind}" \
   "engine.executable=${engine_executable}" \
+  "native-aemu.revision=${NATIVE_AEMU_REVISION}" \
+  "native-aemu.source-lock-sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
+  "native-aemu.patch-set-sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
   "runtime.uid=$(id -u)" \
   "android.release=17" \
   "android.api=37.0" \

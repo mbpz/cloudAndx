@@ -19,8 +19,12 @@ if [ "${1-}" = info ] && [ "${2-}" = --format ]; then
     *) printf '%s\n' unknown ;;
   esac
 fi
-if [ "${1-}" = image ] && [ "${2-}" = inspect ] && [ -n "${FAKE_NATIVE_IMAGE_PLATFORM-}" ]; then
-  printf '%s\n' "${FAKE_NATIVE_IMAGE_PLATFORM}"
+if [ "${1-}" = image ] && [ "${2-}" = inspect ]; then
+  if [ -n "${FAKE_NATIVE_IMAGE_IDENTITY-}" ]; then
+    printf '%s\n' "${FAKE_NATIVE_IMAGE_IDENTITY}"
+  elif [ -n "${FAKE_NATIVE_IMAGE_PLATFORM-}" ]; then
+    printf '%s\n' "${FAKE_NATIVE_IMAGE_PLATFORM}"
+  fi
 fi
 exit 0
 EOF
@@ -65,12 +69,36 @@ env FAKE_DOCKER_ARCH=x86_64 FAKE_DOCKER_LOG="${tmp}/docker.log" \
 
 : >"${tmp}/docker.log"
 run_ctl arm64 up >"${tmp}/arm.out" 2>&1
-grep -q 'build --platform linux/arm64 --target bundle --tag cloudandx/aemu-native-engine:37.1.7' "${tmp}/docker.log"
+grep -q 'build --platform linux/arm64 --target bundle' "${tmp}/docker.log"
+grep -q -- '--tag cloudandx/aemu-native-engine:37.1.7' "${tmp}/docker.log"
 grep -q 'compose .* up -d --build' "${tmp}/docker.log"
 grep -q 'runtime_implementation=hybrid-aemu-arm64' "${tmp}/docker.log"
+built_revision=$(sed -n 's/.*--build-arg NATIVE_AEMU_REVISION=\([^ ]*\).*/\1/p' \
+  "${tmp}/docker.log" | tail -n 1)
+built_source_lock=$(sed -n 's/.*--build-arg NATIVE_AEMU_SOURCE_LOCK_SHA256=\([^ ]*\).*/\1/p' \
+  "${tmp}/docker.log" | tail -n 1)
+built_patch_set=$(sed -n 's/.*--build-arg NATIVE_AEMU_PATCH_SET_SHA256=\([^ ]*\).*/\1/p' \
+  "${tmp}/docker.log" | tail -n 1)
+[ "${built_revision}" = 37.1.7 ]
+[ "${#built_source_lock}" -eq 64 ]
+[ "${#built_patch_set}" -eq 64 ]
+case ${built_source_lock}${built_patch_set} in
+  *[!0-9a-f]*)
+    printf '%s\n' 'FAIL: androidctl emitted a non-SHA256 native identity.' >&2
+    exit 1
+    ;;
+esac
 
 : >"${tmp}/docker.log"
 env FAKE_DOCKER_ARCH=arm64 FAKE_NATIVE_IMAGE_PLATFORM=linux/arm64 \
+  FAKE_DOCKER_LOG="${tmp}/docker.log" PATH="${tmp}/bin:${PATH}" \
+  sh "${ROOT}/androidctl" up >"${tmp}/arm-platform-only.out" 2>&1
+grep -q 'reuse=rejected' "${tmp}/arm-platform-only.out"
+grep -q 'build --platform linux/arm64 --target bundle' "${tmp}/docker.log"
+
+: >"${tmp}/docker.log"
+verified_native_identity="linux/arm64|${built_revision}|${built_source_lock}|${built_patch_set}"
+env FAKE_DOCKER_ARCH=arm64 FAKE_NATIVE_IMAGE_IDENTITY="${verified_native_identity}" \
   FAKE_DOCKER_LOG="${tmp}/docker.log" PATH="${tmp}/bin:${PATH}" \
   sh "${ROOT}/androidctl" up >"${tmp}/arm-reuse.out" 2>&1
 grep -q 'reuse=local' "${tmp}/arm-reuse.out"
@@ -78,6 +106,14 @@ if grep -q 'build --platform linux/arm64 --target bundle' "${tmp}/docker.log"; t
   printf '%s\n' 'FAIL: existing verified-platform native bundle was rebuilt during up.' >&2
   exit 1
 fi
+
+: >"${tmp}/docker.log"
+env FAKE_DOCKER_ARCH=arm64 \
+  FAKE_NATIVE_IMAGE_IDENTITY="linux/arm64|${built_revision}|${built_source_lock}|wrong-patch-set" \
+  FAKE_DOCKER_LOG="${tmp}/docker.log" PATH="${tmp}/bin:${PATH}" \
+  sh "${ROOT}/androidctl" up >"${tmp}/arm-rejected-reuse.out" 2>&1
+grep -q 'reuse=rejected' "${tmp}/arm-rejected-reuse.out"
+grep -q 'build --platform linux/arm64 --target bundle' "${tmp}/docker.log"
 
 : >"${tmp}/docker.log"
 if run_ctl aarch64 up-kvm >"${tmp}/arm-kvm.out" 2>&1; then
@@ -117,4 +153,4 @@ if grep -q 'compose .* up' "${tmp}/docker.log"; then
   exit 1
 fi
 
-printf '%s\n' 'PASS: androidctl architecture guard'
+printf '%s\n' 'PASS: androidctl architecture and native identity guard'

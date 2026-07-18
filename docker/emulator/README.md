@@ -38,19 +38,12 @@ Review the Android SDK license first, then explicitly acknowledge it:
 
 ```sh
 cd ../..
-docker build --platform linux/arm64 --target bundle \
-  --tag cloudandx/aemu-native-engine:37.1.7 \
-  docker/emulator/native-engine
-docker build \
-  --platform linux/amd64 \
-  --build-arg ACCEPT_ANDROID_SDK_LICENSES=yes \
-  --tag cloudandx/android17-play-emulator:37.0-r06 \
-  docker/emulator
+ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl build-emulator
 ```
 
-The supported entry point is `ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl build-emulator`,
-which performs those builds in dependency order. The native-engine build and all source
-fetching remain inside Docker.
+The controller derives the immutable native-engine source-lock and ordered
+patch-set identities, then performs both Docker builds in dependency order.
+The native-engine build and all source fetching remain inside Docker.
 
 The system image download is about 2.31 GB. The offline self-test target avoids all Android downloads:
 
@@ -88,10 +81,11 @@ official x86_64 guest.
 
 The official x86_64 launcher still parses the AVD and command line. Its fixed headless-child
 path is an immutable dispatcher. On ARM64 it executes the bundled native AArch64 AEMU binary
-through a bundle-local loader/library closure; on x86_64 it executes the renamed Google
-upstream child. This removes the double-translation hotspot while retaining the unmodified
-official Google Play guest. Bundle source commits, patches, DT_NEEDED closure and SHA-256
-digests are recorded under `native-engine/`.
+directly with the locked ARM64 `PT_INTERP` and bundle-local library closure; on x86_64 it
+executes the renamed Google upstream child. Direct execution keeps `/proc/<pid>/exe` bound to
+the engine. This removes the double-translation hotspot while retaining the unmodified
+official Google Play guest. Bundle source commits, patches, DT_NEEDED closure, immutable
+identity labels and SHA-256 digests are recorded under `native-engine/`.
 
 Compose enables IPv6 only on this project's Docker bridge for the virtual modem. It does not
 invoke `orb`/`orbctl` or change macOS/OrbStack networking, DNS, routes, firewall, or

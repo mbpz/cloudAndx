@@ -112,6 +112,9 @@ services:
       args:
         ACCEPT_ANDROID_SDK_LICENSES: ${ACCEPT_ANDROID_SDK_LICENSES:-no}
         NATIVE_ENGINE_IMAGE: ${NATIVE_ENGINE_IMAGE:-cloudandx/aemu-native-engine:37.1.7}
+        NATIVE_AEMU_REVISION: ${NATIVE_AEMU_REVISION:?NATIVE_AEMU_REVISION must be supplied by androidctl}
+        NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:?NATIVE_AEMU_SOURCE_LOCK_SHA256 must be supplied by androidctl}
+        NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:?NATIVE_AEMU_PATCH_SET_SHA256 must be supplied by androidctl}
     <<: *service-security
     init: true
     shm_size: 2gb

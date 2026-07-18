@@ -11,6 +11,9 @@ BUILD_DIR=${BUILD_DIR:-/out/build}
 BUNDLE_DIR=${BUNDLE_DIR:-/out/bundle/opt/cloudandx/native-aemu}
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(jq -r '.source_date_epoch' "${LOCK_FILE}")}
 READELF=${READELF:-aarch64-linux-gnu-readelf}
+NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION:-}
+NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256:-}
+NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256:-}
 
 die() {
   printf 'package-bundle: %s\n' "$*" >&2
@@ -28,6 +31,28 @@ needed_names() {
   "${READELF}" -d "${path}" 2>/dev/null \
     | sed -n 's/.*(NEEDED).*\[\([^]]*\)\].*/\1/p' \
     | sort -u
+}
+
+elf_interpreter() {
+  local path=$1
+  "${READELF}" -l "${path}" 2>/dev/null \
+    | sed -n 's/.*Requesting program interpreter: \([^]]*\)].*/\1/p'
+}
+
+elf_search_path() {
+  local path=$1 tag=$2
+  "${READELF}" -d "${path}" 2>/dev/null \
+    | sed -n "s/.*(${tag}).*\\[\\([^]]*\\)\\].*/\\1/p"
+}
+
+patch_set_sha256() {
+  local patch_path patch_sha256
+
+  while IFS= read -r patch_path; do
+    patch_sha256=$(sha256sum "${ENGINE_DIR}/${patch_path}" | awk '{print $1}')
+    printf '%s  %s\n' "${patch_sha256}" "${patch_path}"
+  done < <(jq -r '.patches[] | .[]' "${LOCK_FILE}") \
+    | sha256sum | awk '{print $1}'
 }
 
 find_engine() {
@@ -83,6 +108,8 @@ copy_dependency_closure() {
     current=${queue[index++]}
     while IFS= read -r needed; do
       [[ -n "${needed}" ]] || continue
+      [[ "${needed}" =~ ^[A-Za-z0-9._+-]+$ ]] \
+        || die "unsafe DT_NEEDED entry ${needed} from ${current}"
       already_copied=false
       for copied_name in "${copied[@]}"; do
         if [[ "${copied_name}" == "${needed}" ]]; then
@@ -124,9 +151,13 @@ cp --preserve=mode -- "${ENGINE_SOURCE}" \
 cp --preserve=mode -- "${ENGINE_DIR}/bin/run-qemu-system-x86_64-headless" \
   "${BUNDLE_DIR}/bin/run-qemu-system-x86_64-headless"
 
-INTERPRETER=$("${READELF}" -l "${ENGINE_SOURCE}" \
-  | sed -n 's/.*Requesting program interpreter: \([^]]*\)].*/\1/p')
-[[ -n "${INTERPRETER}" ]] || die 'engine has no ELF program interpreter'
+INTERPRETER=$(elf_interpreter "${ENGINE_SOURCE}")
+[[ "${INTERPRETER}" == /lib/ld-linux-aarch64.so.1 ]] \
+  || die "unexpected engine ELF interpreter: ${INTERPRETER:-missing}"
+ENGINE_RPATH=$(elf_search_path "${ENGINE_SOURCE}" RPATH)
+ENGINE_RUNPATH=$(elf_search_path "${ENGINE_SOURCE}" RUNPATH)
+[[ "${ENGINE_RPATH}:${ENGINE_RUNPATH}" == *'$ORIGIN/lib64'* ]] \
+  || die 'engine ELF search path does not contain $ORIGIN/lib64'
 
 SEARCH_ROOTS=(
   "${BUILD_DIR}"
@@ -144,6 +175,7 @@ cp --dereference --preserve=mode -- "${LOADER_SOURCE}" \
   "${BUNDLE_DIR}/lib/ld-linux-aarch64.so.1"
 
 copy_dependency_closure
+ln -s ../lib "${BUNDLE_DIR}/bin/lib64"
 
 cp -- "${LOCK_FILE}" "${BUNDLE_DIR}/share/provenance/sources.lock.json"
 while IFS= read -r patch_path; do
@@ -170,15 +202,38 @@ PATCHES_JSON=$(make_json_file_list "${BUNDLE_DIR}/share/provenance/patches" \
   share/provenance/patches | jq -s .)
 SOURCE_LOCK_SHA256=$(sha256sum "${BUNDLE_DIR}/share/provenance/sources.lock.json" \
   | awk '{print $1}')
+PATCH_SET_SHA256=$(patch_set_sha256)
+REVISION=$(jq -r '.aemu_revision' "${LOCK_FILE}")
+
+[[ -z "${NATIVE_AEMU_REVISION}" || "${REVISION}" == "${NATIVE_AEMU_REVISION}" ]] \
+  || die "revision identity mismatch: expected ${NATIVE_AEMU_REVISION}, got ${REVISION}"
+[[ -z "${NATIVE_AEMU_SOURCE_LOCK_SHA256}" \
+  || "${SOURCE_LOCK_SHA256}" == "${NATIVE_AEMU_SOURCE_LOCK_SHA256}" ]] \
+  || die 'source-lock identity digest mismatch'
+[[ -z "${NATIVE_AEMU_PATCH_SET_SHA256}" \
+  || "${PATCH_SET_SHA256}" == "${NATIVE_AEMU_PATCH_SET_SHA256}" ]] \
+  || die 'patch-set identity digest mismatch'
+
+printf '%s\n' \
+  "revision=${REVISION}" \
+  "source_lock_sha256=${SOURCE_LOCK_SHA256}" \
+  "patch_set_sha256=${PATCH_SET_SHA256}" \
+  > "${BUNDLE_DIR}/identity.properties"
 
 jq -n \
   --arg product cloudandx-aemu-native-engine \
-  --arg revision 37.1.7 \
+  --arg revision "${REVISION}" \
   --arg architecture arm64 \
   --arg binary /opt/cloudandx/native-aemu/bin/qemu-system-x86_64-headless \
   --arg runner /opt/cloudandx/native-aemu/bin/run-qemu-system-x86_64-headless \
   --arg loader /opt/cloudandx/native-aemu/lib/ld-linux-aarch64.so.1 \
+  --arg execution_model direct-engine \
+  --arg interpreter "${INTERPRETER}" \
+  --arg rpath "${ENGINE_RPATH}" \
+  --arg runpath "${ENGINE_RUNPATH}" \
+  --arg library_path /opt/cloudandx/native-aemu/lib \
   --arg source_lock_sha256 "${SOURCE_LOCK_SHA256}" \
+  --arg patch_set_sha256 "${PATCH_SET_SHA256}" \
   --argjson engine_needed "${ENGINE_NEEDED_JSON}" \
   --argjson libraries "${LIBRARIES_JSON}" \
   --argjson patches "${PATCHES_JSON}" \
@@ -190,11 +245,19 @@ jq -n \
     binary: $binary,
     runner: $runner,
     loader: $loader,
+    execution: {
+      model: $execution_model,
+      interpreter: $interpreter,
+      rpath: $rpath,
+      runpath: $runpath,
+      library_path: $library_path
+    },
     engine_dt_needed: $engine_needed,
     libraries: $libraries,
     provenance: {
       source_lock: "share/provenance/sources.lock.json",
       source_lock_sha256: $source_lock_sha256,
+      patch_set_sha256: $patch_set_sha256,
       patches: $patches
     }
   }' > "${BUNDLE_DIR}/manifest.json"

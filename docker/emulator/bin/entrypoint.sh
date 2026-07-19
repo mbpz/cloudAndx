@@ -14,7 +14,7 @@ HOME=${HOME:-/data/home}
 AVD_TEMPLATE_DIR=${AVD_TEMPLATE_DIR:-/opt/android-avd-template}
 AVD_NAME=${AVD_NAME:-Pixel_9_Android_17_Play_ARM64}
 EMULATOR_ACCEL=${EMULATOR_ACCEL:-auto}
-EMULATOR_CORES=${EMULATOR_CORES:-4}
+EMULATOR_CORES=${EMULATOR_CORES:-8}
 EMULATOR_MEMORY_MB=${EMULATOR_MEMORY_MB:-4096}
 EMULATOR_GPU=${EMULATOR_GPU:-swiftshader}
 EMULATOR_CONSOLE_PORT=${EMULATOR_CONSOLE_PORT:-5556}
@@ -179,6 +179,7 @@ start_emulator() {
 
   case ${DOCKER_ENGINE_ARCHITECTURE} in
     arm64|aarch64)
+      set -- "$@" -no-boot-anim -camera-back emulated
       while IFS= read -r graphics_argument; do
         set -- "$@" "${graphics_argument}"
       done <<EOF

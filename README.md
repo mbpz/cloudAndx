@@ -71,7 +71,24 @@ bundle 的 SHA-256 清单，健康检查核对实际
 `/proc/*/exe`，再要求 ADB、`sys.boot_completed`、API 37、Play Store 与 GMS 全部通过。
 由于 Linux AArch64 AEMU 的 `gic-version=host` 和 `-cpu host` 默认都依赖 KVM，
 软件执行路径会在所有 Android/图形参数之后强制追加
-`-qemu -machine gic-version=3 -cpu cortex-a57`，并拒绝用户注入另一个 `-qemu`。
+`-qemu -machine gic-version=2 -cpu android-a57-16k`，并拒绝用户注入另一个 `-qemu`。
+ARM TCG 首次启动还会关闭纯视觉的 boot animation。下载的 Google ZIP 在解压前以
+固定 SHA-1 校验，`system.img`、`vendor.img`、kernel 和初始 userdata 种子保持原始
+内容；为了让极慢的纯 TCG 启动不被 Android framework 的 60 秒 watchdog 循环终止，
+启动 ramdisk 通过 Android 17 官方 second-stage 属性通道
+`/system/etc/ramdisk/build.prop` 只加入 `ro.hw_timeout_multiplier=50`。构建会校验官方
+ramdisk 及解压 cpio 的固定 SHA-256，保持原 cpio 为逐字节前缀，并锁定派生 ramdisk
+SHA-256。因而 Google 签名的 user-build system/GMS 没有改动，但该启动 ramdisk 不再是
+Google ZIP 中逐字节原件；要求所有制品完全不变的路径留待 x86_64/KVM 机器验证。
+模板标识包含 A57/GICv2/ramdisk-timeout50 启动契约，因此旧 volume 会失败关闭并要求
+重新创建。
+原生 AEMU 的 0011 补丁注册隔离的 A57 派生 QOM 类型，只为已有 16 KB TCG 页表实现
+声明 TGran16 能力；0012 仅将该类型加入 `mach-virt` 的独立 CPU 白名单；
+headless 启动则锁定后置摄像头为 `emulated`，避开无窗口模式下的 virtual-scene
+同步初始化，同时保留前后两个软件摄像头。
+纯 TCG 首次冷启动会进行大量 userdata 初始化和包优化；项目默认使用 8 个 guest vCPU，
+应为 Docker Engine 提供至少 8 个 CPU。在容器仍持续消耗 CPU/块 I/O且没有重启或
+OOM 时，不应中断该过程。
 `androidctl` 只在 ARM64 Docker Engine 上选择 `hybrid-aemu-arm64`；x86_64、缺失和
 未知架构组合一律失败关闭。
 
@@ -99,9 +116,10 @@ OrbStack 配置，也不会改 macOS 的 DNS、路由、防火墙或其他网络
 ## “Google 原生体验”的准确含义
 
 Android Emulator 可以达到“Google 官方虚拟设备的软件体验”，但不能达到“Pixel
-真机全部功能”。这套镜像是 Google 发布的 Google Play AVD 软件栈，因此 Android
-UI、Framework、Play Store、Play services、账号登录和大多数应用 API 都是 Google
-原版；Emulator/AVD 仍是一台虚拟设备，不是 Pixel 真机。
+真机全部功能”。这套镜像使用 Google 发布的 Google Play AVD `system/vendor` 软件栈，
+因此 Android UI、Framework、Play Store、Play services、账号登录和大多数应用 API
+都来自 Google 原版。当前 ARM TCG 路径包含上文明确记录的最小启动 ramdisk 属性覆盖；
+Emulator/AVD 仍是一台虚拟设备，不是 Pixel 真机。
 
 以下能力只能模拟或明确阻断：真实运营商基带/eSIM/IMS、NFC 安全元件、UWB、真实
 相机 ISP、物理生物识别链路、TEE/StrongBox、硬件级 Play Integrity、Widevine L1、

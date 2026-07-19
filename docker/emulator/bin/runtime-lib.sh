@@ -301,8 +301,8 @@ native_aemu_graphics_args() {
 native_aemu_tcg_qemu_args() {
   printf '%s\n' \
     -qemu \
-    -machine gic-version=3 \
-    -cpu cortex-a57
+    -machine gic-version=2 \
+    -cpu android-a57-16k
 }
 
 validate_android_emulator_args() {

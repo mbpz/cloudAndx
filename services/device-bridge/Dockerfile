@@ -12,7 +12,7 @@ RUN apt-get update \
     && unzip -q /tmp/platform-tools.zip -d /opt \
     && rm /tmp/platform-tools.zip
 
-FROM python:3.13.5-slim-bookworm AS runtime-base
+FROM python:3.13.14-slim-bookworm@sha256:fcbd8dfc2605ba7c2eca646846c5e892b2931e41f6227985154a596f26ab8ed7 AS runtime-base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libstdc++6 libusb-1.0-0 \
@@ -39,5 +39,5 @@ ENTRYPOINT ["python3", "-m", "unittest", "discover", "-s", "/app/tests", "-v"]
 FROM runtime-base AS runtime
 EXPOSE 8090
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
-  CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=3)"]
+  CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/livez', timeout=3)"]
 ENTRYPOINT ["python3", "/app/bridge.py"]

@@ -10,6 +10,7 @@ emulator_entrypoint=${ROOT}/docker/emulator/bin/entrypoint.sh
 emulator_runtime_lib=${ROOT}/docker/emulator/bin/runtime-lib.sh
 emulator_preflight=${ROOT}/docker/emulator/bin/runtime-preflight.sh
 emulator_healthcheck=${ROOT}/docker/emulator/bin/healthcheck.sh
+ramdisk_builder=${ROOT}/docker/emulator/bin/build-ramdisk-overlay.sh
 obsolete_dispatcher=${ROOT}/docker/emulator/bin/qemu-system-x86_64-headless-dispatcher.sh
 evidence_google_repo=${ROOT}/services/evidence-gate/src/evidence_gate/google_repo.py
 avd_config=${ROOT}/docker/emulator/avd/config.ini
@@ -50,14 +51,40 @@ esac
 grep -Fxq 'AvdId=Pixel_9_Android_17_Play_ARM64' "${avd_config}"
 grep -Fxq 'abi.type=arm64-v8a' "${avd_config}"
 grep -Fxq 'hw.cpu.arch=arm64' "${avd_config}"
+grep -Fxq 'hw.cpu.ncore=8' "${avd_config}"
 grep -Fxq 'image.sysdir.1=system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/' \
   "${avd_config}"
-grep -Fxq 'android-17-api-37.0-google-play-ps16k-arm64-v8a-r06' "${avd_marker}"
+grep -Fxq 'android-17-api-37.0-google-play-ps16k-arm64-v8a-r06-a57-16k-gic2-ramdisk-timeout50' "${avd_marker}"
 grep -Fq 'arm64-v8a-playstore-ps16k-37.0_r06.zip' "${emulator_dockerfile}"
 grep -Fq 'SYSTEM_IMAGE_SHA1=ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4' \
   "${emulator_dockerfile}"
 grep -Fq 'google_apis_playstore_ps16k/arm64-v8a/system.img' \
   "${emulator_dockerfile}"
+grep -Fq 'ANDROID_RAMDISK_ORIGINAL_SHA256=be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8' \
+  "${emulator_dockerfile}"
+grep -Fq 'ANDROID_RAMDISK_CPIO_SHA256=56328ce8b964a5f53c7c6922d4c2415a3d10a2d36f100150d522a817054110ed' \
+  "${emulator_dockerfile}"
+grep -Fq 'ANDROID_RAMDISK_DERIVED_SHA256=28930d955709e5abaa52069cd0a504512f2b3b93dd8538cd2f0a64aad294510e' \
+  "${emulator_dockerfile}"
+grep -Fq 'system/etc/ramdisk/build.prop' "${emulator_dockerfile}"
+grep -Fq 'ro.hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER}' \
+  "${emulator_dockerfile}"
+grep -Fq 'FROM artifact-download-base AS ramdisk-overlay-builder' \
+  "${emulator_dockerfile}"
+grep -Fq 'cpio' "${emulator_dockerfile}"
+grep -Fq 'lz4' "${emulator_dockerfile}"
+[ -f "${ramdisk_builder}" ]
+grep -Fq 'append_newc_entry "${overlay_path}" 33188 "${property_file}"' \
+  "${ramdisk_builder}"
+grep -Fq 'Derived ramdisk does not preserve the official cpio as an exact prefix.' \
+  "${ramdisk_builder}"
+grep -Fq 'Derived ramdisk SHA-256 mismatch' "${ramdisk_builder}"
+if grep -Eq 'data/local\.prop|adb_debug\.prop|force_debuggable' \
+  "${emulator_dockerfile}" "${ramdisk_builder}" "${emulator_preflight}" \
+  "${emulator_healthcheck}"; then
+  printf '%s\n' 'FAIL: ramdisk timeout contract uses a debug or userdata property channel.' >&2
+  exit 1
+fi
 if grep -Fq 'x86_64-playstore-ps16k-37.0_r06.zip' "${emulator_dockerfile}"; then
   printf '%s\n' 'FAIL: emulator image still downloads the x86_64 Google Play guest.' >&2
   exit 1
@@ -66,6 +93,16 @@ grep -Fq 'NATIVE_AEMU_RUNNER=${NATIVE_AEMU_ROOT}/bin/run-qemu-system-aarch64-hea
   "${emulator_entrypoint}"
 grep -Fq 'EMULATOR_BIN=${EMULATOR_BIN:-${NATIVE_AEMU_RUNNER}}' \
   "${emulator_entrypoint}"
+grep -Fq 'EMULATOR_CORES=${EMULATOR_CORES:-8}' "${emulator_entrypoint}"
+grep -Fq 'EMULATOR_CORES=${EMULATOR_CORES:-8}' "${emulator_preflight}"
+grep -Fq 'EMULATOR_CORES=8' "${emulator_dockerfile}"
+case "${emulator_block}" in
+  *'EMULATOR_CORES: ${EMULATOR_CORES:-8}'*) ;;
+  *)
+    printf '%s\n' 'FAIL: ARM TCG no longer defaults to eight guest vCPUs.' >&2
+    exit 1
+    ;;
+esac
 if grep -Fq 'qemu-system-x86_64-headless-dispatcher.sh' "${emulator_dockerfile}"; then
   printf '%s\n' 'FAIL: ARM64 image still installs the obsolete x86 child dispatcher.' >&2
   exit 1
@@ -90,6 +127,11 @@ grep -Fq 'system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a' \
 grep -Fq 'bin/run-qemu-system-aarch64-headless' "${emulator_preflight}"
 grep -Fq 'getprop ro.product.cpu.abi' "${emulator_healthcheck}"
 grep -Fq 'getconf PAGE_SIZE' "${emulator_healthcheck}"
+grep -Fq 'getprop ro.hw_timeout_multiplier' "${emulator_healthcheck}"
+grep -Fq 'EXPECTED_HW_TIMEOUT_MULTIPLIER=${EXPECTED_HW_TIMEOUT_MULTIPLIER:-50}' \
+  "${emulator_healthcheck}"
+grep -Fq 'ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256:-28930d955709e5abaa52069cd0a504512f2b3b93dd8538cd2f0a64aad294510e}' \
+  "${emulator_preflight}"
 if grep -Eq 'QEMU_DISPATCHER|UPSTREAM_QEMU_ENGINE|qemu-system-x86_64-headless' \
   "${emulator_entrypoint}" "${emulator_runtime_lib}" "${emulator_preflight}"; then
   printf '%s\n' 'FAIL: ARM runtime scripts still depend on the x86 guest dispatcher path.' >&2
@@ -136,9 +178,15 @@ case "${emulator_block}" in
 esac
 
 grep -q 'ARM64 / OrbStack hybrid engine' "${ROOT}/docker/emulator/README.md"
-grep -Fq 'gic-version=3' "${ROOT}/docker/emulator/README.md"
-grep -Fq 'cortex-a57' "${ROOT}/docker/emulator/README.md"
+grep -Fq 'gic-version=2' "${ROOT}/docker/emulator/README.md"
+grep -Fq 'android-a57-16k' "${ROOT}/docker/emulator/README.md"
 grep -Fq 'locked final raw QEMU tail' "${ROOT}/docker/emulator/README.md"
+grep -Fq 'not byte-for-byte the ZIP artifact' "${ROOT}/docker/emulator/README.md"
+grep -Fq '`system/etc/ramdisk/build.prop` with `ro.hw_timeout_multiplier=50`' \
+  "${ROOT}/docker/emulator/README.md"
+grep -Fxq 'hw.camera.back=emulated' "${ROOT}/docker/emulator/avd/config.ini"
+grep -Fq 'set -- "$@" -no-boot-anim -camera-back emulated' "${emulator_entrypoint}"
+grep -Fq -- '-no-boot-anim' "${emulator_entrypoint}"
 grep -q 'hybrid-aemu-arm64' "${ROOT}/README.md"
 if grep -Fq 'emulator.version=36.6.11' "${ROOT}/docker/emulator/bin/runtime-preflight.sh"; then
   printf '%s\n' 'FAIL: preflight still labels the SDK artifact version as the selected native engine.' >&2
@@ -158,7 +206,7 @@ if grep -Eqi 'Android 17 development|development/latest.public package' \
   printf '%s\n' 'FAIL: documentation still misstates the released Android 17 base as development.' >&2
   exit 1
 fi
-grep -Fq 'HEALTHCHECK --start-period=60m --interval=30s --timeout=15s --retries=10' \
+grep -Fq 'HEALTHCHECK --start-period=60m --start-interval=1m --interval=10m --timeout=5m --retries=10' \
   "${emulator_dockerfile}"
 grep -Fq 'The 60-minute health start period accommodates cold ARM64 TCG initialization' \
   "${emulator_readme}"

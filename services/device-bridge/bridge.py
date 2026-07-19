@@ -264,6 +264,8 @@ class Handler(BaseHTTPRequestHandler):
             session_match = SESSION_HEALTH_RE.fullmatch(parsed.path)
             if session_match:
                 self._session_health(session_match.group(1))
+            elif parsed.path == "/livez":
+                self._json(HTTPStatus.OK, {"alive": True})
             elif parsed.path == "/healthz":
                 ready, reason, observed = self._runtime_health()
                 self._json(

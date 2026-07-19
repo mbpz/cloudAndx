@@ -81,7 +81,12 @@ the existing HangDetector pause in effect when AEMU reports
 `ANDROID_CPU_ACCELERATOR_NONE`, covering both the minimal and normal entry
 paths. Accelerated executions retain the original resume/pause pair. Watcher
 registration, CPU-usage monitoring, explicit guest-hang predicates, and the
-official Google Play guest image remain unchanged.
+Google-signed Android system/vendor partitions remain unchanged by these
+native-engine patches.
+
+The Android 16 KiB CPU support remains split across two narrow ordered patches:
+0011 registers the isolated `android-a57-16k` QOM type, while 0012 only adds that
+type to `mach-virt`'s independent hardcoded CPU allowlist.
 
 Run the offline contract test without downloading or building sources:
 

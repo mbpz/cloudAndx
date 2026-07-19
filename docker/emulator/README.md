@@ -102,16 +102,46 @@ uses a separately locked AArch64 Khronos Vulkan loader and SwiftShader ICD. The 
 the loader through the bundle's AArch64 interpreter and library path, requires the 120-second
 Vulkan smoke probe to report `PASS`, leaves Vulkan enabled, and disables unsupported Guest ANGLE
 and Vulkan snapshot features. This
-removes cross-ISA guest translation while retaining the unmodified official arm64-v8a Google
-Play guest. Bundle source commits, patches, DT_NEEDED closure, immutable
+removes cross-ISA guest translation while retaining the official signed arm64-v8a Google
+Play system and vendor partitions. Bundle source commits, patches, DT_NEEDED closure, immutable
 identity labels and SHA-256 digests are recorded under `native-engine/`.
 
 Linux AArch64 AEMU otherwise selects the KVM-only `gic-version=host` and `-cpu host`
 defaults even when acceleration is off. The entrypoint therefore appends
-`-qemu -machine gic-version=3 -cpu cortex-a57` as a locked final raw QEMU tail,
+`-qemu -machine gic-version=2 -cpu android-a57-16k` as a locked final raw QEMU tail,
 after user-supplied Android options and the graphics safety arguments. User-supplied
 `-qemu` sentinels are rejected so they cannot move or override that TCG boundary;
-`cortex-a57` matches the same source tree's existing non-AArch64-host TCG default.
+`android-a57-16k` derives from the source tree's existing Cortex-A57 model without
+changing the generic Cortex-A57, A53, `max`, or KVM `host` contracts. The native
+0011 patch registers that QOM type and advertises TGran16 only for it because the
+same TCG implementation already handles 16 KB stage-1 and stage-2 walks; the
+separate 0012 patch only admits that registered type through `mach-virt`'s
+hardcoded CPU allowlist. Headless
+startup locks the back camera to `emulated`: both cameras remain functional
+software devices while the synchronous virtual-scene loader is kept out of the
+no-window boot path.
+
+The ARM TCG path also disables the visual-only boot animation. The downloaded
+Google ZIP is SHA-1 verified before extraction; `system.img`, `vendor.img`, the
+kernel, and the initial-userdata seed remain byte-for-byte unchanged. Pure TCG is
+slow enough that Android's default framework watchdog repeatedly restarts
+SystemServer, so the build creates one explicitly derived boot ramdisk. It keeps
+the decompressed official cpio as an exact byte prefix and adds only
+`system/etc/ramdisk/build.prop` with `ro.hw_timeout_multiplier=50`, the Android 17
+first-stage/second-stage property channel. The build records and verifies both
+the official ramdisk SHA-256
+`be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8` and the
+deterministic derived SHA-256
+`28930d955709e5abaa52069cd0a504512f2b3b93dd8538cd2f0a64aad294510e`.
+It does not add `force_debuggable`, use a debug ramdisk, or alter SELinux policy.
+This preserves Google's signed user-build system and GMS, but the boot ramdisk is
+not byte-for-byte the ZIP artifact; a strictly untouched-artifact path remains
+deferred to x86_64/KVM verification. The AVD template marker includes the
+A57/GICv2/ramdisk-timeout50 contract, so a volume created by an older image is
+rejected instead of silently reusing incompatible state. A first cold boot
+performs substantial userdata setup and package optimization; an ARM64 Docker
+Engine run took about 25 minutes. Do not interrupt it while the container still
+shows sustained CPU or block-I/O activity and has not restarted or been OOM-killed.
 
 Bluetooth, UWB, and netsim Wi-Fi packet streams use the official Google
 `netsimd` 0.3.112 helper locked from the same common revision. A launcher-root
@@ -156,7 +186,7 @@ Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control a
 | `ANDROID_RUNTIME_IMPLEMENTATION` | derived by `androidctl` | Exactly `hybrid-aemu-arm64` for the current Docker build path. |
 | `EMULATOR_ACCEL` | `auto` (default), `off` | Both resolve to software execution on ARM64. `kvm` and every x86_64 path fail closed. |
 | `EMULATOR_GPU` | `swiftshader` | The ARM64 runtime requires the packaged SwiftShader GLES/Vulkan stack; every other value fails closed. |
-| `EMULATOR_CORES` | `4` | Validated in the range 1–32. |
+| `EMULATOR_CORES` | `8` | Validated in the range 1–32. Eight vCPUs are the ARM TCG default; lower values materially increase first-boot watchdog pressure. |
 | `EMULATOR_MEMORY_MB` | `4096` | Validated in the emulator-supported range 1536–8192. |
 | `EMULATOR_WIPE_DATA` | `0` | Set to `1` for one destructive guest-data reset. |
 
@@ -180,8 +210,9 @@ The image becomes healthy only after all of the following are true:
 4. `ro.build.version.sdk=37`.
 5. `ro.product.cpu.abi=arm64-v8a`.
 6. Guest page size is exactly 16384 bytes.
-7. `com.android.vending` (Play Store) is installed.
-8. `com.google.android.gms` (Google Play services) is installed.
+7. `ro.hw_timeout_multiplier=50` came through the locked second-stage ramdisk property.
+8. `com.android.vending` (Play Store) is installed.
+9. `com.google.android.gms` (Google Play services) is installed.
 
 Before evaluating ADB state, the internal health check makes a five-second-bounded
 connection to `127.0.0.1:${EMULATOR_ADB_PORT}` and then checks only
@@ -191,6 +222,11 @@ using its external `emulator:5555` endpoint.
 
 The 60-minute health start period accommodates cold ARM64 TCG initialization,
 which can continue making guest disk and renderer progress beyond 30 minutes.
-Checks still run and fail closed during that window. A successful health check
-proves the pinned Google Play AVD booted; it does not prove physical-hardware
-parity or Google device certification.
+Each check has a five-minute Docker deadline and every ADB operation is bounded
+to 180 seconds, preventing the former 15-second deadline from repeatedly killing
+valid but slow ADB calls. The start interval is one minute; after the first success,
+the interval becomes ten minutes. API, ABI, page size, timeout multiplier, Play,
+and GMS checks share one guest-shell probe so readiness does not continuously
+occupy PackageManager on TCG. Checks still fail closed during the start window.
+A successful health check proves the pinned Google Play AVD booted; it does not
+prove physical-hardware parity or Google device certification.

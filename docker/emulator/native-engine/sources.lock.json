@@ -80,7 +80,7 @@
         {"path": "CMakeLists.txt", "sha1": "bd1f0098b015d21018f260026ed194abfe0b9a6d"},
         {"path": "source.properties", "sha1": "8af374fd5bb669f96b7ead98c03df12b9205f7ae"},
         {"path": "cmake-main.linux-aarch64.inc", "sha1": "844a24bdfb19d9cca58358436b9c81c83ea52e47"},
-        {"path": "android/build/cmake/toolchain-linux-aarch64.cmake", "sha1": "1fa863f9f813d1750039cc1952df8d02ec735b07"},
+        {"path": "android/build/cmake/toolchain-linux-aarch64.cmake", "sha1": "22356d3b8ba6908fdd2e5712866cac7eb68cce2c"},
         {"path": "android/emulator/CMakeLists.txt", "sha1": "e29c1d113371919b650e31ea9fbc192d1d789917"},
         {"path": "android/emulator/main-emulator.cpp", "sha1": "b1ce66146651b509fc85b20f5ecc3c51aea56a35"},
         {"path": "android-qemu2-glue/main.cpp", "sha1": "b6de85fd4ed97d1f63b13d643ee002a3506410b1"},
@@ -682,7 +682,9 @@
       "patches/0007-disable-x86-kvm-on-non-x86-linux.patch",
       "patches/0008-use-tcg-translation-without-kvm.patch",
       "patches/0009-use-origin-rpath-for-emugl-common.patch",
-      "patches/0010-keep-hang-detector-paused-for-tcg.patch"
+      "patches/0010-keep-hang-detector-paused-for-tcg.patch",
+      "patches/0011-add-android-a57-16k-cpu-model.patch",
+      "patches/0012-allow-android-a57-16k-on-mach-virt.patch"
     ],
     "gfxstream": [
       "patches/gfxstream-0001-propagate-xcb-headers-to-vulkan-cereal.patch"

@@ -13,10 +13,6 @@ ARG NATIVE_AEMU_REVISION
 ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
 ARG NATIVE_AEMU_PATCH_SET_SHA256
 
-RUN test -n "${NATIVE_AEMU_REVISION}" \
-    && test "${#NATIVE_AEMU_SOURCE_LOCK_SHA256}" -eq 64 \
-    && test "${#NATIVE_AEMU_PATCH_SET_SHA256}" -eq 64
-
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       binutils-aarch64-linux-gnu \
@@ -47,9 +43,19 @@ WORKDIR /native-engine
 
 COPY sources.lock.json ./sources.lock.json
 COPY patches/ ./patches/
-COPY scripts/ ./scripts/
+COPY scripts/apply-patches.sh \
+     scripts/build-vulkan.sh \
+     scripts/build.sh \
+     scripts/configure.sh \
+     scripts/fetch-sources.sh \
+     scripts/package-bundle.sh \
+     ./scripts/
 COPY bin/ ./bin/
 COPY probes/ ./probes/
+
+RUN test -n "${NATIVE_AEMU_REVISION}" \
+    && test "${#NATIVE_AEMU_SOURCE_LOCK_SHA256}" -eq 64 \
+    && test "${#NATIVE_AEMU_PATCH_SET_SHA256}" -eq 64
 
 RUN chmod 0755 ./scripts/*.sh ./bin/run-qemu-system-aarch64-headless ./bin/netsimd \
     && ./scripts/fetch-sources.sh \
@@ -61,11 +67,14 @@ RUN ./scripts/configure.sh \
     && NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
        NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
        NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
-       ./scripts/package-bundle.sh \
-    && NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
-       NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
-       NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
-       ./scripts/smoke-test-bundle.sh
+       ./scripts/package-bundle.sh
+
+COPY --chmod=0755 scripts/smoke-test-bundle.sh ./scripts/smoke-test-bundle.sh
+
+RUN NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
+    NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
+    NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
+    ./scripts/smoke-test-bundle.sh
 
 FROM --platform=${BUNDLE_PLATFORM} ${BUILD_BASE} AS vulkan-smoke
 

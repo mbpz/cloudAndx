@@ -76,6 +76,74 @@ search_path_contains() {
   [[ ":${search_path}:" == *":${expected}:"* ]]
 }
 
+qmp_probe_failure() {
+  local log=$1 message=$2
+
+  printf 'smoke-test-bundle: mach-virt QMP probe output (last 8192 bytes):\n' >&2
+  tail -c 8192 "${log}" >&2 || true
+  printf '\n' >&2
+  rm -f "${log}"
+  die "${message}"
+}
+
+verify_android_a57_16k_mach_virt() {
+  local qmp_log qmp_status
+
+  qmp_log=$(mktemp)
+  if printf '%s\n' \
+      '{"execute":"qmp_capabilities","id":"capabilities"}' \
+      '{"execute":"quit","id":"quit"}' \
+    | env -i \
+      LC_ALL=C \
+      TMPDIR=/tmp \
+      HOME=/tmp \
+      ANDROID_EMULATOR_LAUNCHER_DIR="${BUNDLE_DIR}" \
+      ANDROID_EMU_VK_LOADER_PATH="${BUNDLE_DIR}/lib64/vulkan/libvulkan.so" \
+      ANDROID_EMU_VK_ICD=swiftshader \
+      QEMU_AUDIO_DRV=none \
+      /usr/bin/timeout --signal=TERM --kill-after=5s 30s \
+      "${LOADER}" \
+      --library-path "${BUNDLE_DIR}/lib64:${BUNDLE_DIR}/lib64/gles_swiftshader" \
+      "${ENGINE}" \
+      -fuchsia \
+      -machine virt,gic-version=2 \
+      -cpu android-a57-16k \
+      -S \
+      -nodefaults \
+      -qmp stdio \
+      -nographic >"${qmp_log}" 2>&1; then
+    qmp_status=0
+  else
+    qmp_status=$?
+  fi
+
+  if grep -Eq 'CPU type .*android-a57-16k.*not supported' "${qmp_log}"; then
+    qmp_probe_failure "${qmp_log}" \
+      'mach-virt rejected the android-a57-16k CPU model'
+  fi
+  if grep -Eq '"error"[[:space:]]*:' "${qmp_log}"; then
+    qmp_probe_failure "${qmp_log}" \
+      'mach-virt returned a QMP command error for android-a57-16k'
+  fi
+  if ! grep -Eq '"id"[[:space:]]*:[[:space:]]*"capabilities"' "${qmp_log}"; then
+    qmp_probe_failure "${qmp_log}" \
+      'mach-virt did not acknowledge qmp_capabilities for android-a57-16k'
+  fi
+  if ! grep -Eq '"event"[[:space:]]*:[[:space:]]*"SHUTDOWN"' "${qmp_log}"; then
+    qmp_probe_failure "${qmp_log}" \
+      'mach-virt did not emit QMP SHUTDOWN for android-a57-16k'
+  fi
+  case ${qmp_status} in
+    0|138) ;;
+    *)
+      qmp_probe_failure "${qmp_log}" \
+        "mach-virt QMP probe exited with unexpected status ${qmp_status}"
+      ;;
+  esac
+
+  rm -f "${qmp_log}"
+}
+
 for required in \
   "${ENGINE}" \
   "${RUNNER}" \
@@ -241,6 +309,8 @@ find "${BUNDLE_DIR}/lib/pc-bios" -type f -print -quit | grep -q . \
   ! -name hostapd.conf \
   ! -name emulator_access.json \
   -print -quit) ]] || die 'bundle lib contains unlocked runtime data'
+
+verify_android_a57_16k_mach_virt
 
 [[ -d "${BUNDLE_DIR}/resources/skins/android-36" ]] \
   || die 'locked x86_64 guest skin resources are missing'
@@ -410,4 +480,4 @@ grep -Fxq "patch_set_sha256=${PATCH_SET_SHA256}" "${IDENTITY}" \
   || "${PATCH_SET_SHA256}" == "${NATIVE_AEMU_PATCH_SET_SHA256}" ]] \
   || die 'expected patch-set identity mismatch'
 
-printf 'smoke-test-bundle: launcher layout, AArch64 closure, mixed-arch netsimd, audio policy, identity, and checksums verified\n'
+printf 'smoke-test-bundle: launcher layout, AArch64 closure, mach-virt CPU model, mixed-arch netsimd, audio policy, identity, and checksums verified\n'

@@ -106,6 +106,17 @@ def healthy_observation():
 
 
 class RuntimeHealthTests(unittest.TestCase):
+    def test_liveness_does_not_touch_adb_runtime_health(self):
+        handler = object.__new__(bridge.Handler)
+        handler.path = "/livez"
+        handler._json = Mock()
+        handler._runtime_health = Mock(side_effect=AssertionError("deep probe must not run"))
+
+        handler.do_GET()
+
+        handler._runtime_health.assert_not_called()
+        handler._json.assert_called_once_with(200, {"alive": True})
+
     def test_runtime_probe_collects_required_package_evidence(self):
         handler = object.__new__(bridge.Handler)
         adb = RuntimeAdb()

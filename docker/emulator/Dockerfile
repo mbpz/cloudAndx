@@ -6,6 +6,11 @@ ARG NATIVE_ENGINE_PLATFORM=linux/arm64
 ARG NATIVE_AEMU_REVISION
 ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
 ARG NATIVE_AEMU_PATCH_SET_SHA256
+ARG ANDROID_HW_TIMEOUT_MULTIPLIER=50
+ARG ANDROID_RAMDISK_ORIGINAL_SHA256=be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8
+ARG ANDROID_RAMDISK_CPIO_SHA256=56328ce8b964a5f53c7c6922d4c2415a3d10a2d36f100150d522a817054110ed
+ARG ANDROID_RAMDISK_DERIVED_SHA256=28930d955709e5abaa52069cd0a504512f2b3b93dd8538cd2f0a64aad294510e
+ARG ANDROID_RAMDISK_OVERLAY_PATH=system/etc/ramdisk/build.prop
 
 # This target deliberately has no network or Android artifact dependency. It is
 # used to validate the runtime scripts and the complete Dockerfile on any host.
@@ -74,6 +79,35 @@ RUN set -eu; \
     test -s "${image_parent}/arm64-v8a/vendor.img"; \
     rm -f /tmp/system-image.zip
 
+FROM artifact-download-base AS ramdisk-overlay-builder
+
+ARG ANDROID_HW_TIMEOUT_MULTIPLIER
+ARG ANDROID_RAMDISK_ORIGINAL_SHA256
+ARG ANDROID_RAMDISK_CPIO_SHA256
+ARG ANDROID_RAMDISK_DERIVED_SHA256
+ARG ANDROID_RAMDISK_OVERLAY_PATH
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      cpio \
+      lz4 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=system-image-fetcher \
+  /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img \
+  /work/official-ramdisk.img
+COPY bin/build-ramdisk-overlay.sh /usr/local/bin/build-ramdisk-overlay.sh
+
+RUN chmod 0555 /usr/local/bin/build-ramdisk-overlay.sh \
+    && /usr/local/bin/build-ramdisk-overlay.sh \
+      /work/official-ramdisk.img \
+      /opt/cloudandx/android-ramdisk \
+      "${ANDROID_HW_TIMEOUT_MULTIPLIER}" \
+      "${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
+      "${ANDROID_RAMDISK_CPIO_SHA256}" \
+      "${ANDROID_RAMDISK_DERIVED_SHA256}" \
+      "${ANDROID_RAMDISK_OVERLAY_PATH}"
+
 FROM --platform=${RUNTIME_PLATFORM} ${RUNTIME_BASE_IMAGE} AS runtime-base
 
 RUN apt-get update \
@@ -140,6 +174,11 @@ ARG NATIVE_AEMU_REVISION
 ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
 ARG NATIVE_AEMU_PATCH_SET_SHA256
 ARG NATIVE_AEMU_QEMU_COMMIT=98f7f6ffcc4e6ce513a8b978323c3b961dc58143
+ARG ANDROID_HW_TIMEOUT_MULTIPLIER
+ARG ANDROID_RAMDISK_ORIGINAL_SHA256
+ARG ANDROID_RAMDISK_CPIO_SHA256
+ARG ANDROID_RAMDISK_DERIVED_SHA256
+ARG ANDROID_RAMDISK_OVERLAY_PATH
 
 LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-only)" \
       org.opencontainers.image.description="Google Android 17 API 37.0 Play arm64-v8a 16 KB r06 with native AEMU 37.1.7 and SDK resources from Emulator 36.6.11" \
@@ -152,6 +191,9 @@ LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-on
       io.cloudandx.android.platform-tools.sha1="${PLATFORM_TOOLS_SHA1}" \
       io.cloudandx.android.system-image.url="${SYSTEM_IMAGE_URL}" \
       io.cloudandx.android.system-image.sha1="${SYSTEM_IMAGE_SHA1}" \
+      io.cloudandx.android.ramdisk.original-sha256="${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
+      io.cloudandx.android.ramdisk.derived-sha256="${ANDROID_RAMDISK_DERIVED_SHA256}" \
+      io.cloudandx.android.ramdisk.overlay="${ANDROID_RAMDISK_OVERLAY_PATH}:ro.hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER}" \
       io.cloudandx.android.native-aemu.revision="${NATIVE_AEMU_REVISION}" \
       io.cloudandx.android.native-aemu.netsimd.version="0.3.112" \
       io.cloudandx.android.native-aemu.vulkan-loader.commit="bac41319cafb4527a2a959237b17611dd08bfe11" \
@@ -162,6 +204,10 @@ LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-on
 
 COPY --from=tool-fetcher /opt/android-sdk/ /opt/android-sdk/
 COPY --from=system-image-fetcher /opt/android-sdk/system-images/ /opt/android-sdk/system-images/
+COPY --from=ramdisk-overlay-builder /opt/cloudandx/android-ramdisk/ /opt/cloudandx/android-ramdisk/
+COPY --from=ramdisk-overlay-builder \
+  /opt/cloudandx/android-ramdisk/derived-ramdisk.img \
+  /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img
 COPY --from=native-engine-bundle /opt/cloudandx/native-aemu/ /opt/cloudandx/native-aemu/
 COPY avd/ /opt/android-avd-template/
 COPY bin/entrypoint.sh bin/healthcheck.sh bin/runtime-lib.sh bin/runtime-preflight.sh /usr/local/bin/
@@ -170,6 +216,9 @@ RUN set -eu; \
     test -n "${NATIVE_AEMU_REVISION}"; \
     test "${#NATIVE_AEMU_SOURCE_LOCK_SHA256}" -eq 64; \
     test "${#NATIVE_AEMU_PATCH_SET_SHA256}" -eq 64; \
+    test "${#ANDROID_RAMDISK_ORIGINAL_SHA256}" -eq 64; \
+    test "${#ANDROID_RAMDISK_CPIO_SHA256}" -eq 64; \
+    test "${#ANDROID_RAMDISK_DERIVED_SHA256}" -eq 64; \
     chmod 0555 /usr/local/bin/entrypoint.sh \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/runtime-lib.sh \
@@ -185,6 +234,24 @@ RUN set -eu; \
       /opt/cloudandx/native-aemu/identity.properties \
     && grep -Fxq "patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" \
       /opt/cloudandx/native-aemu/identity.properties \
+    && printf '%s  %s\n' "${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
+      /opt/cloudandx/android-ramdisk/official-ramdisk.img \
+      | sha256sum --check --strict - \
+    && printf '%s  %s\n' "${ANDROID_RAMDISK_DERIVED_SHA256}" \
+      /opt/cloudandx/android-ramdisk/derived-ramdisk.img \
+      | sha256sum --check --strict - \
+    && cmp -s /opt/cloudandx/android-ramdisk/derived-ramdisk.img \
+      /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img \
+    && grep -Fxq "official_ramdisk_sha256=${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
+      /opt/cloudandx/android-ramdisk/identity.properties \
+    && grep -Fxq "official_cpio_sha256=${ANDROID_RAMDISK_CPIO_SHA256}" \
+      /opt/cloudandx/android-ramdisk/identity.properties \
+    && grep -Fxq "derived_ramdisk_sha256=${ANDROID_RAMDISK_DERIVED_SHA256}" \
+      /opt/cloudandx/android-ramdisk/identity.properties \
+    && grep -Fxq "overlay_path=${ANDROID_RAMDISK_OVERLAY_PATH}" \
+      /opt/cloudandx/android-ramdisk/identity.properties \
+    && grep -Fxq "overlay_property=ro.hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER}" \
+      /opt/cloudandx/android-ramdisk/identity.properties \
     && test -L /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64 \
     && test "$(readlink /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64)" = ../../lib64 \
     && test -x /opt/cloudandx/native-aemu/qemu/linux-aarch64/qemu-system-aarch64-headless \
@@ -232,6 +299,7 @@ RUN set -eu; \
       && test -s sdk-resources.SHA256SUMS \
       && sha256sum -c sdk-resources.SHA256SUMS) \
     && chmod -R a-w /opt/android-sdk /opt/android-avd-template \
+      /opt/cloudandx/android-ramdisk \
       /opt/cloudandx/native-aemu \
     && test -x /opt/android-sdk/emulator/emulator \
     && test -x /opt/android-sdk/platform-tools/adb \
@@ -247,7 +315,7 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     PATH=/opt/android-sdk/emulator:/opt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     AVD_NAME=Pixel_9_Android_17_Play_ARM64 \
     EMULATOR_ACCEL=auto \
-    EMULATOR_CORES=4 \
+    EMULATOR_CORES=8 \
     EMULATOR_MEMORY_MB=4096 \
     EMULATOR_GPU=swiftshader \
     EMULATOR_CONSOLE_PORT=5556 \
@@ -261,6 +329,12 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
     NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
     NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
+    ANDROID_RAMDISK_ROOT=/opt/cloudandx/android-ramdisk \
+    ANDROID_RAMDISK_ORIGINAL_SHA256=${ANDROID_RAMDISK_ORIGINAL_SHA256} \
+    ANDROID_RAMDISK_CPIO_SHA256=${ANDROID_RAMDISK_CPIO_SHA256} \
+    ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256} \
+    ANDROID_RAMDISK_OVERLAY_PATH=${ANDROID_RAMDISK_OVERLAY_PATH} \
+    EXPECTED_HW_TIMEOUT_MULTIPLIER=${ANDROID_HW_TIMEOUT_MULTIPLIER} \
     ADB_MDNS_OPENSCREEN=0
 
 USER android:android
@@ -268,7 +342,7 @@ WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 5555/tcp 8554/tcp
 
-HEALTHCHECK --start-period=60m --interval=30s --timeout=15s --retries=10 \
+HEALTHCHECK --start-period=60m --start-interval=1m --interval=10m --timeout=5m --retries=10 \
   CMD ["/usr/local/bin/healthcheck.sh"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

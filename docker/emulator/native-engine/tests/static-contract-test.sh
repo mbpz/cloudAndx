@@ -162,7 +162,7 @@ jq -e '
     .verify_tree == true)
 ' "${LOCK_FILE}" >/dev/null || fail 'runtime data, SwiftShader, or netsimd locks changed'
 
-EXPECTED_AEMU_PATCHES='["patches/0001-build-x86_64-headless-for-linux-aarch64.patch","patches/0002-build-headless-engine-only.patch","patches/0003-fix-gnss-proto-relative-path.patch","patches/0004-use-system-toolchain-for-build-host-tools.patch","patches/0005-build-host-protoc-from-upstream-source.patch","patches/0006-propagate-host-cmake-context.patch","patches/0007-disable-x86-kvm-on-non-x86-linux.patch","patches/0008-use-tcg-translation-without-kvm.patch","patches/0009-use-origin-rpath-for-emugl-common.patch","patches/0010-keep-hang-detector-paused-for-tcg.patch"]'
+EXPECTED_AEMU_PATCHES='["patches/0001-build-x86_64-headless-for-linux-aarch64.patch","patches/0002-build-headless-engine-only.patch","patches/0003-fix-gnss-proto-relative-path.patch","patches/0004-use-system-toolchain-for-build-host-tools.patch","patches/0005-build-host-protoc-from-upstream-source.patch","patches/0006-propagate-host-cmake-context.patch","patches/0007-disable-x86-kvm-on-non-x86-linux.patch","patches/0008-use-tcg-translation-without-kvm.patch","patches/0009-use-origin-rpath-for-emugl-common.patch","patches/0010-keep-hang-detector-paused-for-tcg.patch","patches/0011-add-android-a57-16k-cpu-model.patch","patches/0012-allow-android-a57-16k-on-mach-virt.patch"]'
 [[ $(jq -c '.patches.aemu' "${LOCK_FILE}") == "${EXPECTED_AEMU_PATCHES}" ]] \
   || fail 'AEMU patch order changed'
 [[ $(jq -c '.patches.protobuf' "${LOCK_FILE}") == \
@@ -212,6 +212,57 @@ TCG_HANG_PATCH=${ENGINE_DIR}/patches/0010-keep-hang-detector-paused-for-tcg.patc
 if grep -Eq '^[+-].*addWatchedLooper' "${TCG_HANG_PATCH}"; then
   fail 'TCG hang-detector patch must not alter watcher registration'
 fi
+ANDROID_16K_CPU_PATCH=${ENGINE_DIR}/patches/0011-add-android-a57-16k-cpu-model.patch
+[[ $(grep -Fc 'diff --git a/target/arm/cpu64.c b/target/arm/cpu64.c' \
+  "${ANDROID_16K_CPU_PATCH}") -eq 1 ]] \
+  || fail 'Android 16 KiB CPU patch must modify only the AArch64 CPU models'
+[[ $(grep -c '^diff --git ' "${ANDROID_16K_CPU_PATCH}") -eq 1 ]] \
+  || fail 'Android 16 KiB CPU patch gained an unexpected source target'
+[[ $(grep -c '^@@ ' "${ANDROID_16K_CPU_PATCH}") -eq 1 ]] \
+  || fail 'Android 16 KiB CPU patch must remain one coherent hunk'
+assert_contains 'The pinned AEMU Cortex-A57 model advertises ID_AA64MMFR0_EL1 as 0x00001124' \
+  "${ANDROID_16K_CPU_PATCH}"
+assert_contains 'and sets only TGran16 bit 20, producing 0x00101124' \
+  "${ANDROID_16K_CPU_PATCH}"
+assert_contains '+    aarch64_a57_initfn(obj);' "${ANDROID_16K_CPU_PATCH}"
+assert_contains '+    cpu->id_aa64mmfr0 |= 1ULL << 20;' "${ANDROID_16K_CPU_PATCH}"
+assert_contains '+    { .name = "android-a57-16k", .initfn = aarch64_android_a57_16k_initfn },' \
+  "${ANDROID_16K_CPU_PATCH}"
+assert_contains 'target/arm/helper.c already handles 16 KiB tables with' \
+  "${ANDROID_16K_CPU_PATCH}"
+assert_contains 'stride 11, so no MMU implementation change is needed.' \
+  "${ANDROID_16K_CPU_PATCH}"
+[[ $((0x00001124 | (1 << 20))) -eq $((0x00101124)) ]] \
+  || fail 'isolated Android CPU model no longer derives the exact 16 KiB register value'
+[[ $(grep -c '^-[^-]' "${ANDROID_16K_CPU_PATCH}") -eq 0 ]] \
+  || fail 'Android 16 KiB CPU patch must remain additive to preserve generic models'
+if grep -Eq '^[+-][^+-].*id_aa64mmfr0[[:space:]]*=' "${ANDROID_16K_CPU_PATCH}"; then
+  fail 'Android 16 KiB CPU patch must not replace a generic CPU register value'
+fi
+for generic_model in cortex-a57 cortex-a53 max; do
+  if grep -Eq "^-[^-].*\\.name = \"${generic_model}\"" "${ANDROID_16K_CPU_PATCH}"; then
+    fail "Android 16 KiB CPU patch must not remove or replace ${generic_model}"
+  fi
+done
+if grep -Eq '^[+-][^+-].*(aarch64_a53_initfn|aarch64_max_initfn|kvm_|host)' \
+  "${ANDROID_16K_CPU_PATCH}"; then
+  fail 'Android 16 KiB CPU patch must not alter A53, max, host, or KVM paths'
+fi
+ANDROID_16K_VIRT_PATCH=${ENGINE_DIR}/patches/0012-allow-android-a57-16k-on-mach-virt.patch
+[[ $(grep -Fc 'diff --git a/hw/arm/virt.c b/hw/arm/virt.c' \
+  "${ANDROID_16K_VIRT_PATCH}") -eq 1 ]] \
+  || fail 'Android 16 KiB mach-virt patch must modify only the ARM virt machine'
+[[ $(grep -c '^diff --git ' "${ANDROID_16K_VIRT_PATCH}") -eq 1 ]] \
+  || fail 'Android 16 KiB mach-virt patch gained an unexpected source target'
+[[ $(grep -c '^@@ ' "${ANDROID_16K_VIRT_PATCH}") -eq 1 ]] \
+  || fail 'Android 16 KiB mach-virt patch must remain one coherent hunk'
+assert_contains 'static const char *valid_cpus[] = {' "${ANDROID_16K_VIRT_PATCH}"
+assert_contains '+    ARM_CPU_TYPE_NAME("android-a57-16k"),' \
+  "${ANDROID_16K_VIRT_PATCH}"
+[[ $(grep -c '^+[^+]' "${ANDROID_16K_VIRT_PATCH}") -eq 1 ]] \
+  || fail 'Android 16 KiB mach-virt patch must add exactly one source line'
+[[ $(grep -c '^-[^-]' "${ANDROID_16K_VIRT_PATCH}") -eq 0 ]] \
+  || fail 'Android 16 KiB mach-virt patch must not remove existing CPU allowlist entries'
 assert_contains 'gfxstream_xcb_headers' \
   "${ENGINE_DIR}/patches/gfxstream-0001-propagate-xcb-headers-to-vulkan-cereal.patch"
 assert_contains 'apply_series gfxstream "${WORKSPACE}/hardware/google/gfxstream"' \
@@ -329,6 +380,13 @@ assert_contains 'NATIVE_AEMU_SOURCE_LOCK_SHA256=$(sha256_file "${NATIVE_AEMU_LOC
   "${REPO_ROOT}/androidctl"
 assert_contains 'NATIVE_AEMU_PATCH_SET_SHA256=$(' \
   "${REPO_ROOT}/androidctl"
+build_emulator_case=$(sed -n '/^  build-emulator)/,/^    ;;/p' \
+  "${REPO_ROOT}/androidctl")
+grep -Fq 'ensure_native_engine' <<<"${build_emulator_case}" \
+  || fail 'build-emulator must reuse a locally verified native engine'
+if grep -Fq 'build_native_engine' <<<"${build_emulator_case}"; then
+  fail 'build-emulator must not unconditionally rebuild the native engine'
+fi
 assert_contains 'source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}' \
   "${REPO_ROOT}/docker/emulator/bin/runtime-lib.sh"
 assert_contains 'patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}' \

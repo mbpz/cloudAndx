@@ -1,0 +1,19 @@
+From: CloudAndX <cloudandx@localhost>
+Subject: [PATCH] allow the Android 16 KiB CPU on mach-virt
+
+Patch 0011 registers the android-a57-16k QOM CPU type, but mach-virt also
+checks every selected CPU against a separate hardcoded valid_cpus[] list.
+Allow the registered Android-only model through that machine-level guard
+without changing any existing CPU model or machine behavior.
+
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -192,6 +192,7 @@ static const char *valid_cpus[] = {
+     ARM_CPU_TYPE_NAME("cortex-a15"),
+     ARM_CPU_TYPE_NAME("cortex-a53"),
+     ARM_CPU_TYPE_NAME("cortex-a57"),
++    ARM_CPU_TYPE_NAME("android-a57-16k"),
+     ARM_CPU_TYPE_NAME("host"),
+     ARM_CPU_TYPE_NAME("max"),
+ };

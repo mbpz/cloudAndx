@@ -94,7 +94,7 @@ assert_fails 'x86_64 GPU path remains deferred' validate_runtime_gpu_mode x86_64
 assert_fails 'ARM64 rejects non-SwiftShader first boot' validate_runtime_gpu_mode arm64 auto
 assert_eq "$(printf '%s\n' -gpu swiftshader -feature -GuestAngle -feature -GuestUsesAngle -feature -VulkanNativeSwapchain -feature -VulkanSnapshots)" \
   "$(native_aemu_graphics_args)" 'ARM64 graphics guard enables packaged SwiftShader Vulkan while disabling unsupported ANGLE and snapshot features'
-assert_eq "$(printf '%s\n' -qemu -machine gic-version=3 -cpu cortex-a57)" \
+assert_eq "$(printf '%s\n' -qemu -machine gic-version=2 -cpu android-a57-16k)" \
   "$(native_aemu_tcg_qemu_args)" 'ARM64 TCG guard overrides the Linux AArch64 KVM-only GIC and CPU defaults'
 
 tmp=$(mktemp -d)
@@ -345,6 +345,22 @@ printf '%s\n' \
 write_fake_bundle_checksums
 printf '%s\n' system >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/system.img"
 printf '%s\n' vendor >"${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/vendor.img"
+ramdisk_root=${tmp}/android-ramdisk
+mkdir -p "${ramdisk_root}"
+printf '%s\n' official-ramdisk >"${ramdisk_root}/official-ramdisk.img"
+printf '%s\n' derived-ramdisk >"${ramdisk_root}/derived-ramdisk.img"
+cp "${ramdisk_root}/derived-ramdisk.img" \
+  "${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img"
+ramdisk_original_sha256=$(sha256sum "${ramdisk_root}/official-ramdisk.img" | cut -d' ' -f1)
+ramdisk_cpio_sha256=$(printf '%s\n' official-cpio | sha256sum | cut -d' ' -f1)
+ramdisk_derived_sha256=$(sha256sum "${ramdisk_root}/derived-ramdisk.img" | cut -d' ' -f1)
+printf '%s\n' \
+  "official_ramdisk_sha256=${ramdisk_original_sha256}" \
+  "official_cpio_sha256=${ramdisk_cpio_sha256}" \
+  "derived_ramdisk_sha256=${ramdisk_derived_sha256}" \
+  'overlay_path=system/etc/ramdisk/build.prop' \
+  'overlay_property=ro.hw_timeout_multiplier=50' \
+  >"${ramdisk_root}/identity.properties"
 cp "${ROOT}/avd/config.ini" "${template}/config.ini"
 cp "${ROOT}/avd/template-version" "${template}/template-version"
 
@@ -355,7 +371,7 @@ printf '%s\n' \
   'if [ -n "${FAKE_SOCAT_PID_DIR-}" ]; then printf "%s\\n" "$$" >"${FAKE_SOCAT_PID_DIR}/$$"; fi' \
   'exec sleep 30' >"${socat_stub}"
 chmod 0755 "${socat_stub}"
-common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm"
+common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm ANDROID_RAMDISK_ROOT=${ramdisk_root} ANDROID_RAMDISK_ORIGINAL_SHA256=${ramdisk_original_sha256} ANDROID_RAMDISK_CPIO_SHA256=${ramdisk_cpio_sha256} ANDROID_RAMDISK_DERIVED_SHA256=${ramdisk_derived_sha256}"
 
 preflight_output=$(env ${common_env} EMULATOR_ACCEL=auto "${ROOT}/bin/runtime-preflight.sh" 2>&1)
 assert_contains "${preflight_output}" 'android.release=17' 'preflight reports Android release'
@@ -366,6 +382,10 @@ assert_contains "${preflight_output}" "native-aemu.revision=${NATIVE_AEMU_REVISI
 assert_contains "${preflight_output}" "native-aemu.source-lock-sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}" 'preflight reports locked source identity'
 assert_contains "${preflight_output}" "native-aemu.patch-set-sha256=${NATIVE_AEMU_PATCH_SET_SHA256}" 'preflight reports locked patch identity'
 assert_contains "${preflight_output}" 'android.image=google_apis_playstore_ps16k/arm64-v8a/r06' 'preflight reports ARM64 image'
+assert_contains "${preflight_output}" 'android.ramdisk=derived-official-prefix-plus-second-stage-property' 'preflight reports the derived boot artifact honestly'
+assert_contains "${preflight_output}" "android.ramdisk.original-sha256=${ramdisk_original_sha256}" 'preflight reports official ramdisk provenance'
+assert_contains "${preflight_output}" "android.ramdisk.derived-sha256=${ramdisk_derived_sha256}" 'preflight reports the locked derived ramdisk'
+assert_contains "${preflight_output}" 'android.hw-timeout-multiplier=50' 'preflight reports the TCG watchdog multiplier'
 assert_contains "${preflight_output}" 'android.release-policy=base-final-stable-qpr1-beta-excluded' 'preflight reports release policy'
 assert_contains "${preflight_output}" 'sdk.emulator-package.version=36.6.11' 'preflight distinguishes the SDK artifact from the native engine revision'
 assert_not_contains "${preflight_output}" 'emulator.version=' 'preflight does not mislabel the SDK package as the selected native engine version'
@@ -377,9 +397,18 @@ command_output=$(env ${common_env} EMULATOR_ACCEL=auto \
   "${ROOT}/bin/entrypoint.sh" print-command -prop 'test.value=a b' 2>&1)
 assert_contains "${command_output}" '=-accel' 'entrypoint includes acceleration flag'
 assert_contains "${command_output}" '=off' 'entrypoint uses software acceleration without KVM'
+cores_value=$(printf '%s\n' "${command_output}" | grep -A1 '=-cores$' | tail -n 1 \
+  | sed 's/^argv\[[0-9][0-9]*\]=//')
+assert_eq 8 "${cores_value}" 'entrypoint defaults ARM TCG to all eight available guest vCPUs'
 assert_contains "${command_output}" '=test.value=a b' 'entrypoint preserves one argument containing spaces'
 assert_contains "${command_output}" '=-grpc' 'entrypoint enables gRPC'
 assert_contains "${command_output}" '=8556' 'entrypoint uses isolated internal gRPC port'
+assert_contains "${command_output}" '=-camera-back' \
+  'ARM64 command locks the headless back camera mode'
+assert_contains "${command_output}" '=-no-boot-anim' \
+  'ARM64 command releases boot-animation CPU time for framework initialization'
+assert_contains "${command_output}" '=emulated' \
+  'ARM64 command keeps both cameras as functional software devices'
 if printf '%s\n' "${command_output}" | grep -Eq '^argv\[[0-9]+\]=-Vulkan$'; then
   printf '%s\n' 'FAIL: ARM64 command disables Vulkan despite the packaged host loader and ICD.' >&2
   exit 1
@@ -389,7 +418,7 @@ assert_contains "${command_output}" '=-VulkanSnapshots' \
   'ARM64 command retains the Vulkan snapshot safety guard'
 raw_qemu_tail=$(printf '%s\n' "${command_output}" | tail -n 5 \
   | sed 's/^argv\[[0-9][0-9]*\]=//')
-assert_eq "$(printf '%s\n' -qemu -machine gic-version=3 -cpu cortex-a57)" \
+assert_eq "$(printf '%s\n' -qemu -machine gic-version=2 -cpu android-a57-16k)" \
   "${raw_qemu_tail}" 'entrypoint keeps the locked ARM TCG override as the final argv tail'
 qemu_sentinel_count=$(printf '%s\n' "${command_output}" \
   | grep -Ec '^argv\[[0-9]+\]=-qemu$')
@@ -457,11 +486,12 @@ printf '%s\n' \
   '    ;;' \
   '  "-s ${expected_serial} get-state") printf "%s\\n" "${FAKE_STATE:-device}" ;;' \
   '  "-s ${expected_serial} shell getprop sys.boot_completed") printf "%s\\n" "${FAKE_BOOT:-1}" ;;' \
-  '  "-s ${expected_serial} shell getprop ro.build.version.sdk") printf "%s\\n" "${FAKE_SDK:-37}" ;;' \
-  '  "-s ${expected_serial} shell getprop ro.product.cpu.abi") printf "%s\\n" "${FAKE_ABI:-arm64-v8a}" ;;' \
-  '  "-s ${expected_serial} shell getconf PAGE_SIZE") printf "%s\\n" "${FAKE_PAGE_SIZE:-16384}" ;;' \
-  '  "-s ${expected_serial} shell pm path com.android.vending") [ "${FAKE_PLAY:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/Phonesky/Phonesky.apk ;;' \
-  '  "-s ${expected_serial} shell pm path com.google.android.gms") [ "${FAKE_GMS:-1}" = 1 ] && printf "%s\\n" package:/system/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk ;;' \
+  '  "-s ${expected_serial} shell "*)' \
+  '    play_path=; gms_path=' \
+  '    [ "${FAKE_PLAY:-1}" = 1 ] && play_path=package:/system/priv-app/Phonesky/Phonesky.apk' \
+  '    [ "${FAKE_GMS:-1}" = 1 ] && gms_path=package:/system/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk' \
+  '    printf "sdk=%s\\nabi=%s\\npage_size=%s\\ntimeout_multiplier=%s\\nplay=%s\\ngms=%s\\n" "${FAKE_SDK:-37}" "${FAKE_ABI:-arm64-v8a}" "${FAKE_PAGE_SIZE:-16384}" "${FAKE_MULTIPLIER:-50}" "${play_path}" "${gms_path}"' \
+  '    ;;' \
   '  *) exit 1 ;;' \
   'esac' >"${fake_adb}"
 chmod 0755 "${fake_adb}"
@@ -567,6 +597,8 @@ assert_fails 'healthcheck rejects incomplete boot' env ${health_env} FAKE_BOOT=0
 assert_fails 'healthcheck rejects wrong API' env ${health_env} FAKE_SDK=36 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck rejects wrong ABI' env ${health_env} FAKE_ABI=x86_64 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck rejects a 4 KB guest' env ${health_env} FAKE_PAGE_SIZE=4096 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects the wrong watchdog multiplier' \
+  env ${health_env} FAKE_MULTIPLIER=1 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires Play Store' env ${health_env} FAKE_PLAY=0 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires Google Play services' env ${health_env} FAKE_GMS=0 "${ROOT}/bin/healthcheck.sh"
 

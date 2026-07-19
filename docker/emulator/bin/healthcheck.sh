@@ -17,6 +17,8 @@ EXPECTED_ANDROID_ABI=${EXPECTED_ANDROID_ABI:-arm64-v8a}
 EXPECTED_PAGE_SIZE_BYTES=${EXPECTED_PAGE_SIZE_BYTES:-16384}
 EXPECTED_HW_TIMEOUT_MULTIPLIER=${EXPECTED_HW_TIMEOUT_MULTIPLIER:-50}
 EXPECTED_FINALIZER_TIMEOUT_MS=${EXPECTED_FINALIZER_TIMEOUT_MS:-500000}
+EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS=${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS:-100000}
+EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS:-250000}
 ADB_HEALTH_COMMAND_TIMEOUT_SECONDS=${ADB_HEALTH_COMMAND_TIMEOUT_SECONDS:-180}
 serial=emulator-${EMULATOR_CONSOLE_PORT}
 adb_endpoint=127.0.0.1:${EMULATOR_ADB_PORT}
@@ -30,6 +32,12 @@ validate_uint_range EXPECTED_HW_TIMEOUT_MULTIPLIER "${EXPECTED_HW_TIMEOUT_MULTIP
 validate_uint_range EXPECTED_FINALIZER_TIMEOUT_MS "${EXPECTED_FINALIZER_TIMEOUT_MS}" 10000 10000000
 [ "${EXPECTED_FINALIZER_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 10000))" ] \
   || runtime_die "ART finalizer timeout must match the hardware timeout multiplier."
+validate_uint_range EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS "${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS}" 2000 2000000
+validate_uint_range EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS "${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" 5000 5000000
+[ "${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 2000))" ] \
+  || runtime_die "Bluetooth HCI command timeout must match the hardware timeout multiplier."
+[ "${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 5000))" ] \
+  || runtime_die "Bluetooth HCI restart timeout must match the hardware timeout multiplier."
 validate_uint_range ADB_HEALTH_COMMAND_TIMEOUT_SECONDS "${ADB_HEALTH_COMMAND_TIMEOUT_SECONDS}" 1 300
 expected_engine=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 engine_process_matches_expected "${expected_engine}"
@@ -37,6 +45,8 @@ engine_process_matches_expected "${expected_engine}"
 "${TIMEOUT_BIN}" 5s "${ADB_BIN}" connect "${adb_endpoint}" >/dev/null 2>&1
 [ "$(adb_command -s "${serial}" get-state 2>/dev/null)" = device ]
 [ "$(adb_command -s "${serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]
+# Google user builds hide generic bluetooth_prop values from the ADB shell.
+# The image preflight locks the HCI values; readiness checks the public Binder service.
 guest_health=$(
   adb_command -s "${serial}" shell '
     printf "sdk=%s\n" "$(getprop ro.build.version.sdk)"
@@ -48,6 +58,7 @@ guest_health=$(
     printf "activity=%s\n" "$(service check activity 2>&1)"
     printf "window=%s\n" "$(service check window 2>&1)"
     printf "camera=%s\n" "$(service check media.camera 2>&1)"
+    printf "bluetooth=%s\n" "$(service check bluetooth_manager 2>&1)"
     printf "play=%s\n" "$(pm path com.android.vending | head -n 1)"
     printf "gms=%s\n" "$(pm path com.google.android.gms | head -n 1)"
   ' 2>/dev/null | tr -d '\r'
@@ -61,5 +72,6 @@ printf '%s\n' "${guest_health}" | grep -Eq '^system_server=[0-9]+$'
 printf '%s\n' "${guest_health}" | grep -Fxq 'activity=Service activity: found'
 printf '%s\n' "${guest_health}" | grep -Fxq 'window=Service window: found'
 printf '%s\n' "${guest_health}" | grep -Fxq 'camera=Service media.camera: found'
+printf '%s\n' "${guest_health}" | grep -Fxq 'bluetooth=Service bluetooth_manager: found'
 printf '%s\n' "${guest_health}" | grep -q '^play=package:'
 printf '%s\n' "${guest_health}" | grep -q '^gms=package:'

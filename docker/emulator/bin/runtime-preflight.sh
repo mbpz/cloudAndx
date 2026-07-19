@@ -30,10 +30,12 @@ SYSTEM_IMAGE_DIR=${SYSTEM_IMAGE_DIR:-${ANDROID_SDK_ROOT}/system-images/android-3
 ANDROID_RAMDISK_ROOT=${ANDROID_RAMDISK_ROOT:-/opt/cloudandx/android-ramdisk}
 ANDROID_RAMDISK_ORIGINAL_SHA256=${ANDROID_RAMDISK_ORIGINAL_SHA256:-be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8}
 ANDROID_RAMDISK_CPIO_SHA256=${ANDROID_RAMDISK_CPIO_SHA256:-56328ce8b964a5f53c7c6922d4c2415a3d10a2d36f100150d522a817054110ed}
-ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256:-43eb955ddadc5a6ce3c716e4c1aef1c0939d62bc69a1b2d10a821def49c4f07c}
+ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256:-bfaeb73b28c50733a90337ceb93d66b5eb652f713b807744d86532f28344035c}
 ANDROID_RAMDISK_OVERLAY_PATH=${ANDROID_RAMDISK_OVERLAY_PATH:-system/etc/ramdisk/build.prop}
 EXPECTED_HW_TIMEOUT_MULTIPLIER=${EXPECTED_HW_TIMEOUT_MULTIPLIER:-50}
 EXPECTED_FINALIZER_TIMEOUT_MS=${EXPECTED_FINALIZER_TIMEOUT_MS:-500000}
+EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS=${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS:-100000}
+EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS:-250000}
 
 validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}"
 validate_runtime_settings
@@ -67,6 +69,12 @@ validate_uint_range EXPECTED_HW_TIMEOUT_MULTIPLIER "${EXPECTED_HW_TIMEOUT_MULTIP
 validate_uint_range EXPECTED_FINALIZER_TIMEOUT_MS "${EXPECTED_FINALIZER_TIMEOUT_MS}" 10000 10000000
 [ "${EXPECTED_FINALIZER_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 10000))" ] \
   || runtime_die "ART finalizer timeout must match the hardware timeout multiplier."
+validate_uint_range EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS "${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS}" 2000 2000000
+validate_uint_range EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS "${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" 5000 5000000
+[ "${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 2000))" ] \
+  || runtime_die "Bluetooth HCI command timeout must match the hardware timeout multiplier."
+[ "${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 5000))" ] \
+  || runtime_die "Bluetooth HCI restart timeout must match the hardware timeout multiplier."
 for ramdisk_sha256 in \
   "${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
   "${ANDROID_RAMDISK_CPIO_SHA256}" \
@@ -108,6 +116,12 @@ grep -Fxq "overlay_property.ro_hw_timeout_multiplier=${EXPECTED_HW_TIMEOUT_MULTI
 grep -Fxq "overlay_property.dalvik_vm_finalizer_timeout_ms=${EXPECTED_FINALIZER_TIMEOUT_MS}" \
   "${ANDROID_RAMDISK_ROOT}/identity.properties" \
   || runtime_die "Android ramdisk ART finalizer timeout identity is inconsistent."
+grep -Fxq "overlay_property.bluetooth_hci_timeout_ms=${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS}" \
+  "${ANDROID_RAMDISK_ROOT}/identity.properties" \
+  || runtime_die "Android ramdisk Bluetooth HCI command timeout identity is inconsistent."
+grep -Fxq "overlay_property.bluetooth_hci_restart_timeout_ms=${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" \
+  "${ANDROID_RAMDISK_ROOT}/identity.properties" \
+  || runtime_die "Android ramdisk Bluetooth HCI restart timeout identity is inconsistent."
 
 data_root=$(dirname "${ANDROID_AVD_HOME}")
 [ -d "${data_root}" ] || runtime_die "Runtime data directory does not exist: ${data_root}"
@@ -137,6 +151,8 @@ printf '%s\n' \
   "android.ramdisk.derived-sha256=${ANDROID_RAMDISK_DERIVED_SHA256}" \
   "android.hw-timeout-multiplier=${EXPECTED_HW_TIMEOUT_MULTIPLIER}" \
   "android.finalizer-timeout-ms=${EXPECTED_FINALIZER_TIMEOUT_MS}" \
+  "android.bluetooth-hci-timeout-ms=${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS}" \
+  "android.bluetooth-hci-restart-timeout-ms=${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" \
   "android.release-policy=base-final-stable-qpr1-beta-excluded" \
   "sdk.emulator-package.version=36.6.11" \
   "kvm.device=${KVM_DEVICE}" \

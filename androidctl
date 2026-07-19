@@ -302,7 +302,7 @@ case ${1-} in
   verify-runtime)
     compose exec -T emulator /usr/local/bin/runtime-preflight.sh
     compose exec -T emulator /usr/local/bin/healthcheck.sh
-    printf '%s\n' 'runtime=verified engine-process=verified adb=device system-server=live core-services=activity,window,media.camera api=37 abi=arm64-v8a page-size=16384 finalizer-timeout-ms=500000 play-store=present gms=present'
+    printf '%s\n' 'runtime=verified engine-process=verified adb=device system-server=live core-services=activity,window,media.camera,bluetooth_manager api=37 abi=arm64-v8a page-size=16384 finalizer-timeout-ms=500000 bluetooth-hci-timeouts=ramdisk-locked:100000,250000 play-store=present gms=present'
     ;;
   down)
     compose down --remove-orphans

@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 8 ]; then
-  printf >&2 'Usage: %s INPUT_RAMDISK OUTPUT_DIR TIMEOUT_MULTIPLIER FINALIZER_TIMEOUT_MS OFFICIAL_RAMDISK_SHA256 OFFICIAL_CPIO_SHA256 DERIVED_RAMDISK_SHA256 OVERLAY_PATH\n' "$0"
+if [ "$#" -ne 10 ]; then
+  printf >&2 'Usage: %s INPUT_RAMDISK OUTPUT_DIR TIMEOUT_MULTIPLIER FINALIZER_TIMEOUT_MS BLUETOOTH_HCI_TIMEOUT_MS BLUETOOTH_HCI_RESTART_TIMEOUT_MS OFFICIAL_RAMDISK_SHA256 OFFICIAL_CPIO_SHA256 DERIVED_RAMDISK_SHA256 OVERLAY_PATH\n' "$0"
   exit 64
 fi
 
@@ -10,10 +10,12 @@ input_ramdisk=$1
 output_dir=$2
 timeout_multiplier=$3
 finalizer_timeout_ms=$4
-official_ramdisk_sha256=$5
-official_cpio_sha256=$6
-derived_ramdisk_sha256=$7
-overlay_path=$8
+bluetooth_hci_timeout_ms=$5
+bluetooth_hci_restart_timeout_ms=$6
+official_ramdisk_sha256=$7
+official_cpio_sha256=$8
+derived_ramdisk_sha256=$9
+overlay_path=${10}
 
 case ${timeout_multiplier} in
   ''|*[!0-9]*)
@@ -33,6 +35,21 @@ case ${finalizer_timeout_ms} in
 esac
 [ "${finalizer_timeout_ms}" -eq "$((timeout_multiplier * 10000))" ] || {
   printf >&2 'ART finalizer timeout must equal the 10000 ms default multiplied by the hardware timeout multiplier.\n'
+  exit 64
+}
+case ${bluetooth_hci_timeout_ms}:${bluetooth_hci_restart_timeout_ms} in
+  *[!0-9:]*|*::*|:*)
+    printf >&2 'Invalid Bluetooth HCI timeout values: %s/%s\n' \
+      "${bluetooth_hci_timeout_ms}" "${bluetooth_hci_restart_timeout_ms}"
+    exit 64
+    ;;
+esac
+[ "${bluetooth_hci_timeout_ms}" -eq "$((timeout_multiplier * 2000))" ] || {
+  printf >&2 'Bluetooth HCI command timeout must equal the 2000 ms default multiplied by the hardware timeout multiplier.\n'
+  exit 64
+}
+[ "${bluetooth_hci_restart_timeout_ms}" -eq "$((timeout_multiplier * 5000))" ] || {
+  printf >&2 'Bluetooth HCI restart timeout must equal the 5000 ms default multiplied by the hardware timeout multiplier.\n'
   exit 64
 }
 
@@ -83,6 +100,8 @@ verified_cpio=${work_dir}/verified.cpio
 verified_overlay=${work_dir}/verified-overlay
 timeout_property=ro.hw_timeout_multiplier=${timeout_multiplier}
 finalizer_property=dalvik.vm.finalizer-timeout-ms=${finalizer_timeout_ms}
+bluetooth_hci_property=bluetooth.hci.timeout_milliseconds=${bluetooth_hci_timeout_ms}
+bluetooth_hci_restart_property=bluetooth.hci.restart_timeout_milliseconds=${bluetooth_hci_restart_timeout_ms}
 
 printf '%s  %s\n' "${official_ramdisk_sha256}" "${input_ramdisk}" \
   | sha256sum --check --strict -
@@ -102,7 +121,12 @@ if cpio --quiet --list <"${official_cpio}" \
 fi
 
 property_file=${work_dir}/build.prop
-printf '%s\n' "${timeout_property}" "${finalizer_property}" >"${property_file}"
+printf '%s\n' \
+  "${timeout_property}" \
+  "${finalizer_property}" \
+  "${bluetooth_hci_property}" \
+  "${bluetooth_hci_restart_property}" \
+  >"${property_file}"
 : >"${overlay_cpio}"
 newc_inode=1
 
@@ -173,7 +197,11 @@ mkdir -p "${verified_overlay}"
   printf >&2 'Derived property file has unexpected mode or ownership.\n'
   exit 65
 }
-property_sha256=$(printf '%s\n' "${timeout_property}" "${finalizer_property}" \
+property_sha256=$(printf '%s\n' \
+  "${timeout_property}" \
+  "${finalizer_property}" \
+  "${bluetooth_hci_property}" \
+  "${bluetooth_hci_restart_property}" \
   | sha256sum | cut -d' ' -f1)
 [ "$(sha256sum "${verified_overlay}/${overlay_path}" | cut -d' ' -f1)" = \
   "${property_sha256}" ] || {
@@ -204,6 +232,8 @@ install -m 0444 "${work_dir}/derived-ramdisk.img" "${output_dir}/derived-ramdisk
   printf 'overlay_path=%s\n' "${overlay_path}"
   printf 'overlay_property.ro_hw_timeout_multiplier=%s\n' "${timeout_multiplier}"
   printf 'overlay_property.dalvik_vm_finalizer_timeout_ms=%s\n' "${finalizer_timeout_ms}"
+  printf 'overlay_property.bluetooth_hci_timeout_ms=%s\n' "${bluetooth_hci_timeout_ms}"
+  printf 'overlay_property.bluetooth_hci_restart_timeout_ms=%s\n' "${bluetooth_hci_restart_timeout_ms}"
 } >"${work_dir}/identity.properties"
 install -m 0444 "${work_dir}/identity.properties" "${output_dir}/identity.properties"
 

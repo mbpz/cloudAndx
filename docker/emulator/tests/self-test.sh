@@ -361,6 +361,8 @@ printf '%s\n' \
   'overlay_path=system/etc/ramdisk/build.prop' \
   'overlay_property.ro_hw_timeout_multiplier=50' \
   'overlay_property.dalvik_vm_finalizer_timeout_ms=500000' \
+  'overlay_property.bluetooth_hci_timeout_ms=100000' \
+  'overlay_property.bluetooth_hci_restart_timeout_ms=250000' \
   >"${ramdisk_root}/identity.properties"
 cp "${ROOT}/avd/config.ini" "${template}/config.ini"
 cp "${ROOT}/avd/template-version" "${template}/template-version"
@@ -388,6 +390,8 @@ assert_contains "${preflight_output}" "android.ramdisk.original-sha256=${ramdisk
 assert_contains "${preflight_output}" "android.ramdisk.derived-sha256=${ramdisk_derived_sha256}" 'preflight reports the locked derived ramdisk'
 assert_contains "${preflight_output}" 'android.hw-timeout-multiplier=50' 'preflight reports the TCG watchdog multiplier'
 assert_contains "${preflight_output}" 'android.finalizer-timeout-ms=500000' 'preflight reports the ART finalizer watchdog timeout'
+assert_contains "${preflight_output}" 'android.bluetooth-hci-timeout-ms=100000' 'preflight reports the Bluetooth HCI command timeout'
+assert_contains "${preflight_output}" 'android.bluetooth-hci-restart-timeout-ms=250000' 'preflight reports the Bluetooth HCI restart timeout'
 assert_contains "${preflight_output}" 'android.release-policy=base-final-stable-qpr1-beta-excluded' 'preflight reports release policy'
 assert_contains "${preflight_output}" 'sdk.emulator-package.version=36.6.11' 'preflight distinguishes the SDK artifact from the native engine revision'
 assert_not_contains "${preflight_output}" 'emulator.version=' 'preflight does not mislabel the SDK package as the selected native engine version'
@@ -492,7 +496,7 @@ printf '%s\n' \
   '    play_path=; gms_path=' \
   '    [ "${FAKE_PLAY:-1}" = 1 ] && play_path=package:/system/priv-app/Phonesky/Phonesky.apk' \
   '    [ "${FAKE_GMS:-1}" = 1 ] && gms_path=package:/system/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk' \
-  '    printf "sdk=%s\\nabi=%s\\npage_size=%s\\ntimeout_multiplier=%s\\nfinalizer_timeout_ms=%s\\nsystem_server=%s\\nactivity=Service activity: %s\\nwindow=Service window: %s\\ncamera=Service media.camera: %s\\nplay=%s\\ngms=%s\\n" "${FAKE_SDK:-37}" "${FAKE_ABI:-arm64-v8a}" "${FAKE_PAGE_SIZE:-16384}" "${FAKE_MULTIPLIER:-50}" "${FAKE_FINALIZER_TIMEOUT:-500000}" "${FAKE_SYSTEM_SERVER_PID:-1076}" "${FAKE_ACTIVITY_STATE:-found}" "${FAKE_WINDOW_STATE:-found}" "${FAKE_CAMERA_STATE:-found}" "${play_path}" "${gms_path}"' \
+  '    printf "sdk=%s\\nabi=%s\\npage_size=%s\\ntimeout_multiplier=%s\\nfinalizer_timeout_ms=%s\\nsystem_server=%s\\nactivity=Service activity: %s\\nwindow=Service window: %s\\ncamera=Service media.camera: %s\\nbluetooth=Service bluetooth_manager: %s\\nplay=%s\\ngms=%s\\n" "${FAKE_SDK:-37}" "${FAKE_ABI:-arm64-v8a}" "${FAKE_PAGE_SIZE:-16384}" "${FAKE_MULTIPLIER:-50}" "${FAKE_FINALIZER_TIMEOUT:-500000}" "${FAKE_SYSTEM_SERVER_PID:-1076}" "${FAKE_ACTIVITY_STATE:-found}" "${FAKE_WINDOW_STATE:-found}" "${FAKE_CAMERA_STATE:-found}" "${FAKE_BLUETOOTH_STATE:-found}" "${play_path}" "${gms_path}"' \
   '    ;;' \
   '  *) exit 1 ;;' \
   'esac' >"${fake_adb}"
@@ -603,6 +607,10 @@ assert_fails 'healthcheck rejects the wrong watchdog multiplier' \
   env ${health_env} FAKE_MULTIPLIER=1 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck rejects the wrong ART finalizer watchdog timeout' \
   env ${health_env} FAKE_FINALIZER_TIMEOUT=10000 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects an inconsistent expected Bluetooth HCI command timeout' \
+  env ${health_env} EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS=2000 "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck rejects an inconsistent expected Bluetooth HCI restart timeout' \
+  env ${health_env} EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=5000 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires a live SystemServer process' \
   env ${health_env} FAKE_SYSTEM_SERVER_PID=missing "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires ActivityManager service' \
@@ -611,6 +619,8 @@ assert_fails 'healthcheck requires WindowManager service' \
   env ${health_env} FAKE_WINDOW_STATE='not found' "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires CameraService' \
   env ${health_env} FAKE_CAMERA_STATE='not found' "${ROOT}/bin/healthcheck.sh"
+assert_fails 'healthcheck requires BluetoothManager service' \
+  env ${health_env} FAKE_BLUETOOTH_STATE='not found' "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires Play Store' env ${health_env} FAKE_PLAY=0 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires Google Play services' env ${health_env} FAKE_GMS=0 "${ROOT}/bin/healthcheck.sh"
 

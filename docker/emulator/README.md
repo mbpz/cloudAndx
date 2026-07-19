@@ -129,18 +129,22 @@ slow enough that Android's default framework watchdog and ART's independent
 creates one explicitly derived boot ramdisk. It keeps the decompressed official
 cpio as an exact byte prefix and adds only `system/etc/ramdisk/build.prop` with
 `ro.hw_timeout_multiplier=50` and `dalvik.vm.finalizer-timeout-ms=500000`, the
-Android 17 first-stage/second-stage property channel. The ART value is the
-10,000 ms platform default multiplied by the same factor of 50. The build records
+Android 17 first-stage/second-stage property channel. It also sets the Bluetooth
+module's documented `bluetooth.hci.timeout_milliseconds=100000` and
+`bluetooth.hci.restart_timeout_milliseconds=250000`. These are the AOSP 2,000 ms
+command and 5,000 ms abort defaults multiplied by the same factor of 50, preventing
+cold TCG scheduling from killing and restarting Bluetooth during initialization.
+The ART value similarly scales its 10,000 ms platform default. The build records
 and verifies both
 the official ramdisk SHA-256
 `be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8` and the
 deterministic derived SHA-256
-`43eb955ddadc5a6ce3c716e4c1aef1c0939d62bc69a1b2d10a821def49c4f07c`.
+`bfaeb73b28c50733a90337ceb93d66b5eb652f713b807744d86532f28344035c`.
 It does not add `force_debuggable`, use a debug ramdisk, or alter SELinux policy.
 This preserves Google's signed user-build system and GMS, but the boot ramdisk is
 not byte-for-byte the ZIP artifact; a strictly untouched-artifact path remains
 deferred to x86_64/KVM verification. The AVD template marker includes the
-A57/GICv2/ramdisk-timeout50/finalizer500000 contract, so a volume created by an older image is
+A57/GICv2/ramdisk-timeout50/finalizer500000/hci100000-250000 contract, so a volume created by an older image is
 rejected instead of silently reusing incompatible state. A first cold boot
 performs substantial userdata setup and package optimization; an ARM64 Docker
 Engine run took about 25 minutes. Do not interrupt it while the container still
@@ -217,8 +221,19 @@ The image becomes healthy only after all of the following are true:
 8. Guest page size is exactly 16384 bytes.
 9. `ro.hw_timeout_multiplier=50` came through the locked second-stage ramdisk property.
 10. `dalvik.vm.finalizer-timeout-ms=500000` came through the same property file.
-11. `com.android.vending` (Play Store) is installed.
-12. `com.google.android.gms` (Google Play services) is installed.
+11. The image identity and runtime preflight lock
+    `bluetooth.hci.timeout_milliseconds=100000` and
+    `bluetooth.hci.restart_timeout_milliseconds=250000` in that property file.
+12. BluetoothManager is registered with Binder.
+13. `com.android.vending` (Play Store) is installed.
+14. `com.google.android.gms` (Google Play services) is installed.
+
+The Google `user` build intentionally prevents the ADB shell domain from reading
+properties that fall under the generic `bluetooth_prop` SELinux context. The two
+HCI properties are therefore verified from the deterministic ramdisk identity by
+the image build and runtime preflight; the guest health probe verifies the public
+BluetoothManager Binder service instead of treating SELinux isolation as a
+missing property.
 
 Before evaluating ADB state, the internal health check makes a five-second-bounded
 connection to `127.0.0.1:${EMULATOR_ADB_PORT}` and then checks only
@@ -231,9 +246,9 @@ which can continue making guest disk and renderer progress beyond 30 minutes.
 Each check has a five-minute Docker deadline and every ADB operation is bounded
 to 180 seconds, preventing the former 15-second deadline from repeatedly killing
 valid but slow ADB calls. The start interval is one minute; after the first success,
-the interval becomes ten minutes. API, ABI, page size, both timeout values,
-SystemServer/core-service liveness, Play, and GMS checks share one guest-shell
-probe so readiness does not continuously
+the interval becomes ten minutes. API, ABI, page size, the two guest-readable
+watchdog values, SystemServer/core-service liveness, Play, and GMS checks share
+one guest-shell probe so readiness does not continuously
 occupy PackageManager on TCG. Checks still fail closed during the start window.
 A successful health check proves the pinned Google Play AVD booted; it does not
 prove physical-hardware parity or Google device certification.

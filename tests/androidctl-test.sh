@@ -76,8 +76,9 @@ grep -q 'deferred' "${tmp}/standalone-preflight-x86.out"
 
 grep -q 'api=37' "${ROOT}/androidctl"
 grep -q 'system-server=live' "${ROOT}/androidctl"
-grep -q 'core-services=activity,window,media.camera' "${ROOT}/androidctl"
+grep -q 'core-services=activity,window,media.camera,bluetooth_manager' "${ROOT}/androidctl"
 grep -q 'finalizer-timeout-ms=500000' "${ROOT}/androidctl"
+grep -q 'bluetooth-hci-timeouts=ramdisk-locked:100000,250000' "${ROOT}/androidctl"
 if grep -Fq 'api>=37' "${ROOT}/androidctl"; then
   printf '%s\n' 'FAIL: verify-runtime still weakens the exact API 37 health contract.' >&2
   exit 1

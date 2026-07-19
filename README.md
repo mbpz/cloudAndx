@@ -79,11 +79,16 @@ ARM TCG 首次启动还会关闭纯视觉的 boot animation。下载的 Google Z
 Finalizer watchdog 循环终止，
 启动 ramdisk 通过 Android 17 官方 second-stage 属性通道
 `/system/etc/ramdisk/build.prop` 只加入 `ro.hw_timeout_multiplier=50` 和与其等比例的
-`dalvik.vm.finalizer-timeout-ms=500000`。构建会校验官方
+`dalvik.vm.finalizer-timeout-ms=500000`，以及 AOSP Bluetooth HCI 的
+`bluetooth.hci.timeout_milliseconds=100000` 和
+`bluetooth.hci.restart_timeout_milliseconds=250000`。构建会校验官方
 ramdisk 及解压 cpio 的固定 SHA-256，保持原 cpio 为逐字节前缀，并锁定派生 ramdisk
-SHA-256。因而 Google 签名的 user-build system/GMS 没有改动，但该启动 ramdisk 不再是
+SHA-256。Google `user` 镜像的 SELinux 会阻止 ADB shell 读取通用
+`bluetooth_prop`；因此镜像构建和 runtime preflight 校验两项 HCI 属性，guest 健康检查
+改为验证公开的 BluetoothManager Binder 服务，避免把正常的访问隔离误判成属性缺失。
+因而 Google 签名的 user-build system/GMS 没有改动，但该启动 ramdisk 不再是
 Google ZIP 中逐字节原件；要求所有制品完全不变的路径留待 x86_64/KVM 机器验证。
-模板标识包含 A57/GICv2/ramdisk-timeout50/finalizer500000 启动契约，因此旧 volume 会失败关闭并要求
+模板标识包含 A57/GICv2/ramdisk-timeout50/finalizer500000/HCI 超时启动契约，因此旧 volume 会失败关闭并要求
 重新创建。
 原生 AEMU 的 0011 补丁注册隔离的 A57 派生 QOM 类型，只为已有 16 KB TCG 页表实现
 声明 TGran16 能力；0012 仅将该类型加入 `mach-virt` 的独立 CPU 白名单；

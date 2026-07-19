@@ -54,7 +54,7 @@ grep -Fxq 'hw.cpu.arch=arm64' "${avd_config}"
 grep -Fxq 'hw.cpu.ncore=8' "${avd_config}"
 grep -Fxq 'image.sysdir.1=system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/' \
   "${avd_config}"
-grep -Fxq 'android-17-api-37.0-google-play-ps16k-arm64-v8a-r06-a57-16k-gic2-ramdisk-timeout50-finalizer500000' "${avd_marker}"
+grep -Fxq 'android-17-api-37.0-google-play-ps16k-arm64-v8a-r06-a57-16k-gic2-ramdisk-timeout50-finalizer500000-hci100000-250000' "${avd_marker}"
 grep -Fq 'arm64-v8a-playstore-ps16k-37.0_r06.zip' "${emulator_dockerfile}"
 grep -Fq 'SYSTEM_IMAGE_SHA1=ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4' \
   "${emulator_dockerfile}"
@@ -64,13 +64,19 @@ grep -Fq 'ANDROID_RAMDISK_ORIGINAL_SHA256=be1c34d44bdf2484c9bb0f4458b1cb3b8133d8
   "${emulator_dockerfile}"
 grep -Fq 'ANDROID_RAMDISK_CPIO_SHA256=56328ce8b964a5f53c7c6922d4c2415a3d10a2d36f100150d522a817054110ed' \
   "${emulator_dockerfile}"
-grep -Fq 'ANDROID_RAMDISK_DERIVED_SHA256=43eb955ddadc5a6ce3c716e4c1aef1c0939d62bc69a1b2d10a821def49c4f07c' \
+grep -Fq 'ANDROID_RAMDISK_DERIVED_SHA256=bfaeb73b28c50733a90337ceb93d66b5eb652f713b807744d86532f28344035c' \
   "${emulator_dockerfile}"
 grep -Fq 'ANDROID_FINALIZER_TIMEOUT_MS=500000' "${emulator_dockerfile}"
+grep -Fq 'ANDROID_BLUETOOTH_HCI_TIMEOUT_MS=100000' "${emulator_dockerfile}"
+grep -Fq 'ANDROID_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=250000' "${emulator_dockerfile}"
 grep -Fq 'system/etc/ramdisk/build.prop' "${emulator_dockerfile}"
 grep -Fq 'ro.hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER}' \
   "${emulator_dockerfile}"
 grep -Fq 'dalvik.vm.finalizer-timeout-ms=${ANDROID_FINALIZER_TIMEOUT_MS}' \
+  "${emulator_dockerfile}"
+grep -Fq 'bluetooth.hci.timeout_milliseconds=${ANDROID_BLUETOOTH_HCI_TIMEOUT_MS}' \
+  "${emulator_dockerfile}"
+grep -Fq 'bluetooth.hci.restart_timeout_milliseconds=${ANDROID_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}' \
   "${emulator_dockerfile}"
 grep -Fq 'FROM artifact-download-base AS ramdisk-overlay-builder' \
   "${emulator_dockerfile}"
@@ -83,6 +89,10 @@ grep -Fq 'Derived ramdisk does not preserve the official cpio as an exact prefix
   "${ramdisk_builder}"
 grep -Fq 'Derived ramdisk SHA-256 mismatch' "${ramdisk_builder}"
 grep -Fq 'ART finalizer timeout must equal the 10000 ms default multiplied by the hardware timeout multiplier.' \
+  "${ramdisk_builder}"
+grep -Fq 'Bluetooth HCI command timeout must equal the 2000 ms default multiplied by the hardware timeout multiplier.' \
+  "${ramdisk_builder}"
+grep -Fq 'Bluetooth HCI restart timeout must equal the 5000 ms default multiplied by the hardware timeout multiplier.' \
   "${ramdisk_builder}"
 if grep -Eq 'data/local\.prop|adb_debug\.prop|force_debuggable' \
   "${emulator_dockerfile}" "${ramdisk_builder}" "${emulator_preflight}" \
@@ -138,11 +148,20 @@ grep -Fq 'pidof system_server' "${emulator_healthcheck}"
 grep -Fq 'service check activity' "${emulator_healthcheck}"
 grep -Fq 'service check window' "${emulator_healthcheck}"
 grep -Fq 'service check media.camera' "${emulator_healthcheck}"
+grep -Fq 'service check bluetooth_manager' "${emulator_healthcheck}"
+if grep -Fq 'getprop bluetooth.hci.' "${emulator_healthcheck}"; then
+  printf '%s\n' 'FAIL: healthcheck tries to read SELinux-hidden Bluetooth properties through ADB shell.' >&2
+  exit 1
+fi
 grep -Fq 'EXPECTED_HW_TIMEOUT_MULTIPLIER=${EXPECTED_HW_TIMEOUT_MULTIPLIER:-50}' \
   "${emulator_healthcheck}"
 grep -Fq 'EXPECTED_FINALIZER_TIMEOUT_MS=${EXPECTED_FINALIZER_TIMEOUT_MS:-500000}' \
   "${emulator_healthcheck}"
-grep -Fq 'ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256:-43eb955ddadc5a6ce3c716e4c1aef1c0939d62bc69a1b2d10a821def49c4f07c}' \
+grep -Fq 'EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS=${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS:-100000}' \
+  "${emulator_healthcheck}"
+grep -Fq 'EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS:-250000}' \
+  "${emulator_healthcheck}"
+grep -Fq 'ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256:-bfaeb73b28c50733a90337ceb93d66b5eb652f713b807744d86532f28344035c}' \
   "${emulator_preflight}"
 if grep -Eq 'QEMU_DISPATCHER|UPSTREAM_QEMU_ENGINE|qemu-system-x86_64-headless' \
   "${emulator_entrypoint}" "${emulator_runtime_lib}" "${emulator_preflight}"; then
@@ -212,6 +231,8 @@ grep -Fq 'android-a57-16k' "${ROOT}/docker/emulator/README.md"
 grep -Fq 'locked final raw QEMU tail' "${ROOT}/docker/emulator/README.md"
 grep -Fq 'not byte-for-byte the ZIP artifact' "${ROOT}/docker/emulator/README.md"
 grep -Fq '`ro.hw_timeout_multiplier=50` and `dalvik.vm.finalizer-timeout-ms=500000`' \
+  "${ROOT}/docker/emulator/README.md"
+grep -Fq '`bluetooth.hci.timeout_milliseconds=100000` and' \
   "${ROOT}/docker/emulator/README.md"
 grep -Fxq 'hw.camera.back=emulated' "${ROOT}/docker/emulator/avd/config.ini"
 grep -Fq 'set -- "$@" -no-boot-anim -camera-back emulated' "${emulator_entrypoint}"

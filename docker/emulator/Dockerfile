@@ -7,9 +7,10 @@ ARG NATIVE_AEMU_REVISION
 ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
 ARG NATIVE_AEMU_PATCH_SET_SHA256
 ARG ANDROID_HW_TIMEOUT_MULTIPLIER=50
+ARG ANDROID_FINALIZER_TIMEOUT_MS=500000
 ARG ANDROID_RAMDISK_ORIGINAL_SHA256=be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8
 ARG ANDROID_RAMDISK_CPIO_SHA256=56328ce8b964a5f53c7c6922d4c2415a3d10a2d36f100150d522a817054110ed
-ARG ANDROID_RAMDISK_DERIVED_SHA256=28930d955709e5abaa52069cd0a504512f2b3b93dd8538cd2f0a64aad294510e
+ARG ANDROID_RAMDISK_DERIVED_SHA256=43eb955ddadc5a6ce3c716e4c1aef1c0939d62bc69a1b2d10a821def49c4f07c
 ARG ANDROID_RAMDISK_OVERLAY_PATH=system/etc/ramdisk/build.prop
 
 # This target deliberately has no network or Android artifact dependency. It is
@@ -82,6 +83,7 @@ RUN set -eu; \
 FROM artifact-download-base AS ramdisk-overlay-builder
 
 ARG ANDROID_HW_TIMEOUT_MULTIPLIER
+ARG ANDROID_FINALIZER_TIMEOUT_MS
 ARG ANDROID_RAMDISK_ORIGINAL_SHA256
 ARG ANDROID_RAMDISK_CPIO_SHA256
 ARG ANDROID_RAMDISK_DERIVED_SHA256
@@ -103,6 +105,7 @@ RUN chmod 0555 /usr/local/bin/build-ramdisk-overlay.sh \
       /work/official-ramdisk.img \
       /opt/cloudandx/android-ramdisk \
       "${ANDROID_HW_TIMEOUT_MULTIPLIER}" \
+      "${ANDROID_FINALIZER_TIMEOUT_MS}" \
       "${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
       "${ANDROID_RAMDISK_CPIO_SHA256}" \
       "${ANDROID_RAMDISK_DERIVED_SHA256}" \
@@ -175,6 +178,7 @@ ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
 ARG NATIVE_AEMU_PATCH_SET_SHA256
 ARG NATIVE_AEMU_QEMU_COMMIT=98f7f6ffcc4e6ce513a8b978323c3b961dc58143
 ARG ANDROID_HW_TIMEOUT_MULTIPLIER
+ARG ANDROID_FINALIZER_TIMEOUT_MS
 ARG ANDROID_RAMDISK_ORIGINAL_SHA256
 ARG ANDROID_RAMDISK_CPIO_SHA256
 ARG ANDROID_RAMDISK_DERIVED_SHA256
@@ -193,7 +197,7 @@ LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-on
       io.cloudandx.android.system-image.sha1="${SYSTEM_IMAGE_SHA1}" \
       io.cloudandx.android.ramdisk.original-sha256="${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
       io.cloudandx.android.ramdisk.derived-sha256="${ANDROID_RAMDISK_DERIVED_SHA256}" \
-      io.cloudandx.android.ramdisk.overlay="${ANDROID_RAMDISK_OVERLAY_PATH}:ro.hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER}" \
+      io.cloudandx.android.ramdisk.overlay="${ANDROID_RAMDISK_OVERLAY_PATH}:ro.hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER},dalvik.vm.finalizer-timeout-ms=${ANDROID_FINALIZER_TIMEOUT_MS}" \
       io.cloudandx.android.native-aemu.revision="${NATIVE_AEMU_REVISION}" \
       io.cloudandx.android.native-aemu.netsimd.version="0.3.112" \
       io.cloudandx.android.native-aemu.vulkan-loader.commit="bac41319cafb4527a2a959237b17611dd08bfe11" \
@@ -250,7 +254,9 @@ RUN set -eu; \
       /opt/cloudandx/android-ramdisk/identity.properties \
     && grep -Fxq "overlay_path=${ANDROID_RAMDISK_OVERLAY_PATH}" \
       /opt/cloudandx/android-ramdisk/identity.properties \
-    && grep -Fxq "overlay_property=ro.hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER}" \
+    && grep -Fxq "overlay_property.ro_hw_timeout_multiplier=${ANDROID_HW_TIMEOUT_MULTIPLIER}" \
+      /opt/cloudandx/android-ramdisk/identity.properties \
+    && grep -Fxq "overlay_property.dalvik_vm_finalizer_timeout_ms=${ANDROID_FINALIZER_TIMEOUT_MS}" \
       /opt/cloudandx/android-ramdisk/identity.properties \
     && test -L /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64 \
     && test "$(readlink /opt/cloudandx/native-aemu/qemu/linux-aarch64/lib64)" = ../../lib64 \
@@ -335,6 +341,7 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256} \
     ANDROID_RAMDISK_OVERLAY_PATH=${ANDROID_RAMDISK_OVERLAY_PATH} \
     EXPECTED_HW_TIMEOUT_MULTIPLIER=${ANDROID_HW_TIMEOUT_MULTIPLIER} \
+    EXPECTED_FINALIZER_TIMEOUT_MS=${ANDROID_FINALIZER_TIMEOUT_MS} \
     ADB_MDNS_OPENSCREEN=0
 
 USER android:android

@@ -16,6 +16,7 @@ ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm
 EXPECTED_ANDROID_ABI=${EXPECTED_ANDROID_ABI:-arm64-v8a}
 EXPECTED_PAGE_SIZE_BYTES=${EXPECTED_PAGE_SIZE_BYTES:-16384}
 EXPECTED_HW_TIMEOUT_MULTIPLIER=${EXPECTED_HW_TIMEOUT_MULTIPLIER:-50}
+EXPECTED_FINALIZER_TIMEOUT_MS=${EXPECTED_FINALIZER_TIMEOUT_MS:-500000}
 ADB_HEALTH_COMMAND_TIMEOUT_SECONDS=${ADB_HEALTH_COMMAND_TIMEOUT_SECONDS:-180}
 serial=emulator-${EMULATOR_CONSOLE_PORT}
 adb_endpoint=127.0.0.1:${EMULATOR_ADB_PORT}
@@ -26,6 +27,9 @@ adb_command() {
 
 validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}"
 validate_uint_range EXPECTED_HW_TIMEOUT_MULTIPLIER "${EXPECTED_HW_TIMEOUT_MULTIPLIER}" 1 1000
+validate_uint_range EXPECTED_FINALIZER_TIMEOUT_MS "${EXPECTED_FINALIZER_TIMEOUT_MS}" 10000 10000000
+[ "${EXPECTED_FINALIZER_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 10000))" ] \
+  || runtime_die "ART finalizer timeout must match the hardware timeout multiplier."
 validate_uint_range ADB_HEALTH_COMMAND_TIMEOUT_SECONDS "${ADB_HEALTH_COMMAND_TIMEOUT_SECONDS}" 1 300
 expected_engine=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 engine_process_matches_expected "${expected_engine}"
@@ -39,6 +43,11 @@ guest_health=$(
     printf "abi=%s\n" "$(getprop ro.product.cpu.abi)"
     printf "page_size=%s\n" "$(getconf PAGE_SIZE)"
     printf "timeout_multiplier=%s\n" "$(getprop ro.hw_timeout_multiplier)"
+    printf "finalizer_timeout_ms=%s\n" "$(getprop dalvik.vm.finalizer-timeout-ms)"
+    printf "system_server=%s\n" "$(pidof system_server)"
+    printf "activity=%s\n" "$(service check activity 2>&1)"
+    printf "window=%s\n" "$(service check window 2>&1)"
+    printf "camera=%s\n" "$(service check media.camera 2>&1)"
     printf "play=%s\n" "$(pm path com.android.vending | head -n 1)"
     printf "gms=%s\n" "$(pm path com.google.android.gms | head -n 1)"
   ' 2>/dev/null | tr -d '\r'
@@ -47,5 +56,10 @@ printf '%s\n' "${guest_health}" | grep -Fxq 'sdk=37'
 printf '%s\n' "${guest_health}" | grep -Fxq "abi=${EXPECTED_ANDROID_ABI}"
 printf '%s\n' "${guest_health}" | grep -Fxq "page_size=${EXPECTED_PAGE_SIZE_BYTES}"
 printf '%s\n' "${guest_health}" | grep -Fxq "timeout_multiplier=${EXPECTED_HW_TIMEOUT_MULTIPLIER}"
+printf '%s\n' "${guest_health}" | grep -Fxq "finalizer_timeout_ms=${EXPECTED_FINALIZER_TIMEOUT_MS}"
+printf '%s\n' "${guest_health}" | grep -Eq '^system_server=[0-9]+$'
+printf '%s\n' "${guest_health}" | grep -Fxq 'activity=Service activity: found'
+printf '%s\n' "${guest_health}" | grep -Fxq 'window=Service window: found'
+printf '%s\n' "${guest_health}" | grep -Fxq 'camera=Service media.camera: found'
 printf '%s\n' "${guest_health}" | grep -q '^play=package:'
 printf '%s\n' "${guest_health}" | grep -q '^gms=package:'

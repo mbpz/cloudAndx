@@ -106,6 +106,9 @@ def healthy_observation():
 
 
 class RuntimeHealthTests(unittest.TestCase):
+    def setUp(self):
+        bridge._RUNTIME_HEALTH_CACHE = None
+
     def test_liveness_does_not_touch_adb_runtime_health(self):
         handler = object.__new__(bridge.Handler)
         handler.path = "/livez"
@@ -146,6 +149,30 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertFalse(healthy)
         self.assertFalse(observed["packages"]["com.android.vending"])
         self.assertIn("com.android.vending is not installed", reason)
+
+    def test_deep_health_cache_reuses_one_probe_within_ttl(self):
+        handler = object.__new__(bridge.Handler)
+        expected = (True, "ready", healthy_observation())
+        handler._runtime_health = Mock(return_value=expected)
+
+        first = handler._cached_runtime_health()
+        second = handler._cached_runtime_health()
+
+        self.assertEqual(first, expected)
+        self.assertEqual(second, expected)
+        handler._runtime_health.assert_called_once_with()
+
+    def test_deep_health_cache_throttles_adb_failures(self):
+        handler = object.__new__(bridge.Handler)
+        handler._runtime_health = Mock(side_effect=bridge.AdbError("transport offline"))
+
+        first = handler._cached_runtime_health()
+        second = handler._cached_runtime_health()
+
+        self.assertFalse(first[0])
+        self.assertEqual(first, second)
+        self.assertIn("transport offline", first[1])
+        handler._runtime_health.assert_called_once_with()
 
     def test_all_required_evidence_is_healthy(self):
         healthy, reason = bridge._assess_runtime_health(healthy_observation())

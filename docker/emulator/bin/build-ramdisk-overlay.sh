@@ -1,18 +1,19 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 7 ]; then
-  printf >&2 'Usage: %s INPUT_RAMDISK OUTPUT_DIR TIMEOUT_MULTIPLIER OFFICIAL_RAMDISK_SHA256 OFFICIAL_CPIO_SHA256 DERIVED_RAMDISK_SHA256 OVERLAY_PATH\n' "$0"
+if [ "$#" -ne 8 ]; then
+  printf >&2 'Usage: %s INPUT_RAMDISK OUTPUT_DIR TIMEOUT_MULTIPLIER FINALIZER_TIMEOUT_MS OFFICIAL_RAMDISK_SHA256 OFFICIAL_CPIO_SHA256 DERIVED_RAMDISK_SHA256 OVERLAY_PATH\n' "$0"
   exit 64
 fi
 
 input_ramdisk=$1
 output_dir=$2
 timeout_multiplier=$3
-official_ramdisk_sha256=$4
-official_cpio_sha256=$5
-derived_ramdisk_sha256=$6
-overlay_path=$7
+finalizer_timeout_ms=$4
+official_ramdisk_sha256=$5
+official_cpio_sha256=$6
+derived_ramdisk_sha256=$7
+overlay_path=$8
 
 case ${timeout_multiplier} in
   ''|*[!0-9]*)
@@ -22,6 +23,16 @@ case ${timeout_multiplier} in
 esac
 [ "${timeout_multiplier}" -ge 1 ] || {
   printf >&2 'Timeout multiplier must be positive.\n'
+  exit 64
+}
+case ${finalizer_timeout_ms} in
+  ''|*[!0-9]*)
+    printf >&2 'Invalid ART finalizer timeout: %s\n' "${finalizer_timeout_ms}"
+    exit 64
+    ;;
+esac
+[ "${finalizer_timeout_ms}" -eq "$((timeout_multiplier * 10000))" ] || {
+  printf >&2 'ART finalizer timeout must equal the 10000 ms default multiplied by the hardware timeout multiplier.\n'
   exit 64
 }
 
@@ -70,7 +81,8 @@ overlay_cpio=${work_dir}/overlay.cpio
 combined_cpio=${work_dir}/combined.cpio
 verified_cpio=${work_dir}/verified.cpio
 verified_overlay=${work_dir}/verified-overlay
-property_value=ro.hw_timeout_multiplier=${timeout_multiplier}
+timeout_property=ro.hw_timeout_multiplier=${timeout_multiplier}
+finalizer_property=dalvik.vm.finalizer-timeout-ms=${finalizer_timeout_ms}
 
 printf '%s  %s\n' "${official_ramdisk_sha256}" "${input_ramdisk}" \
   | sha256sum --check --strict -
@@ -90,7 +102,7 @@ if cpio --quiet --list <"${official_cpio}" \
 fi
 
 property_file=${work_dir}/build.prop
-printf '%s\n' "${property_value}" >"${property_file}"
+printf '%s\n' "${timeout_property}" "${finalizer_property}" >"${property_file}"
 : >"${overlay_cpio}"
 newc_inode=1
 
@@ -161,7 +173,8 @@ mkdir -p "${verified_overlay}"
   printf >&2 'Derived property file has unexpected mode or ownership.\n'
   exit 65
 }
-property_sha256=$(printf '%s\n' "${property_value}" | sha256sum | cut -d' ' -f1)
+property_sha256=$(printf '%s\n' "${timeout_property}" "${finalizer_property}" \
+  | sha256sum | cut -d' ' -f1)
 [ "$(sha256sum "${verified_overlay}/${overlay_path}" | cut -d' ' -f1)" = \
   "${property_sha256}" ] || {
   printf >&2 'Derived property file content is not exact.\n'
@@ -189,7 +202,8 @@ install -m 0444 "${work_dir}/derived-ramdisk.img" "${output_dir}/derived-ramdisk
   printf 'combined_cpio_sha256=%s\n' "$(sha256sum "${combined_cpio}" | cut -d' ' -f1)"
   printf 'derived_ramdisk_sha256=%s\n' "${actual_derived_sha256}"
   printf 'overlay_path=%s\n' "${overlay_path}"
-  printf 'overlay_property=%s\n' "${property_value}"
+  printf 'overlay_property.ro_hw_timeout_multiplier=%s\n' "${timeout_multiplier}"
+  printf 'overlay_property.dalvik_vm_finalizer_timeout_ms=%s\n' "${finalizer_timeout_ms}"
 } >"${work_dir}/identity.properties"
 install -m 0444 "${work_dir}/identity.properties" "${output_dir}/identity.properties"
 

@@ -214,7 +214,7 @@ Usage: ./androidctl COMMAND [ARGS...]
   shell [ARGS...]    Run an Android shell command through bundled adb
   token              Print the local bridge bearer token
   evidence           Print the preflight evidence JSON
-  verify-runtime     Prove engine process, ADB, API 37, Play Store, and GMS
+  verify-runtime     Prove engine, ADB, SystemServer/services, API 37, Play Store, and GMS
   down               Stop containers while preserving guest data
   destroy            Stop containers and delete this project's Docker volumes
   test               Run all offline tests inside Docker
@@ -302,7 +302,7 @@ case ${1-} in
   verify-runtime)
     compose exec -T emulator /usr/local/bin/runtime-preflight.sh
     compose exec -T emulator /usr/local/bin/healthcheck.sh
-    printf '%s\n' 'runtime=verified engine-process=verified adb=device api=37 abi=arm64-v8a page-size=16384 play-store=present gms=present'
+    printf '%s\n' 'runtime=verified engine-process=verified adb=device system-server=live core-services=activity,window,media.camera api=37 abi=arm64-v8a page-size=16384 finalizer-timeout-ms=500000 play-store=present gms=present'
     ;;
   down)
     compose down --remove-orphans

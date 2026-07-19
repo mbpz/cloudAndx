@@ -2,8 +2,15 @@
 
 Docker-contained, allowlisted HTTP-to-ADB bridge. It exposes read-only device status, screenshots, application lists and logs, plus authenticated input, GPS, SMS, call, network, battery, rotation, APK installation and uninstall operations.
 
-`GET /sessions/{session_id}/healthz` emits the controller's strict, fresh
-session-probe envelope only after all of these checks pass:
+`GET /livez` is process liveness only and never invokes ADB. Docker uses this
+endpoint so an HTTP timeout cannot leave overlapping guest probes behind.
+
+`GET /healthz` and `GET /sessions/{session_id}/healthz` perform the strict
+device probe below. Concurrent callers share one in-flight probe, and both
+successful and failed results are cached for at most 60 seconds (explicitly
+matched by the project controller's 90-second evidence window). Session
+`observed_at` records the time of the underlying probe, not the cache-hit time.
+The result is healthy only after all of these checks pass:
 
 - ADB reports `device` and `sys.boot_completed=1`;
 - the API level is at least 37;

@@ -88,7 +88,9 @@ unknown fields, must be recent (30 seconds by default), and has this exact form:
 ```
 
 `PROBE_MAX_AGE_SECONDS` and `PROBE_TIMEOUT_MILLIS` tune freshness and HTTP
-timeout. Without valid proof the state can never be `RUNNING`.
+timeout. The project Compose sets the maximum age to 90 seconds so it remains
+strictly bounded while covering the device bridge's 60-second single-flight
+cache. Without valid proof the state can never be `RUNNING`.
 
 ## Important capability boundary
 

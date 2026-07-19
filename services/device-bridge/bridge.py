@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timezone
@@ -44,6 +45,16 @@ REQUIRED_GOOGLE_PACKAGES = (
     "com.android.vending",
     "com.google.android.gms",
 )
+RUNTIME_HEALTH_TTL_SECONDS = max(
+    1,
+    int(os.environ.get("RUNTIME_HEALTH_TTL_SECONDS", "60")),
+)
+_RUNTIME_HEALTH_LOCK = threading.Lock()
+_RUNTIME_HEALTH_CACHE: tuple[
+    float,
+    str,
+    tuple[bool, str, dict[str, Any]],
+] | None = None
 
 
 class AdbError(RuntimeError):
@@ -240,14 +251,39 @@ class Handler(BaseHTTPRequestHandler):
         ready, reason = _assess_runtime_health(observed)
         return ready, reason, observed
 
+    def _cached_runtime_health(self) -> tuple[bool, str, dict[str, Any]]:
+        global _RUNTIME_HEALTH_CACHE
+
+        now = time.monotonic()
+        cached = _RUNTIME_HEALTH_CACHE
+        if cached is not None and now - cached[0] < RUNTIME_HEALTH_TTL_SECONDS:
+            return cached[2]
+
+        with _RUNTIME_HEALTH_LOCK:
+            now = time.monotonic()
+            cached = _RUNTIME_HEALTH_CACHE
+            if cached is not None and now - cached[0] < RUNTIME_HEALTH_TTL_SECONDS:
+                return cached[2]
+            try:
+                result = self._runtime_health()
+            except (AdbError, ValueError) as exc:
+                result = (
+                    False,
+                    f"device evidence unavailable: {exc}",
+                    {"serial": ADB_SERIAL},
+                )
+            observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            _RUNTIME_HEALTH_CACHE = (time.monotonic(), observed_at, result)
+            return result
+
     def _session_health(self, session_id: str) -> None:
-        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        try:
-            ready, reason, observed = self._runtime_health()
-        except (AdbError, ValueError) as exc:
-            ready = False
-            reason = f"device evidence unavailable: {exc}"
-            observed = {"serial": ADB_SERIAL}
+        ready, reason, observed = self._cached_runtime_health()
+        cached = _RUNTIME_HEALTH_CACHE
+        observed_at = (
+            cached[1]
+            if cached is not None
+            else datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
 
         payload: dict[str, Any] = {
             "session_id": session_id,
@@ -267,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/livez":
                 self._json(HTTPStatus.OK, {"alive": True})
             elif parsed.path == "/healthz":
-                ready, reason, observed = self._runtime_health()
+                ready, reason, observed = self._cached_runtime_health()
                 self._json(
                     HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
                     {"ready": ready, "reason": reason, **observed},

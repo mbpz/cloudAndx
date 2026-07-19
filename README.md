@@ -68,19 +68,22 @@ ARM64 路径不是把整个 Google Emulator 再套一层 qemu-user，也不让 x
 解析 ARM64 AVD。amd64 容器 entrypoint 直接执行带独立 AArch64 loader/共享库闭包的
 native runner，由它启动原生 `qemu-system-aarch64-headless`。运行时 preflight 校验
 bundle 的 SHA-256 清单，健康检查核对实际
-`/proc/*/exe`，再要求 ADB、`sys.boot_completed`、API 37、Play Store 与 GMS 全部通过。
+`/proc/*/exe`，再要求 ADB、`sys.boot_completed`、存活的 SystemServer、核心 Binder 服务、
+API 37、Play Store 与 GMS 全部通过。
 由于 Linux AArch64 AEMU 的 `gic-version=host` 和 `-cpu host` 默认都依赖 KVM，
 软件执行路径会在所有 Android/图形参数之后强制追加
 `-qemu -machine gic-version=2 -cpu android-a57-16k`，并拒绝用户注入另一个 `-qemu`。
 ARM TCG 首次启动还会关闭纯视觉的 boot animation。下载的 Google ZIP 在解压前以
 固定 SHA-1 校验，`system.img`、`vendor.img`、kernel 和初始 userdata 种子保持原始
-内容；为了让极慢的纯 TCG 启动不被 Android framework 的 60 秒 watchdog 循环终止，
+内容；为了让极慢的纯 TCG 启动不被 Android framework watchdog 或 ART 独立的 10 秒
+Finalizer watchdog 循环终止，
 启动 ramdisk 通过 Android 17 官方 second-stage 属性通道
-`/system/etc/ramdisk/build.prop` 只加入 `ro.hw_timeout_multiplier=50`。构建会校验官方
+`/system/etc/ramdisk/build.prop` 只加入 `ro.hw_timeout_multiplier=50` 和与其等比例的
+`dalvik.vm.finalizer-timeout-ms=500000`。构建会校验官方
 ramdisk 及解压 cpio 的固定 SHA-256，保持原 cpio 为逐字节前缀，并锁定派生 ramdisk
 SHA-256。因而 Google 签名的 user-build system/GMS 没有改动，但该启动 ramdisk 不再是
 Google ZIP 中逐字节原件；要求所有制品完全不变的路径留待 x86_64/KVM 机器验证。
-模板标识包含 A57/GICv2/ramdisk-timeout50 启动契约，因此旧 volume 会失败关闭并要求
+模板标识包含 A57/GICv2/ramdisk-timeout50/finalizer500000 启动契约，因此旧 volume 会失败关闭并要求
 重新创建。
 原生 AEMU 的 0011 补丁注册隔离的 A57 派生 QOM 类型，只为已有 16 KB TCG 页表实现
 声明 TGran16 能力；0012 仅将该类型加入 `mach-virt` 的独立 CPU 白名单；

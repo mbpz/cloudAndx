@@ -30,9 +30,10 @@ SYSTEM_IMAGE_DIR=${SYSTEM_IMAGE_DIR:-${ANDROID_SDK_ROOT}/system-images/android-3
 ANDROID_RAMDISK_ROOT=${ANDROID_RAMDISK_ROOT:-/opt/cloudandx/android-ramdisk}
 ANDROID_RAMDISK_ORIGINAL_SHA256=${ANDROID_RAMDISK_ORIGINAL_SHA256:-be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8}
 ANDROID_RAMDISK_CPIO_SHA256=${ANDROID_RAMDISK_CPIO_SHA256:-56328ce8b964a5f53c7c6922d4c2415a3d10a2d36f100150d522a817054110ed}
-ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256:-28930d955709e5abaa52069cd0a504512f2b3b93dd8538cd2f0a64aad294510e}
+ANDROID_RAMDISK_DERIVED_SHA256=${ANDROID_RAMDISK_DERIVED_SHA256:-43eb955ddadc5a6ce3c716e4c1aef1c0939d62bc69a1b2d10a821def49c4f07c}
 ANDROID_RAMDISK_OVERLAY_PATH=${ANDROID_RAMDISK_OVERLAY_PATH:-system/etc/ramdisk/build.prop}
 EXPECTED_HW_TIMEOUT_MULTIPLIER=${EXPECTED_HW_TIMEOUT_MULTIPLIER:-50}
+EXPECTED_FINALIZER_TIMEOUT_MS=${EXPECTED_FINALIZER_TIMEOUT_MS:-500000}
 
 validate_engine_architecture "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}"
 validate_runtime_settings
@@ -63,6 +64,9 @@ fi
 [ "${ANDROID_RAMDISK_OVERLAY_PATH}" = system/etc/ramdisk/build.prop ] \
   || runtime_die "Android ramdisk overlay path is not the locked second-stage property channel."
 validate_uint_range EXPECTED_HW_TIMEOUT_MULTIPLIER "${EXPECTED_HW_TIMEOUT_MULTIPLIER}" 1 1000
+validate_uint_range EXPECTED_FINALIZER_TIMEOUT_MS "${EXPECTED_FINALIZER_TIMEOUT_MS}" 10000 10000000
+[ "${EXPECTED_FINALIZER_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 10000))" ] \
+  || runtime_die "ART finalizer timeout must match the hardware timeout multiplier."
 for ramdisk_sha256 in \
   "${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
   "${ANDROID_RAMDISK_CPIO_SHA256}" \
@@ -98,9 +102,12 @@ grep -Fxq "derived_ramdisk_sha256=${ANDROID_RAMDISK_DERIVED_SHA256}" \
 grep -Fxq "overlay_path=${ANDROID_RAMDISK_OVERLAY_PATH}" \
   "${ANDROID_RAMDISK_ROOT}/identity.properties" \
   || runtime_die "Android ramdisk overlay path identity is inconsistent."
-grep -Fxq "overlay_property=ro.hw_timeout_multiplier=${EXPECTED_HW_TIMEOUT_MULTIPLIER}" \
+grep -Fxq "overlay_property.ro_hw_timeout_multiplier=${EXPECTED_HW_TIMEOUT_MULTIPLIER}" \
   "${ANDROID_RAMDISK_ROOT}/identity.properties" \
-  || runtime_die "Android ramdisk overlay property identity is inconsistent."
+  || runtime_die "Android ramdisk hardware timeout identity is inconsistent."
+grep -Fxq "overlay_property.dalvik_vm_finalizer_timeout_ms=${EXPECTED_FINALIZER_TIMEOUT_MS}" \
+  "${ANDROID_RAMDISK_ROOT}/identity.properties" \
+  || runtime_die "Android ramdisk ART finalizer timeout identity is inconsistent."
 
 data_root=$(dirname "${ANDROID_AVD_HOME}")
 [ -d "${data_root}" ] || runtime_die "Runtime data directory does not exist: ${data_root}"
@@ -129,6 +136,7 @@ printf '%s\n' \
   "android.ramdisk.original-sha256=${ANDROID_RAMDISK_ORIGINAL_SHA256}" \
   "android.ramdisk.derived-sha256=${ANDROID_RAMDISK_DERIVED_SHA256}" \
   "android.hw-timeout-multiplier=${EXPECTED_HW_TIMEOUT_MULTIPLIER}" \
+  "android.finalizer-timeout-ms=${EXPECTED_FINALIZER_TIMEOUT_MS}" \
   "android.release-policy=base-final-stable-qpr1-beta-excluded" \
   "sdk.emulator-package.version=36.6.11" \
   "kvm.device=${KVM_DEVICE}" \

@@ -33,14 +33,7 @@ func main() {
 		log.Fatalf("persistent store error: %v", err)
 	}
 	app := NewApp(cfg, store)
-	server := &http.Server{
-		Addr: cfg.ListenAddress, Handler: app,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    16 << 10,
-	}
+	server := newHTTPServer(cfg, app)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -56,6 +49,17 @@ func main() {
 	log.Printf("controller listening on %s (runtime_mode=%s, lifecycle_scope=lease_registry_only)", cfg.ListenAddress, cfg.RuntimeMode)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server failed: %v", err)
+	}
+}
+
+func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr: cfg.ListenAddress, Handler: handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
 }
 

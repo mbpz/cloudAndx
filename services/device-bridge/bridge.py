@@ -22,6 +22,17 @@ ADB = os.environ.get("ADB_PATH", "/opt/platform-tools/adb")
 ADB_SERIAL = os.environ.get("ADB_SERIAL", "emulator:5555")
 
 
+def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name, str(fallback))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name} must be in [{minimum}, {maximum}]")
+    return value
+
+
 def _load_token() -> str:
     path = os.environ.get("BRIDGE_TOKEN_FILE", "")
     if path:
@@ -45,20 +56,38 @@ REQUIRED_GOOGLE_PACKAGES = (
     "com.android.vending",
     "com.google.android.gms",
 )
-RUNTIME_HEALTH_TTL_SECONDS = max(
-    1,
-    int(os.environ.get("RUNTIME_HEALTH_TTL_SECONDS", "60")),
+ADB_READ_TIMEOUT_SECONDS = _bounded_env_int(
+    "ADB_READ_TIMEOUT_SECONDS", 180, 30, 300
 )
+RUNTIME_HEALTH_TTL_SECONDS = _bounded_env_int(
+    "RUNTIME_HEALTH_TTL_SECONDS", 60, 1, 300
+)
+RUNTIME_HEALTH_BUDGET_SECONDS = _bounded_env_int(
+    "RUNTIME_HEALTH_BUDGET_SECONDS", 180, 30, 900
+)
+RuntimeHealthResult = tuple[bool, str, dict[str, Any]]
 _RUNTIME_HEALTH_LOCK = threading.Lock()
 _RUNTIME_HEALTH_CACHE: tuple[
     float,
     str,
-    tuple[bool, str, dict[str, Any]],
+    RuntimeHealthResult,
 ] | None = None
 
 
 class AdbError(RuntimeError):
     pass
+
+
+def _runtime_health_timeout(deadline: float | None) -> float:
+    if deadline is None:
+        return float(ADB_READ_TIMEOUT_SECONDS)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AdbError(
+            "runtime health probe exhausted its "
+            f"{RUNTIME_HEALTH_BUDGET_SECONDS}-second aggregate budget"
+        )
+    return min(float(ADB_READ_TIMEOUT_SECONDS), remaining)
 
 
 class Adb:
@@ -67,7 +96,12 @@ class Adb:
         self.serial = serial
         self._last_connect = 0.0
 
-    def _raw(self, args: list[str], timeout: int = 30, input_bytes: bytes | None = None) -> bytes:
+    def _raw(
+        self,
+        args: list[str],
+        timeout: float = 30,
+        input_bytes: bytes | None = None,
+    ) -> bytes:
         try:
             result = subprocess.run(
                 [self.executable, *args],
@@ -84,20 +118,24 @@ class Adb:
             raise AdbError(message or f"adb exited {result.returncode}")
         return result.stdout
 
-    def connect(self, force: bool = False) -> None:
+    def connect(self, force: bool = False, timeout: float = 3) -> None:
         now = time.monotonic()
         if force or now - self._last_connect > 5:
-            self._raw(["connect", self.serial], timeout=3)
-            self._last_connect = now
+            self._raw(["connect", self.serial], timeout=min(3.0, timeout))
+            self._last_connect = time.monotonic()
 
-    def run(self, args: list[str], timeout: int = 30) -> bytes:
-        self.connect()
-        return self._raw(["-s", self.serial, *args], timeout=timeout)
+    def run(self, args: list[str], timeout: float = 30) -> bytes:
+        started_at = time.monotonic()
+        self.connect(timeout=timeout)
+        remaining = timeout - (time.monotonic() - started_at)
+        if remaining <= 0:
+            raise AdbError(f"adb operation exhausted its {timeout:g}-second timeout")
+        return self._raw(["-s", self.serial, *args], timeout=remaining)
 
-    def text(self, args: list[str], timeout: int = 30) -> str:
+    def text(self, args: list[str], timeout: float = 30) -> str:
         return self.run(args, timeout).decode("utf-8", "replace").strip()
 
-    def shell(self, *args: str, timeout: int = 30) -> str:
+    def shell(self, *args: str, timeout: float = 30) -> str:
         return self.text(["shell", *args], timeout=timeout)
 
     def emu(self, *args: str) -> str:
@@ -220,27 +258,62 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("JSON body must be an object")
         return value
 
-    def _device_summary(self) -> dict[str, Any]:
-        state = ADB_CLIENT.text(["get-state"], timeout=10)
+    def _device_summary(self, deadline: float | None = None) -> dict[str, Any]:
+        state = ADB_CLIENT.text(
+            ["get-state"], timeout=_runtime_health_timeout(deadline)
+        )
         props = {
-            "boot_completed": ADB_CLIENT.shell("getprop", "sys.boot_completed"),
-            "android_version": ADB_CLIENT.shell("getprop", "ro.build.version.release"),
-            "api_level": ADB_CLIENT.shell("getprop", "ro.build.version.sdk"),
-            "security_patch": ADB_CLIENT.shell("getprop", "ro.build.version.security_patch"),
-            "fingerprint": ADB_CLIENT.shell("getprop", "ro.build.fingerprint"),
-            "product": ADB_CLIENT.shell("getprop", "ro.product.name"),
-            "abi": ADB_CLIENT.shell("getprop", "ro.product.cpu.abi"),
-            "page_size_bytes": ADB_CLIENT.shell("getconf", "PAGE_SIZE"),
+            "boot_completed": ADB_CLIENT.shell(
+                "getprop",
+                "sys.boot_completed",
+                timeout=_runtime_health_timeout(deadline),
+            ),
+            "android_version": ADB_CLIENT.shell(
+                "getprop",
+                "ro.build.version.release",
+                timeout=_runtime_health_timeout(deadline),
+            ),
+            "api_level": ADB_CLIENT.shell(
+                "getprop",
+                "ro.build.version.sdk",
+                timeout=_runtime_health_timeout(deadline),
+            ),
+            "security_patch": ADB_CLIENT.shell(
+                "getprop",
+                "ro.build.version.security_patch",
+                timeout=_runtime_health_timeout(deadline),
+            ),
+            "fingerprint": ADB_CLIENT.shell(
+                "getprop",
+                "ro.build.fingerprint",
+                timeout=_runtime_health_timeout(deadline),
+            ),
+            "product": ADB_CLIENT.shell(
+                "getprop",
+                "ro.product.name",
+                timeout=_runtime_health_timeout(deadline),
+            ),
+            "abi": ADB_CLIENT.shell(
+                "getprop",
+                "ro.product.cpu.abi",
+                timeout=_runtime_health_timeout(deadline),
+            ),
+            "page_size_bytes": ADB_CLIENT.shell(
+                "getconf", "PAGE_SIZE", timeout=_runtime_health_timeout(deadline)
+            ),
         }
         return {"serial": ADB_SERIAL, "state": state, "properties": props}
 
-    def _runtime_health(self) -> tuple[bool, str, dict[str, Any]]:
-        observed = self._device_summary()
+    def _runtime_health(self) -> RuntimeHealthResult:
+        deadline = time.monotonic() + RUNTIME_HEALTH_BUDGET_SECONDS
+        observed = self._device_summary(deadline)
         packages: dict[str, bool | None] = {}
         package_errors: dict[str, str] = {}
         for package in REQUIRED_GOOGLE_PACKAGES:
             try:
-                output = ADB_CLIENT.shell("pm", "path", package, timeout=10)
+                output = ADB_CLIENT.shell(
+                    "pm", "path", package, timeout=_runtime_health_timeout(deadline)
+                )
                 packages[package] = any(line.startswith("package:") for line in output.splitlines())
             except AdbError as exc:
                 packages[package] = None
@@ -251,19 +324,14 @@ class Handler(BaseHTTPRequestHandler):
         ready, reason = _assess_runtime_health(observed)
         return ready, reason, observed
 
-    def _cached_runtime_health(self) -> tuple[bool, str, dict[str, Any]]:
+    def _cached_runtime_health(self) -> tuple[RuntimeHealthResult, str]:
         global _RUNTIME_HEALTH_CACHE
-
-        now = time.monotonic()
-        cached = _RUNTIME_HEALTH_CACHE
-        if cached is not None and now - cached[0] < RUNTIME_HEALTH_TTL_SECONDS:
-            return cached[2]
 
         with _RUNTIME_HEALTH_LOCK:
             now = time.monotonic()
             cached = _RUNTIME_HEALTH_CACHE
             if cached is not None and now - cached[0] < RUNTIME_HEALTH_TTL_SECONDS:
-                return cached[2]
+                return cached[2], cached[1]
             try:
                 result = self._runtime_health()
             except (AdbError, ValueError) as exc:
@@ -274,16 +342,10 @@ class Handler(BaseHTTPRequestHandler):
                 )
             observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             _RUNTIME_HEALTH_CACHE = (time.monotonic(), observed_at, result)
-            return result
+            return result, observed_at
 
     def _session_health(self, session_id: str) -> None:
-        ready, reason, observed = self._cached_runtime_health()
-        cached = _RUNTIME_HEALTH_CACHE
-        observed_at = (
-            cached[1]
-            if cached is not None
-            else datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        )
+        (ready, reason, observed), observed_at = self._cached_runtime_health()
 
         payload: dict[str, Any] = {
             "session_id": session_id,
@@ -303,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/livez":
                 self._json(HTTPStatus.OK, {"alive": True})
             elif parsed.path == "/healthz":
-                ready, reason, observed = self._cached_runtime_health()
+                (ready, reason, observed), _ = self._cached_runtime_health()
                 self._json(
                     HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
                     {"ready": ready, "reason": reason, **observed},
@@ -311,15 +373,32 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/v1/device":
                 self._json(HTTPStatus.OK, self._device_summary())
             elif parsed.path == "/v1/screenshot.png":
-                image = ADB_CLIENT.run(["exec-out", "screencap", "-p"], timeout=30)
+                image = ADB_CLIENT.run(
+                    ["exec-out", "screencap", "-p"],
+                    timeout=ADB_READ_TIMEOUT_SECONDS,
+                )
                 self._send(HTTPStatus.OK, image, "image/png")
             elif parsed.path == "/v1/apps":
-                packages = [line.removeprefix("package:") for line in ADB_CLIENT.shell("pm", "list", "packages", "-3").splitlines()]
+                packages = [
+                    line.removeprefix("package:")
+                    for line in ADB_CLIENT.shell(
+                        "pm", "list", "packages", "-3",
+                        timeout=ADB_READ_TIMEOUT_SECONDS,
+                    ).splitlines()
+                ]
                 self._json(HTTPStatus.OK, {"packages": packages})
             elif parsed.path == "/v1/logcat":
                 query = urllib.parse.parse_qs(parsed.query)
                 lines = _bounded_int(int(query.get("lines", ["200"])[0]), "lines", 1, 2000)
-                self._json(HTTPStatus.OK, {"lines": ADB_CLIENT.text(["logcat", "-d", "-t", str(lines)]).splitlines()})
+                self._json(
+                    HTTPStatus.OK,
+                    {
+                        "lines": ADB_CLIENT.text(
+                            ["logcat", "-d", "-t", str(lines)],
+                            timeout=ADB_READ_TIMEOUT_SECONDS,
+                        ).splitlines()
+                    },
+                )
             else:
                 self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unknown endpoint")
         except (AdbError, ValueError) as exc:

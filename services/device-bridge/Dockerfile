@@ -25,6 +25,8 @@ COPY --chown=bridge:bridge bridge.py /app/bridge.py
 
 ENV ADB_PATH=/opt/platform-tools/adb \
     ADB_SERIAL=emulator:5555 \
+    ADB_READ_TIMEOUT_SECONDS=180 \
+    RUNTIME_HEALTH_BUDGET_SECONDS=180 \
     LISTEN_HOST=0.0.0.0 \
     LISTEN_PORT=8090 \
     HOME=/home/bridge

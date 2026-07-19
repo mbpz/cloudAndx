@@ -15,6 +15,8 @@ obsolete_dispatcher=${ROOT}/docker/emulator/bin/qemu-system-x86_64-headless-disp
 evidence_google_repo=${ROOT}/services/evidence-gate/src/evidence_gate/google_repo.py
 avd_config=${ROOT}/docker/emulator/avd/config.ini
 avd_marker=${ROOT}/docker/emulator/avd/template-version
+dashboard_app=${ROOT}/docker/dashboard/app.js
+dashboard_nginx=${ROOT}/docker/dashboard/nginx.conf
 
 grep -q '^  runtime-compatibility:$' "${compose_file}"
 grep -q 'DOCKER_ENGINE_ARCHITECTURE:' "${compose_file}"
@@ -194,6 +196,22 @@ case "${bridge_block}" in
 esac
 
 case "${bridge_block}" in
+  *'ADB_READ_TIMEOUT_SECONDS: "180"'*) ;;
+  *)
+    printf '%s\n' 'FAIL: device bridge read-only ADB timeout is not explicitly bounded for ARM TCG.' >&2
+    exit 1
+    ;;
+esac
+
+case "${bridge_block}" in
+  *'RUNTIME_HEALTH_BUDGET_SECONDS: "180"'*) ;;
+  *)
+    printf '%s\n' 'FAIL: device bridge deep-health pass has no explicit aggregate ARM TCG budget.' >&2
+    exit 1
+    ;;
+esac
+
+case "${bridge_block}" in
   *'RUNTIME_HEALTH_TTL_SECONDS: "60"'*) ;;
   *)
     printf '%s\n' 'FAIL: device bridge deep-health cache is not explicitly bounded to 60 seconds.' >&2
@@ -202,6 +220,22 @@ case "${bridge_block}" in
 esac
 
 controller_block=$(sed -n '/^  controller:$/,/^  dashboard:$/p' "${compose_file}")
+case "${controller_block}" in
+  *'PROBE_TIMEOUT_MILLIS: "300000"'*) ;;
+  *)
+    printf '%s\n' 'FAIL: controller probe timeout cannot cover one bounded ARM TCG evidence pass.' >&2
+    exit 1
+    ;;
+esac
+
+case "${controller_block}" in
+  *'HTTP_WRITE_TIMEOUT_MILLIS: "305000"'*) ;;
+  *)
+    printf '%s\n' 'FAIL: controller HTTP write timeout does not cover its slow probe budget.' >&2
+    exit 1
+    ;;
+esac
+
 case "${controller_block}" in
   *'PROBE_MAX_AGE_SECONDS: "90"'*) ;;
   *)
@@ -234,6 +268,14 @@ grep -Fq '`ro.hw_timeout_multiplier=50` and `dalvik.vm.finalizer-timeout-ms=5000
   "${ROOT}/docker/emulator/README.md"
 grep -Fq '`bluetooth.hci.timeout_milliseconds=100000` and' \
   "${ROOT}/docker/emulator/README.md"
+if [ "$(grep -Fc 'proxy_read_timeout 310s;' "${dashboard_nginx}")" -ne 2 ]; then
+  printf '%s\n' 'FAIL: dashboard proxy timeouts do not cover bounded ARM TCG reads.' >&2
+  exit 1
+fi
+grep -Fq 'let refreshInFlight=false;' "${dashboard_app}"
+grep -Fq 'if(refreshInFlight||screenInFlight)return;' "${dashboard_app}"
+grep -Fq 'let screenInFlight=false;' "${dashboard_app}"
+grep -Fq 'if(screenInFlight||refreshInFlight)return;' "${dashboard_app}"
 grep -Fxq 'hw.camera.back=emulated' "${ROOT}/docker/emulator/avd/config.ini"
 grep -Fq 'set -- "$@" -no-boot-anim -camera-back emulated' "${emulator_entrypoint}"
 grep -Fq -- '-no-boot-anim' "${emulator_entrypoint}"

@@ -10,6 +10,13 @@ device probe below. Concurrent callers share one in-flight probe, and both
 successful and failed results are cached for at most 60 seconds (explicitly
 matched by the project controller's 90-second evidence window). Session
 `observed_at` records the time of the underlying probe, not the cache-hit time.
+Read-only ADB evidence, package, log, app-list, and screenshot calls use an
+explicit 180-second ceiling because ARM TCG can legitimately exceed the usual
+10-30 second interactive deadlines. One deep health pass also has a 180-second
+aggregate budget: each ADB command receives the lesser of its 180-second
+ceiling and the remaining aggregate time, including any reconnect. Budget
+exhaustion is reported and cached as an unhealthy result. Emulator-console
+mutations retain their shorter bounded deadlines.
 The result is healthy only after all of these checks pass:
 
 - ADB reports `device` and `sys.boot_completed=1`;

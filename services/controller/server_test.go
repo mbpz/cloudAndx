@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -23,7 +25,7 @@ func testConfig(dataDir string) Config {
 		AndroidVersion: "17", APILevel: 37,
 		SystemImageKind: "google_apis_playstore_ps16k",
 		KVMAvailable:    false, RuntimeMode: "registry_only", MaxActiveSessions: 1,
-		ProbeMaxAge: 30 * time.Second, ProbeTimeout: time.Second,
+		ProbeMaxAge: 30 * time.Second, ProbeTimeout: time.Second, HTTPWriteTimeout: 15 * time.Second,
 		MinimumLease: time.Minute, DefaultLease: time.Hour, MaximumLease: 24 * time.Hour,
 	}
 }
@@ -197,6 +199,137 @@ func TestURLProbeRequiresStrictFreshEvidence(t *testing.T) {
 	result := app.probe.Check(context.Background(), testSessionID)
 	if !result.Verified || result.Kind != "url" {
 		t.Fatalf("URL probe result = %+v", result)
+	}
+}
+
+func TestDelayedURLProbeAndReplayEachProbeOnceWithoutShiftingLease(t *testing.T) {
+	startedAt := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(2 * time.Minute)
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	replayProbeStarted := make(chan struct{})
+	releaseReplayProbe := make(chan struct{})
+	var probeCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch probeCount.Add(1) {
+		case 1:
+			close(probeStarted)
+			<-releaseProbe
+		case 2:
+			close(replayProbeStarted)
+			<-releaseReplayProbe
+		}
+		writeJSON(w, http.StatusOK, probeEvidence{SessionID: testSessionID, Healthy: true, ObservedAt: completedAt})
+	}))
+	defer server.Close()
+
+	app, _ := newTestApp(t, func(cfg *Config) {
+		cfg.ProbeURLTemplate = server.URL + "/sessions/{id}/healthz"
+	})
+	var clockMu sync.Mutex
+	probeNow := startedAt
+	app.probe.now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return probeNow
+	}
+	app.now = app.probe.now
+
+	responseCh := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responseCh <- performRequest(app, http.MethodPost, "/v1/sessions", `{}`, createHeaders("delayed-probe"))
+	}()
+	<-probeStarted
+	clockMu.Lock()
+	probeNow = completedAt
+	clockMu.Unlock()
+	close(releaseProbe)
+
+	response := <-responseCh
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, body = %s", response.Code, response.Body.String())
+	}
+	session, _ := decodeSessionEnvelope(t, response)
+	if session.State != StateRunning || !session.Probe.Verified || !session.Probe.CheckedAt.Equal(completedAt) {
+		t.Fatalf("session after delayed probe = %+v", session)
+	}
+	if !session.CreatedAt.Equal(startedAt) || !session.ExpiresAt.Equal(startedAt.Add(time.Hour)) {
+		t.Fatalf("session lease shifted by probe: created_at=%s expires_at=%s", session.CreatedAt, session.ExpiresAt)
+	}
+	if got := probeCount.Load(); got != 1 {
+		t.Fatalf("new session external probe count = %d, want 1", got)
+	}
+
+	conflict := performRequest(app, http.MethodPost, "/v1/sessions", `{"lease_seconds":7200}`, createHeaders("delayed-probe"))
+	if conflict.Code != http.StatusConflict || probeCount.Load() != 1 {
+		t.Fatalf("idempotency conflict status=%d probe_count=%d", conflict.Code, probeCount.Load())
+	}
+	capacity := performRequest(app, http.MethodPost, "/v1/sessions", `{}`, createHeaders("capacity-after-probe"))
+	if capacity.Code != http.StatusConflict || probeCount.Load() != 1 {
+		t.Fatalf("capacity rejection status=%d probe_count=%d", capacity.Code, probeCount.Load())
+	}
+
+	replayCh := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		replayCh <- performRequest(app, http.MethodPost, "/v1/sessions", `{}`, createHeaders("delayed-probe"))
+	}()
+	<-replayProbeStarted
+	if got := probeCount.Load(); got != 2 {
+		t.Fatalf("replay started %d external probes, want exactly one new probe", got)
+	}
+	close(releaseReplayProbe)
+	replay := <-replayCh
+	if replay.Code != http.StatusOK {
+		t.Fatalf("replay status = %d, body = %s", replay.Code, replay.Body.String())
+	}
+	replayedSession, replayed := decodeSessionEnvelope(t, replay)
+	if !replayed || replayedSession.State != StateRunning || probeCount.Load() != 2 {
+		t.Fatalf("replay=%v session=%+v probe_count=%d", replayed, replayedSession, probeCount.Load())
+	}
+	if app.metrics.CreatedSessions.Load() != 1 || app.metrics.IdempotentHits.Load() != 1 || app.metrics.ProbeChecks.Load() != 2 || app.metrics.ProbeFailures.Load() != 0 {
+		t.Fatalf("unexpected metrics: %+v", app.metrics)
+	}
+}
+
+func TestExpiredSessionSkipsExternalProbe(t *testing.T) {
+	for name, path := range map[string]string{
+		"single session": "/v1/sessions/" + testSessionID,
+		"session list":   "/v1/sessions",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var probeCount atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				probeCount.Add(1)
+				writeJSON(w, http.StatusOK, probeEvidence{SessionID: testSessionID, Healthy: true, ObservedAt: time.Now().UTC()})
+			}))
+			defer server.Close()
+
+			app, now := newTestApp(t, func(cfg *Config) {
+				cfg.ProbeURLTemplate = server.URL + "/sessions/{id}/healthz"
+			})
+			expired := Session{
+				ID: testSessionID, State: StateWaitingForRuntime,
+				LifecycleScope: "lease_registry_only", RuntimeMode: "registry_only",
+				CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Minute),
+				Probe:          ProbeResult{Configured: true, Kind: "pending", Detail: "external emulator health probe is pending"},
+				IdempotencyKey: "expired-session", RequestDigest: strings.Repeat("a", 64),
+			}
+			if _, _, err := app.store.Create(expired, 1, now); err != nil {
+				t.Fatal(err)
+			}
+
+			response := performRequest(app, http.MethodGet, path, "", nil)
+			if response.Code != http.StatusOK {
+				t.Fatalf("GET status = %d, body = %s", response.Code, response.Body.String())
+			}
+			stored, err := app.store.Get(testSessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.State != StateExpired || probeCount.Load() != 0 || app.metrics.ProbeChecks.Load() != 0 {
+				t.Fatalf("expired session=%+v probe_count=%d metric_count=%d", stored, probeCount.Load(), app.metrics.ProbeChecks.Load())
+			}
+		})
 	}
 }
 

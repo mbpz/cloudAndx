@@ -164,16 +164,17 @@ func (a *App) createSession(w http.ResponseWriter, r *http.Request) {
 
 	now := a.now()
 	lease := time.Duration(normalized.LeaseSeconds) * time.Second
-	probe := a.checkProbe(r.Context(), id)
-	state := StateWaitingForRuntime
-	if probe.Verified {
-		state = StateRunning
-	}
 	session := Session{
 		ID: id, ClientReference: normalized.ClientReference,
 		RequestedCapabilities: append([]string(nil), normalized.RequestedCapabilities...),
-		State:                 state, LifecycleScope: "lease_registry_only", RuntimeMode: a.cfg.RuntimeMode,
-		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(lease), Probe: probe,
+		State:                 StateWaitingForRuntime, LifecycleScope: "lease_registry_only", RuntimeMode: a.cfg.RuntimeMode,
+		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(lease),
+		Probe: ProbeResult{
+			Configured: a.cfg.ProbeFileTemplate != "" || a.cfg.ProbeURLTemplate != "",
+			CheckedAt:  now,
+			Kind:       "pending",
+			Detail:     "external emulator health probe is pending",
+		},
 		IdempotencyKey: idempotencyKey, RequestDigest: digest,
 	}
 	stored, replayed, err := a.store.Create(session, a.cfg.MaxActiveSessions, now)
@@ -192,19 +193,20 @@ func (a *App) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "state_persist_failed", "failed to persist session state")
 		return
 	}
+	status := http.StatusCreated
 	if replayed {
 		a.metrics.IdempotentHits.Add(1)
-		stored, err = a.refreshSession(r.Context(), stored)
-		if err != nil {
-			a.metrics.PersistFailures.Add(1)
-			writeError(w, http.StatusInternalServerError, "state_persist_failed", "failed to update persistent session state")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"session": stored, "replayed": true})
+		status = http.StatusOK
+	} else {
+		a.metrics.CreatedSessions.Add(1)
+	}
+	stored, err = a.refreshSession(r.Context(), stored)
+	if err != nil {
+		a.metrics.PersistFailures.Add(1)
+		writeError(w, http.StatusInternalServerError, "state_persist_failed", "failed to update persistent session state")
 		return
 	}
-	a.metrics.CreatedSessions.Add(1)
-	writeJSON(w, http.StatusCreated, map[string]any{"session": stored, "replayed": false})
+	writeJSON(w, status, map[string]any{"session": stored, "replayed": replayed})
 }
 
 func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +281,10 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (a *App) refreshSession(ctx context.Context, session Session) (Session, error) {
 	if session.State == StateReleased || session.State == StateExpired {
 		return session, nil
+	}
+	now := a.now()
+	if !now.Before(session.ExpiresAt) {
+		return a.store.UpdateState(session.ID, now, session.Probe)
 	}
 	probe := a.checkProbe(ctx, session.ID)
 	return a.store.UpdateState(session.ID, a.now(), probe)

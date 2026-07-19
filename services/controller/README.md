@@ -87,10 +87,15 @@ unknown fields, must be recent (30 seconds by default), and has this exact form:
 }
 ```
 
-`PROBE_MAX_AGE_SECONDS` and `PROBE_TIMEOUT_MILLIS` tune freshness and HTTP
-timeout. The project Compose sets the maximum age to 90 seconds so it remains
+`PROBE_MAX_AGE_SECONDS` and `PROBE_TIMEOUT_MILLIS` tune freshness and probe HTTP
+timeout. `HTTP_WRITE_TIMEOUT_MILLIS` defaults to the probe timeout plus five
+seconds and cannot be configured below that relationship, so a synchronous
+session probe can finish before the controller closes its response connection.
+The project Compose sets the maximum age to 90 seconds so it remains
 strictly bounded while covering the device bridge's 60-second single-flight
-cache. Without valid proof the state can never be `RUNNING`.
+cache. Its probe timeout is five minutes so one slow ARM TCG evidence pass can
+finish without turning a healthy guest into a false timeout. Without valid
+proof the state can never be `RUNNING`.
 
 ## Important capability boundary
 

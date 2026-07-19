@@ -157,6 +157,8 @@ services:
       ADB_SERIAL: emulator:5555
       ADB_VENDOR_KEYS: /home/bridge/.android/adbkey
       BRIDGE_TOKEN_FILE: /run/bridge-secrets/token
+      ADB_READ_TIMEOUT_SECONDS: "180"
+      RUNTIME_HEALTH_BUDGET_SECONDS: "180"
       RUNTIME_HEALTH_TTL_SECONDS: "60"
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=320m
@@ -186,6 +188,8 @@ services:
       MAX_ACTIVE_SESSIONS: "1"
       EMULATOR_HEALTH_URL_TEMPLATE: http://device-bridge:8090/sessions/{id}/healthz
       PROBE_MAX_AGE_SECONDS: "90"
+      PROBE_TIMEOUT_MILLIS: "300000"
+      HTTP_WRITE_TIMEOUT_MILLIS: "305000"
       PREFLIGHT_EVIDENCE_FILE: /evidence/preflight.json
     volumes:
       - controller-data:/data

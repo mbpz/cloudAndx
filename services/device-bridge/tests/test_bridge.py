@@ -2,9 +2,10 @@ import importlib.util
 import io
 import json
 import os
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 
 os.environ.setdefault("BRIDGE_TOKEN", "test-token")
@@ -16,6 +17,14 @@ SPEC.loader.exec_module(bridge)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_bounded_env_int_rejects_non_integer_and_out_of_range_values(self):
+        with patch.dict(os.environ, {"TEST_SECONDS": "slow"}):
+            with self.assertRaises(RuntimeError):
+                bridge._bounded_env_int("TEST_SECONDS", 30, 1, 300)
+        with patch.dict(os.environ, {"TEST_SECONDS": "301"}):
+            with self.assertRaises(RuntimeError):
+                bridge._bounded_env_int("TEST_SECONDS", 30, 1, 300)
+
     def test_bounded_int_rejects_bool_and_range(self):
         with self.assertRaises(ValueError):
             bridge._bounded_int(True, "x", 0, 10)
@@ -61,6 +70,9 @@ class RuntimeAdb:
         self.installed_packages = set(installed_packages)
         self.page_size = page_size
         self.shell_calls = []
+        self.shell_timeouts = {}
+        self.text_timeouts = {}
+        self.timeout_calls = []
         self.properties = {
             "sys.boot_completed": "1",
             "ro.build.version.release": "17",
@@ -72,12 +84,16 @@ class RuntimeAdb:
         }
 
     def text(self, args, timeout=30):
+        self.text_timeouts[tuple(args)] = timeout
+        self.timeout_calls.append(timeout)
         if args == ["get-state"]:
             return "device"
         raise AssertionError(f"unexpected text call: {args}")
 
     def shell(self, *args, **kwargs):
         self.shell_calls.append(args)
+        self.shell_timeouts[args] = kwargs.get("timeout")
+        self.timeout_calls.append(kwargs.get("timeout"))
         if args[:1] == ("getprop",):
             return self.properties[args[1]]
         if args == ("getconf", "PAGE_SIZE"):
@@ -103,6 +119,31 @@ def healthy_observation():
             "com.google.android.gms": True,
         },
     }
+
+
+class AdbTimeoutTests(unittest.TestCase):
+    def test_adb_command_timeout_includes_reconnect_time(self):
+        client = bridge.Adb(serial="emulator:5555")
+        raw = Mock(return_value=b"device\n")
+
+        with (
+            patch.object(client, "_raw", raw),
+            patch.object(
+                bridge.time,
+                "monotonic",
+                side_effect=[100.0, 100.0, 102.0, 102.0],
+            ),
+        ):
+            result = client.run(["get-state"], timeout=10)
+
+        self.assertEqual(result, b"device\n")
+        self.assertEqual(
+            raw.call_args_list,
+            [
+                call(["connect", "emulator:5555"], timeout=3.0),
+                call(["-s", "emulator:5555", "get-state"], timeout=8.0),
+            ],
+        )
 
 
 class RuntimeHealthTests(unittest.TestCase):
@@ -132,6 +173,13 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(observed["properties"]["abi"], "arm64-v8a")
         self.assertEqual(observed["properties"]["page_size_bytes"], "16384")
         self.assertIn(("getconf", "PAGE_SIZE"), adb.shell_calls)
+        self.assertEqual(len(adb.timeout_calls), 11)
+        self.assertTrue(
+            all(
+                0 < timeout <= bridge.ADB_READ_TIMEOUT_SECONDS
+                for timeout in adb.timeout_calls
+            )
+        )
         self.assertEqual(
             observed["packages"],
             {
@@ -139,6 +187,42 @@ class RuntimeHealthTests(unittest.TestCase):
                 "com.google.android.gms": True,
             },
         )
+
+    def test_runtime_probe_caps_each_command_by_remaining_aggregate_budget(self):
+        handler = object.__new__(bridge.Handler)
+        adb = RuntimeAdb()
+        ticks = [100.0, *(100.0 + offset for offset in range(11))]
+
+        with (
+            patch.object(bridge, "ADB_CLIENT", adb),
+            patch.object(bridge, "RUNTIME_HEALTH_BUDGET_SECONDS", 20),
+            patch.object(bridge, "ADB_READ_TIMEOUT_SECONDS", 180),
+            patch.object(bridge.time, "monotonic", side_effect=ticks),
+        ):
+            healthy, reason, _ = handler._runtime_health()
+
+        self.assertTrue(healthy)
+        self.assertEqual(reason, "ready")
+        self.assertEqual(adb.timeout_calls, list(range(20, 9, -1)))
+
+    def test_runtime_probe_stops_before_command_after_budget_exhaustion(self):
+        handler = object.__new__(bridge.Handler)
+        adb = RuntimeAdb()
+
+        with (
+            patch.object(bridge, "ADB_CLIENT", adb),
+            patch.object(bridge, "RUNTIME_HEALTH_BUDGET_SECONDS", 5),
+            patch.object(
+                bridge.time,
+                "monotonic",
+                side_effect=[100.0, 100.0, 105.0],
+            ),
+        ):
+            with self.assertRaisesRegex(bridge.AdbError, "aggregate budget"):
+                handler._runtime_health()
+
+        self.assertEqual(adb.timeout_calls, [5.0])
+        self.assertEqual(adb.shell_calls, [])
 
     def test_runtime_probe_rejects_a_missing_google_package(self):
         handler = object.__new__(bridge.Handler)
@@ -155,24 +239,89 @@ class RuntimeHealthTests(unittest.TestCase):
         expected = (True, "ready", healthy_observation())
         handler._runtime_health = Mock(return_value=expected)
 
-        first = handler._cached_runtime_health()
-        second = handler._cached_runtime_health()
+        first, first_observed_at = handler._cached_runtime_health()
+        second, second_observed_at = handler._cached_runtime_health()
 
         self.assertEqual(first, expected)
         self.assertEqual(second, expected)
+        self.assertEqual(first_observed_at, second_observed_at)
         handler._runtime_health.assert_called_once_with()
 
     def test_deep_health_cache_throttles_adb_failures(self):
         handler = object.__new__(bridge.Handler)
         handler._runtime_health = Mock(side_effect=bridge.AdbError("transport offline"))
 
-        first = handler._cached_runtime_health()
-        second = handler._cached_runtime_health()
+        first, first_observed_at = handler._cached_runtime_health()
+        second, second_observed_at = handler._cached_runtime_health()
 
         self.assertFalse(first[0])
         self.assertEqual(first, second)
+        self.assertEqual(first_observed_at, second_observed_at)
         self.assertIn("transport offline", first[1])
         handler._runtime_health.assert_called_once_with()
+
+    def test_concurrent_first_cache_miss_runs_one_probe(self):
+        handler = object.__new__(bridge.Handler)
+        expected = (True, "ready", healthy_observation())
+        probe_started = threading.Event()
+        second_started = threading.Event()
+        release_probe = threading.Event()
+        results = []
+        errors = []
+
+        def probe():
+            probe_started.set()
+            if not release_probe.wait(timeout=5):
+                raise RuntimeError("test did not release runtime probe")
+            return expected
+
+        def read_cache(started=None):
+            if started is not None:
+                started.set()
+            try:
+                results.append(handler._cached_runtime_health())
+            except BaseException as exc:  # surface thread failures in the test
+                errors.append(exc)
+
+        handler._runtime_health = Mock(side_effect=probe)
+        first = threading.Thread(target=read_cache)
+        second = threading.Thread(target=read_cache, args=(second_started,))
+        first.start()
+        try:
+            self.assertTrue(probe_started.wait(timeout=2))
+            second.start()
+            self.assertTrue(second_started.wait(timeout=2))
+        finally:
+            release_probe.set()
+            first.join(timeout=2)
+            if second.ident is not None:
+                second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0], results[1])
+        handler._runtime_health.assert_called_once_with()
+
+    def test_session_health_uses_timestamp_paired_with_cached_result(self):
+        handler = object.__new__(bridge.Handler)
+        observed_at = "2026-07-19T12:34:56Z"
+        handler._cached_runtime_health = Mock(
+            return_value=((True, "ready", healthy_observation()), observed_at)
+        )
+        handler._json = Mock()
+        bridge._RUNTIME_HEALTH_CACHE = (
+            0.0,
+            "wrong-timestamp",
+            (False, "wrong-result", {"serial": bridge.ADB_SERIAL}),
+        )
+
+        handler._session_health("ses_" + "d" * 32)
+
+        _, payload = handler._json.call_args.args
+        self.assertTrue(payload["healthy"])
+        self.assertEqual(payload["observed_at"], observed_at)
 
     def test_all_required_evidence_is_healthy(self):
         healthy, reason = bridge._assess_runtime_health(healthy_observation())
@@ -273,6 +422,24 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(set(payload), {"session_id", "healthy", "observed_at"})
         self.assertEqual(payload["session_id"], session_id)
         self.assertTrue(payload["healthy"])
+
+    def test_screenshot_uses_tcg_safe_read_timeout(self):
+        handler = object.__new__(bridge.Handler)
+        handler.path = "/v1/screenshot.png"
+        handler._send = Mock()
+        adb = Mock()
+        adb.run.return_value = b"\x89PNG\r\n\x1a\nimage"
+
+        with patch.object(bridge, "ADB_CLIENT", adb):
+            handler.do_GET()
+
+        adb.run.assert_called_once_with(
+            ["exec-out", "screencap", "-p"],
+            timeout=bridge.ADB_READ_TIMEOUT_SECONDS,
+        )
+        handler._send.assert_called_once_with(
+            200, b"\x89PNG\r\n\x1a\nimage", "image/png"
+        )
 
     def test_unhealthy_session_exposes_reason_and_observations(self):
         handler = object.__new__(bridge.Handler)

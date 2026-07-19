@@ -23,10 +23,13 @@ type Config struct {
 	ProbeURLTemplate      string
 	ProbeMaxAge           time.Duration
 	ProbeTimeout          time.Duration
+	HTTPWriteTimeout      time.Duration
 	DefaultLease          time.Duration
 	MaximumLease          time.Duration
 	MinimumLease          time.Duration
 }
+
+const minimumHTTPWriteTimeoutHeadroom = 5 * time.Second
 
 func ConfigFromEnv() (Config, error) {
 	apiLevel, err := envInt("API_LEVEL", 37)
@@ -43,9 +46,16 @@ func ConfigFromEnv() (Config, error) {
 	if err != nil || probeMaxAgeSeconds <= 0 {
 		return Config{}, fmt.Errorf("PROBE_MAX_AGE_SECONDS must be a positive integer")
 	}
-	probeTimeoutMillis, err := envInt("PROBE_TIMEOUT_MILLIS", 2000)
-	if err != nil || probeTimeoutMillis <= 0 {
-		return Config{}, fmt.Errorf("PROBE_TIMEOUT_MILLIS must be a positive integer")
+	probeTimeout, err := envMilliseconds("PROBE_TIMEOUT_MILLIS", 2*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if probeTimeout > time.Duration(1<<63-1)-minimumHTTPWriteTimeoutHeadroom {
+		return Config{}, fmt.Errorf("PROBE_TIMEOUT_MILLIS leaves no room for the HTTP write timeout")
+	}
+	httpWriteTimeout, err := envMilliseconds("HTTP_WRITE_TIMEOUT_MILLIS", probeTimeout+minimumHTTPWriteTimeoutHeadroom)
+	if err != nil {
+		return Config{}, err
 	}
 	maxActiveSessions, err := envInt("MAX_ACTIVE_SESSIONS", 1)
 	if err != nil || maxActiveSessions <= 0 {
@@ -65,7 +75,8 @@ func ConfigFromEnv() (Config, error) {
 		ProbeFileTemplate:     strings.TrimSpace(os.Getenv("EMULATOR_HEALTH_FILE_TEMPLATE")),
 		ProbeURLTemplate:      strings.TrimSpace(os.Getenv("EMULATOR_HEALTH_URL_TEMPLATE")),
 		ProbeMaxAge:           time.Duration(probeMaxAgeSeconds) * time.Second,
-		ProbeTimeout:          time.Duration(probeTimeoutMillis) * time.Millisecond,
+		ProbeTimeout:          probeTimeout,
+		HTTPWriteTimeout:      httpWriteTimeout,
 		MinimumLease:          time.Minute,
 		DefaultLease:          time.Hour,
 		MaximumLease:          24 * time.Hour,
@@ -107,10 +118,29 @@ func (c Config) Validate() error {
 			return fmt.Errorf("EMULATOR_HEALTH_URL_TEMPLATE must be an absolute http(s) URL")
 		}
 	}
+	if c.ProbeTimeout <= 0 {
+		return fmt.Errorf("PROBE_TIMEOUT_MILLIS must be a positive integer")
+	}
+	if c.HTTPWriteTimeout <= 0 || c.HTTPWriteTimeout < c.ProbeTimeout || c.HTTPWriteTimeout-c.ProbeTimeout < minimumHTTPWriteTimeoutHeadroom {
+		return fmt.Errorf("HTTP_WRITE_TIMEOUT_MILLIS must be at least PROBE_TIMEOUT_MILLIS plus %d", minimumHTTPWriteTimeoutHeadroom/time.Millisecond)
+	}
 	if c.MinimumLease <= 0 || c.DefaultLease < c.MinimumLease || c.MaximumLease < c.DefaultLease {
 		return fmt.Errorf("invalid lease duration bounds")
 	}
 	return nil
+}
+
+func envMilliseconds(name string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	maximumMilliseconds := int64(time.Duration(1<<63-1) / time.Millisecond)
+	if err != nil || parsed <= 0 || parsed > maximumMilliseconds {
+		return 0, fmt.Errorf("%s must be a positive integer within the supported millisecond range", name)
+	}
+	return time.Duration(parsed) * time.Millisecond, nil
 }
 
 func envString(name, fallback string) string {

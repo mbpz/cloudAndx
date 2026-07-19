@@ -34,10 +34,10 @@ func NewProbeChecker(cfg Config) *ProbeChecker {
 }
 
 func (p *ProbeChecker) Check(ctx context.Context, sessionID string) ProbeResult {
-	now := p.now()
+	checkedAt := p.now()
 	configured := p.fileTemplate != "" || p.urlTemplate != ""
 	if !configured {
-		return ProbeResult{Configured: false, Verified: false, CheckedAt: now, Kind: "none", Detail: "no external emulator health probe is configured"}
+		return ProbeResult{Configured: false, Verified: false, CheckedAt: checkedAt, Kind: "none", Detail: "no external emulator health probe is configured"}
 	}
 
 	kinds := make([]string, 0, 2)
@@ -45,11 +45,12 @@ func (p *ProbeChecker) Check(ctx context.Context, sessionID string) ProbeResult 
 		kinds = append(kinds, "file")
 		path := strings.ReplaceAll(p.fileTemplate, "{id}", sessionID)
 		body, err := readLimitedFile(path, maximumProbeBodyBytes)
+		checkedAt = p.now()
 		if err != nil {
-			return ProbeResult{Configured: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: "file probe failed: " + safeProbeError(err)}
+			return ProbeResult{Configured: true, CheckedAt: checkedAt, Kind: strings.Join(kinds, "+"), Detail: "file probe failed: " + safeProbeError(err)}
 		}
-		if err := p.validateEvidence(body, sessionID, now); err != nil {
-			return ProbeResult{Configured: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: "file probe rejected: " + safeProbeError(err)}
+		if err := p.validateEvidence(body, sessionID, checkedAt); err != nil {
+			return ProbeResult{Configured: true, CheckedAt: checkedAt, Kind: strings.Join(kinds, "+"), Detail: "file probe rejected: " + safeProbeError(err)}
 		}
 	}
 
@@ -58,27 +59,28 @@ func (p *ProbeChecker) Check(ctx context.Context, sessionID string) ProbeResult 
 		probeURL := strings.ReplaceAll(p.urlTemplate, "{id}", sessionID)
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
-			return ProbeResult{Configured: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: "URL probe request failed"}
+			return ProbeResult{Configured: true, CheckedAt: p.now(), Kind: strings.Join(kinds, "+"), Detail: "URL probe request failed"}
 		}
 		request.Header.Set("Accept", "application/json")
 		response, err := p.client.Do(request)
 		if err != nil {
-			return ProbeResult{Configured: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: "URL probe failed: " + safeProbeError(err)}
+			return ProbeResult{Configured: true, CheckedAt: p.now(), Kind: strings.Join(kinds, "+"), Detail: "URL probe failed: " + safeProbeError(err)}
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, maximumProbeBodyBytes+1))
 		closeErr := response.Body.Close()
+		checkedAt = p.now()
 		if readErr != nil || closeErr != nil || len(body) > maximumProbeBodyBytes {
-			return ProbeResult{Configured: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: "URL probe returned an unreadable or oversized body"}
+			return ProbeResult{Configured: true, CheckedAt: checkedAt, Kind: strings.Join(kinds, "+"), Detail: "URL probe returned an unreadable or oversized body"}
 		}
 		if response.StatusCode != http.StatusOK {
-			return ProbeResult{Configured: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: fmt.Sprintf("URL probe returned HTTP %d", response.StatusCode)}
+			return ProbeResult{Configured: true, CheckedAt: checkedAt, Kind: strings.Join(kinds, "+"), Detail: fmt.Sprintf("URL probe returned HTTP %d", response.StatusCode)}
 		}
-		if err := p.validateEvidence(body, sessionID, now); err != nil {
-			return ProbeResult{Configured: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: "URL probe rejected: " + safeProbeError(err)}
+		if err := p.validateEvidence(body, sessionID, checkedAt); err != nil {
+			return ProbeResult{Configured: true, CheckedAt: checkedAt, Kind: strings.Join(kinds, "+"), Detail: "URL probe rejected: " + safeProbeError(err)}
 		}
 	}
 
-	return ProbeResult{Configured: true, Verified: true, CheckedAt: now, Kind: strings.Join(kinds, "+"), Detail: "all configured external probes supplied fresh matching health evidence"}
+	return ProbeResult{Configured: true, Verified: true, CheckedAt: checkedAt, Kind: strings.Join(kinds, "+"), Detail: "all configured external probes supplied fresh matching health evidence"}
 }
 
 func (p *ProbeChecker) validateEvidence(body []byte, sessionID string, now time.Time) error {

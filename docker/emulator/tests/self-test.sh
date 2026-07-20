@@ -370,11 +370,19 @@ cp "${ROOT}/avd/template-version" "${template}/template-version"
 socat_stub=${tmp}/fake-socat
 printf '%s\n' \
   '#!/bin/sh' \
+  'if [ -n "${FAKE_SOCAT_PID_DIR-}" ]; then printf "%s\\n" "$*" >"${FAKE_SOCAT_PID_DIR}/$$"; fi' \
   '[ "${FAKE_SOCAT_FAIL:-0}" = 0 ] || exit 71' \
-  'if [ -n "${FAKE_SOCAT_PID_DIR-}" ]; then printf "%s\\n" "$$" >"${FAKE_SOCAT_PID_DIR}/$$"; fi' \
+  'case "${1-}" in "${FAKE_SOCAT_FAIL_PREFIX-}"*) [ -z "${FAKE_SOCAT_FAIL_PREFIX-}" ] || exit 71 ;; esac' \
   'exec sleep 30' >"${socat_stub}"
 chmod 0755 "${socat_stub}"
-common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} KVM_DEVICE=/missing-kvm ANDROID_RAMDISK_ROOT=${ramdisk_root} ANDROID_RAMDISK_ORIGINAL_SHA256=${ramdisk_original_sha256} ANDROID_RAMDISK_CPIO_SHA256=${ramdisk_cpio_sha256} ANDROID_RAMDISK_DERIVED_SHA256=${ramdisk_derived_sha256}"
+console_socket_dir=${tmp}/emulator-console
+console_socket=${console_socket_dir}/console.sock
+mkdir -p "${console_socket_dir}"
+chmod 0700 "${console_socket_dir}"
+console_auth_token_source=${tmp}/console-auth-token
+printf '%s' 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  >"${console_auth_token_source}"
+common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} EMULATOR_CONSOLE_SOCKET=${console_socket} EMULATOR_CONSOLE_AUTH_TOKEN_FILE=${console_auth_token_source} KVM_DEVICE=/missing-kvm ANDROID_RAMDISK_ROOT=${ramdisk_root} ANDROID_RAMDISK_ORIGINAL_SHA256=${ramdisk_original_sha256} ANDROID_RAMDISK_CPIO_SHA256=${ramdisk_cpio_sha256} ANDROID_RAMDISK_DERIVED_SHA256=${ramdisk_derived_sha256}"
 
 preflight_output=$(env ${common_env} EMULATOR_ACCEL=auto "${ROOT}/bin/runtime-preflight.sh" 2>&1)
 assert_contains "${preflight_output}" 'android.release=17' 'preflight reports Android release'
@@ -394,6 +402,8 @@ assert_contains "${preflight_output}" 'android.bluetooth-hci-timeout-ms=100000' 
 assert_contains "${preflight_output}" 'android.bluetooth-hci-restart-timeout-ms=250000' 'preflight reports the Bluetooth HCI restart timeout'
 assert_contains "${preflight_output}" 'android.release-policy=base-final-stable-qpr1-beta-excluded' 'preflight reports release policy'
 assert_contains "${preflight_output}" 'sdk.emulator-package.version=36.6.11' 'preflight distinguishes the SDK artifact from the native engine revision'
+assert_contains "${preflight_output}" 'console.internal-port=5556' 'preflight reports the loopback Console port'
+assert_contains "${preflight_output}" "console.socket=${console_socket}" 'preflight reports the shared Console Unix socket'
 assert_not_contains "${preflight_output}" 'emulator.version=' 'preflight does not mislabel the SDK package as the selected native engine version'
 
 assert_fails 'preflight fails closed for unavailable forced KVM' \
@@ -442,16 +452,81 @@ assert_fails 'entrypoint rejects a user-supplied raw QEMU sentinel' \
   env ${common_env} EMULATOR_ACCEL=auto \
     "${ROOT}/bin/entrypoint.sh" print-command -qemu -machine gic-version=host
 
+missing_token_emulator_pid_file=${tmp}/missing-token-emulator.pid
+assert_fails 'entrypoint fails closed when the Console auth token is missing' \
+  env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 \
+    EMULATOR_CONSOLE_AUTH_TOKEN_FILE="${tmp}/missing-console-auth-token" \
+    FAKE_EMULATOR_PID_FILE="${missing_token_emulator_pid_file}" \
+    "${ROOT}/bin/entrypoint.sh"
+[ ! -e "${missing_token_emulator_pid_file}" ]
+pass
+
+malformed_console_auth_token=${tmp}/malformed-console-auth-token
+printf '%s' AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+  >"${malformed_console_auth_token}"
+assert_fails 'entrypoint rejects a Console auth token that is not 64 lowercase hex characters' \
+  env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 \
+    EMULATOR_CONSOLE_AUTH_TOKEN_FILE="${malformed_console_auth_token}" \
+    FAKE_EMULATOR_PID_FILE="${missing_token_emulator_pid_file}" \
+    "${ROOT}/bin/entrypoint.sh"
+[ ! -e "${missing_token_emulator_pid_file}" ]
+pass
+
+symlinked_console_auth_token=${tmp}/symlinked-console-auth-token
+ln -s "${console_auth_token_source}" "${symlinked_console_auth_token}"
+assert_fails 'entrypoint rejects a symlinked Console auth token source' \
+  env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 \
+    EMULATOR_CONSOLE_AUTH_TOKEN_FILE="${symlinked_console_auth_token}" \
+    FAKE_EMULATOR_PID_FILE="${missing_token_emulator_pid_file}" \
+    "${ROOT}/bin/entrypoint.sh"
+[ ! -e "${missing_token_emulator_pid_file}" ]
+pass
+
+installed_console_auth_token=${data}/home/.emulator_console_auth_token
+installed_token_symlink_target=${tmp}/installed-token-symlink-target
+printf '%s' sentinel >"${installed_token_symlink_target}"
+ln -s "${installed_token_symlink_target}" "${installed_console_auth_token}"
+assert_fails 'entrypoint refuses to follow a symlink at the installed Console token path' \
+  env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 \
+    FAKE_EMULATOR_PID_FILE="${missing_token_emulator_pid_file}" \
+    "${ROOT}/bin/entrypoint.sh"
+assert_eq sentinel "$(cat "${installed_token_symlink_target}")" \
+  'Console token installation does not overwrite a symlink target'
+rm -f "${installed_console_auth_token}"
+[ ! -e "${missing_token_emulator_pid_file}" ]
+pass
+
 proxy_pid_dir=${tmp}/proxy-pids
 mkdir -p "${proxy_pid_dir}"
-env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=1 FAKE_SOCAT_PID_DIR="${proxy_pid_dir}" \
-  "${ROOT}/bin/entrypoint.sh" >/dev/null 2>&1
+entrypoint_output=$(env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=1 \
+  FAKE_SOCAT_PID_DIR="${proxy_pid_dir}" "${ROOT}/bin/entrypoint.sh" 2>&1)
+assert_not_contains "${entrypoint_output}" "$(cat "${console_auth_token_source}")" \
+  'entrypoint never logs the Console auth token'
 [ -s "${data}/home/.android/adbkey" ]
 pass
 [ -s "${data}/home/.android/adbkey.pub" ]
 pass
 proxy_count=$(find "${proxy_pid_dir}" -type f | wc -l | tr -d ' ')
-assert_eq 2 "${proxy_count}" 'entrypoint starts distinct ADB and gRPC proxies'
+assert_eq 3 "${proxy_count}" 'entrypoint starts distinct ADB, authenticated Console, and gRPC proxies'
+console_proxy_count=$(grep -Fxl \
+  "UNIX-LISTEN:${console_socket},unlink-early,fork,mode=0600 TCP4:127.0.0.1:5556,connect-timeout=5" \
+  "${proxy_pid_dir}"/* | wc -l | tr -d ' ')
+assert_eq 1 "${console_proxy_count}" 'Console proxy forwards the mode-0600 Unix socket to AEMU loopback port 5556'
+for proxy_pid_file in "${proxy_pid_dir}"/*; do
+  proxy_pid=${proxy_pid_file##*/}
+  if kill -0 "${proxy_pid}" 2>/dev/null; then
+    printf 'FAIL: supervised proxy process %s survived normal emulator shutdown\n' "${proxy_pid}" >&2
+    exit 1
+  fi
+done
+pass
+assert_eq "$(cat "${console_auth_token_source}")" \
+  "$(cat "${installed_console_auth_token}")" \
+  'entrypoint copies the shared token into the AEMU Console auth path'
+installed_token_permissions=$(LC_ALL=C ls -ld "${installed_console_auth_token}" \
+  | awk '{ print substr($1, 2, 9) }')
+assert_eq rw------- "${installed_token_permissions}" \
+  'entrypoint restricts the installed Console auth token to mode 0600'
 
 mounted_private=${tmp}/mounted-adbkey
 mounted_public=${tmp}/mounted-adbkey.pub
@@ -467,8 +542,11 @@ assert_fails 'entrypoint rejects incomplete ADB key pair' \
     ADB_PUBLIC_KEY_FILE="${tmp}/missing-adbkey.pub" "${ROOT}/bin/entrypoint.sh"
 
 emulator_pid_file=${tmp}/emulator.pid
-assert_fails 'entrypoint fails when a supervised proxy exits' \
-  env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 FAKE_SOCAT_FAIL=1 \
+failed_proxy_pid_dir=${tmp}/failed-proxy-pids
+mkdir -p "${failed_proxy_pid_dir}"
+assert_fails 'entrypoint fails when the authenticated Console proxy exits' \
+  env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 \
+    FAKE_SOCAT_FAIL_PREFIX=UNIX-LISTEN: FAKE_SOCAT_PID_DIR="${failed_proxy_pid_dir}" \
     FAKE_EMULATOR_PID_FILE="${emulator_pid_file}" "${ROOT}/bin/entrypoint.sh"
 [ -s "${emulator_pid_file}" ]
 failed_emulator_pid=$(cat "${emulator_pid_file}")
@@ -476,6 +554,16 @@ if kill -0 "${failed_emulator_pid}" 2>/dev/null; then
   printf 'FAIL: supervised emulator process %s survived proxy failure\n' "${failed_emulator_pid}" >&2
   exit 1
 fi
+pass
+failed_proxy_count=$(find "${failed_proxy_pid_dir}" -type f | wc -l | tr -d ' ')
+assert_eq 3 "${failed_proxy_count}" 'Console proxy failure still starts all three supervised transports'
+for proxy_pid_file in "${failed_proxy_pid_dir}"/*; do
+  proxy_pid=${proxy_pid_file##*/}
+  if kill -0 "${proxy_pid}" 2>/dev/null; then
+    printf 'FAIL: supervised proxy process %s survived Console proxy failure\n' "${proxy_pid}" >&2
+    exit 1
+  fi
+done
 pass
 
 fake_adb=${tmp}/fake-adb

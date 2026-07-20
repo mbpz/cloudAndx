@@ -37,6 +37,7 @@ services:
       - evidence-data:/volumes/evidence
       - bridge-secrets:/volumes/bridge-secrets
       - emulator-data:/volumes/emulator
+      - emulator-console:/volumes/emulator-console
       - adb-keys:/volumes/adb-keys
       - ./docker/bootstrap/init-volumes.sh:/usr/local/bin/init-volumes.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/init-volumes.sh"]
@@ -127,6 +128,8 @@ services:
       EMULATOR_CORES: ${EMULATOR_CORES:-8}
       EMULATOR_MEMORY_MB: ${EMULATOR_MEMORY_MB:-4096}
       EMULATOR_GPU: ${EMULATOR_GPU:-swiftshader}
+      EMULATOR_CONSOLE_SOCKET: /run/emulator-console/console.sock
+      EMULATOR_CONSOLE_AUTH_TOKEN_FILE: /run/bridge-secrets/token
       EMULATOR_WIPE_DATA: ${EMULATOR_WIPE_DATA:-0}
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=512m
@@ -134,6 +137,8 @@ services:
     volumes:
       - emulator-data:/data
       - adb-keys:/run/secrets:ro
+      - bridge-secrets:/run/bridge-secrets:ro
+      - emulator-console:/run/emulator-console:rw
     ports:
       - 127.0.0.1:${ANDROID_ADB_PORT:-5555}:5555/tcp
       - 127.0.0.1:${ANDROID_GRPC_PORT:-8554}:8554/tcp
@@ -157,6 +162,7 @@ services:
       ADB_SERIAL: emulator:5555
       ADB_VENDOR_KEYS: /home/bridge/.android/adbkey
       BRIDGE_TOKEN_FILE: /run/bridge-secrets/token
+      EMULATOR_CONSOLE_SOCKET: /run/emulator-console/console.sock
       ADB_READ_TIMEOUT_SECONDS: "180"
       RUNTIME_HEALTH_BUDGET_SECONDS: "180"
       RUNTIME_HEALTH_TTL_SECONDS: "60"
@@ -165,6 +171,7 @@ services:
     volumes:
       - adb-keys:/home/bridge/.android:ro
       - bridge-secrets:/run/bridge-secrets:ro
+      - emulator-console:/run/emulator-console:ro
     ports:
       - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
     depends_on:
@@ -224,6 +231,7 @@ volumes:
   evidence-data:
   bridge-secrets:
   emulator-data:
+  emulator-console:
   adb-keys:
 
 networks:

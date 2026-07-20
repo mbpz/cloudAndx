@@ -2,8 +2,10 @@ import importlib.util
 import io
 import json
 import os
+import socket
 import threading
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -38,6 +40,21 @@ class ValidationTests(unittest.TestCase):
         self.assertRegex("com.example.app", bridge.PACKAGE_RE)
         self.assertNotRegex("com.example;rm", bridge.PACKAGE_RE)
 
+    def test_console_socket_path_is_absolute_control_free_and_unix_only(self):
+        self.assertEqual(
+            bridge.EMULATOR_CONSOLE_SOCKET,
+            "/run/emulator-console/console.sock",
+        )
+        for value in (
+            "emulator-console/console.sock",
+            "/run/emulator-console/console.sock\n",
+            "/" + "x" * 108,
+        ):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                bridge._validated_console_socket_path(value)
+        self.assertFalse(hasattr(bridge, "EMULATOR_CONSOLE_HOST"))
+        self.assertFalse(hasattr(bridge, "EMULATOR_CONSOLE_PORT"))
+
     def test_session_health_path_is_strict(self):
         session_id = "ses_" + "a" * 32
         match = bridge.SESSION_HEALTH_RE.fullmatch(f"/sessions/{session_id}/healthz")
@@ -55,12 +72,59 @@ class FakeAdb:
         return "ok"
 
     def emu(self, *args):
-        self.calls.append(("emu", args))
-        return "ok"
+        raise AssertionError(f"emulator mutation unexpectedly used adb emu: {args}")
 
     def text(self, args, timeout=30):
         self.calls.append(("text", tuple(args)))
         return "ok"
+
+
+class FakeConsole:
+    def __init__(self, result="Pixel_9_Android_17_Play_ARM64", error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def command(self, *parts, **kwargs):
+        self.calls.append((parts, kwargs))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class FakeSocket:
+    def __init__(self, replies, connect_error=None):
+        self.replies = list(replies)
+        self.connect_error = connect_error
+        self.sent = []
+        self.connects = []
+        self.timeouts = []
+        self.closed = False
+
+    def settimeout(self, timeout):
+        self.timeouts.append(timeout)
+
+    def sendall(self, data):
+        self.sent.append(data)
+
+    def connect(self, address):
+        self.connects.append(address)
+        if self.connect_error is not None:
+            raise self.connect_error
+
+    def recv(self, maximum):
+        if not self.replies:
+            return b""
+        reply = self.replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        if len(reply) > maximum:
+            self.replies.insert(0, reply[maximum:])
+            return reply[:maximum]
+        return reply
+
+    def close(self):
+        self.closed = True
 
 
 class RuntimeAdb:
@@ -118,6 +182,10 @@ def healthy_observation():
             "com.android.vending": True,
             "com.google.android.gms": True,
         },
+        "console": {
+            "available": True,
+            "avd_name": "Pixel_9_Android_17_Play_ARM64",
+        },
     }
 
 
@@ -146,9 +214,291 @@ class AdbTimeoutTests(unittest.TestCase):
         )
 
 
+class ConsoleClientTests(unittest.TestCase):
+    TOKEN = "a" * 64
+    AUTH_BANNER = (
+        b"Android Console: Authentication required\r\n"
+        b"Android Console: type 'auth <auth_token>' to authenticate\r\n"
+        b"OK\r\n"
+    )
+    READY_BANNER = b"Android Console: type 'help' for a list of commands\r\nOK\r\n"
+
+    def test_console_uses_loaded_bridge_token(self):
+        self.assertEqual(bridge.CONSOLE_CLIENT.token, bridge.AUTH_TOKEN)
+
+    def test_authenticated_line_protocol_returns_payload_and_quits(self):
+        token = self.TOKEN
+        connection = FakeSocket(
+            [
+                self.AUTH_BANNER[:24],
+                self.AUTH_BANNER[24:],
+                self.READY_BANNER,
+                b"Pixel_9_Android_17_Play_ARM64\r\nOK\r\n",
+            ]
+        )
+        socket_path = "/run/emulator-console/console.sock"
+        client = bridge.EmulatorConsole(
+            socket_path=socket_path, token=token, timeout=15
+        )
+
+        with patch.object(bridge.socket, "socket", return_value=connection) as factory:
+            result = client.command("avd", "name")
+
+        self.assertEqual(result, "Pixel_9_Android_17_Play_ARM64")
+        factory.assert_called_once_with(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.assertEqual(connection.connects, [socket_path])
+        self.assertEqual(
+            connection.sent,
+            [
+                f"auth {token}\r\n".encode(),
+                b"avd name\r\n",
+                b"quit\r\n",
+            ],
+        )
+        self.assertTrue(connection.closed)
+        self.assertTrue(all(0 < timeout <= 15 for timeout in connection.timeouts))
+
+    def test_console_fails_closed_when_banner_does_not_require_auth(self):
+        connection = FakeSocket([self.READY_BANNER])
+        client = bridge.EmulatorConsole(token=self.TOKEN)
+
+        with (
+            patch.object(bridge.socket, "socket", return_value=connection),
+            self.assertRaisesRegex(
+                bridge.ConsoleError, "did not require authenticated access"
+            ),
+        ):
+            client.command("power", "capacity", "50")
+
+        self.assertEqual(connection.sent, [b"quit\r\n"])
+
+    def test_authentication_and_command_errors_never_expose_token(self):
+        token = "b" * 64
+        cases = [
+            [self.AUTH_BANNER, f"KO: bad token {token}\r\n".encode()],
+            [
+                self.AUTH_BANNER,
+                self.READY_BANNER,
+                f"KO: rejected {token}\r\n".encode(),
+            ],
+        ]
+        for replies in cases:
+            with self.subTest(replies=len(replies)):
+                connection = FakeSocket(replies)
+                client = bridge.EmulatorConsole(token=token)
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with (
+                    patch.object(bridge.socket, "socket", return_value=connection),
+                    redirect_stdout(stdout),
+                    redirect_stderr(stderr),
+                    self.assertRaises(bridge.ConsoleError) as raised,
+                ):
+                    client.command("avd", "name")
+                exposed = str(raised.exception) + stdout.getvalue() + stderr.getvalue()
+                self.assertNotIn(token, exposed)
+
+    def test_console_requires_exact_lowercase_hex_token(self):
+        invalid_tokens = [
+            "",
+            "a" * 63,
+            "a" * 65,
+            "A" * 64,
+            "g" * 64,
+            "a" * 63 + "\n",
+            "a" * 63 + "\x00",
+            "a" * 63 + "\x7f",
+        ]
+        for token in invalid_tokens:
+            with self.subTest(token_length=len(token)):
+                client = bridge.EmulatorConsole(token=token)
+                with (
+                    patch.object(bridge.socket, "socket") as socket_factory,
+                    self.assertRaisesRegex(
+                        bridge.ConsoleError, "authentication is unavailable"
+                    ),
+                ):
+                    client.command("avd", "name")
+                socket_factory.assert_not_called()
+
+    def test_console_requires_both_exact_auth_banner_lines(self):
+        banners = [
+            b"Android Console: Authentication required\r\nOK\r\n",
+            (
+                b"Android Console: type 'auth <auth_token>' to authenticate\r\n"
+                b"OK\r\n"
+            ),
+            (
+                b"android console: authentication required\r\n"
+                b"Android Console: type 'auth <auth_token>' to authenticate\r\n"
+                b"OK\r\n"
+            ),
+            self.READY_BANNER,
+        ]
+        for banner in banners:
+            with self.subTest(banner=banner):
+                connection = FakeSocket([banner])
+                client = bridge.EmulatorConsole(token=self.TOKEN)
+                with (
+                    patch.object(bridge.socket, "socket", return_value=connection),
+                    self.assertRaisesRegex(
+                        bridge.ConsoleError, "did not require authenticated access"
+                    ),
+                ):
+                    client.command("avd", "name")
+                self.assertEqual(connection.sent, [b"quit\r\n"])
+
+    def test_console_sends_printable_utf8_sms_as_one_line(self):
+        text = "你好；Android 17 ✅; still one line"
+        connection = FakeSocket(
+            [self.AUTH_BANNER, self.READY_BANNER, b"OK\r\n"]
+        )
+        client = bridge.EmulatorConsole(token=self.TOKEN)
+
+        with patch.object(bridge.socket, "socket", return_value=connection):
+            result = client.command("sms", "send", "+15551234567", text)
+
+        self.assertEqual(result, "OK")
+        self.assertEqual(
+            connection.sent,
+            [
+                f"auth {self.TOKEN}\r\n".encode(),
+                f"sms send +15551234567 {text}\r\n".encode("utf-8"),
+                b"quit\r\n",
+            ],
+        )
+
+    def test_console_command_limit_includes_crlf(self):
+        prefix = "sms send +1 "
+        text_at_limit = "x" * (
+            bridge.MAX_CONSOLE_COMMAND_BYTES
+            - len(prefix.encode("utf-8"))
+            - len(b"\r\n")
+        )
+
+        command = bridge.EmulatorConsole._command_line(
+            ("sms", "send", "+1", text_at_limit)
+        )
+
+        self.assertEqual(
+            len(command.encode("utf-8")) + len(b"\r\n"),
+            bridge.MAX_CONSOLE_COMMAND_BYTES,
+        )
+        with self.assertRaises(bridge.ConsoleError):
+            bridge.EmulatorConsole._command_line(
+                ("sms", "send", "+1", text_at_limit + "x")
+            )
+
+    def test_console_rejects_control_injection_and_non_allowlisted_commands(self):
+        client = bridge.EmulatorConsole(token=self.TOKEN)
+        invalid_commands = [
+            ("sms", "send", "+15551234", "hello\r\nquit"),
+            ("sms", "send", "+15551234", "hello\x00quit"),
+            ("sms", "send", "+15551234", "hello\tquit"),
+            ("avd", "stop"),
+            ("auth", "token"),
+        ]
+        with patch.object(bridge.socket, "socket") as socket_factory:
+            for command in invalid_commands:
+                with self.subTest(command=command):
+                    with self.assertRaises(bridge.ConsoleError):
+                        client.command(*command)
+        socket_factory.assert_not_called()
+
+    def test_console_timeout_and_response_limits_fail_closed(self):
+        cases = [
+            ([socket.timeout("slow")], "transport failed"),
+            ([b"x" * (bridge.MAX_CONSOLE_LINE_BYTES + 1)], "line exceeded"),
+            ([], "closed before a status line"),
+            ([b"\xff\n"], "invalid text"),
+            ([b"unsafe\x00text\r\n"], "invalid text"),
+            ([b"OK: not-a-terminal-status\r\n"], "closed before a status line"),
+            ([b"KO\r\n"], "rejected the connection"),
+            (
+                [(b"x" * 1000 + b"\r\n") * 66],
+                "response exceeded its limit",
+            ),
+        ]
+        for replies, expected in cases:
+            with self.subTest(expected=expected):
+                connection = FakeSocket(replies)
+                client = bridge.EmulatorConsole(token=self.TOKEN, timeout=15)
+                with (
+                    patch.object(bridge.socket, "socket", return_value=connection),
+                    self.assertRaisesRegex(bridge.ConsoleError, expected),
+                ):
+                    client.command("avd", "name")
+                self.assertTrue(connection.closed)
+                self.assertTrue(all(0 < timeout <= 15 for timeout in connection.timeouts))
+
+    def test_console_uses_one_deadline_for_connect_auth_and_command(self):
+        connection = FakeSocket(
+            [
+                self.AUTH_BANNER,
+                self.READY_BANNER,
+                b"Pixel_9_Android_17_Play_ARM64\r\nOK\r\n",
+            ]
+        )
+        client = bridge.EmulatorConsole(token=self.TOKEN, timeout=15)
+
+        with (
+            patch.object(bridge.socket, "socket", return_value=connection),
+            patch.object(
+                bridge.time,
+                "monotonic",
+                side_effect=[100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0],
+            ),
+        ):
+            client.command("avd", "name")
+
+        self.assertEqual(
+            connection.timeouts[:-1], [14.0, 13.0, 12.0, 11.0, 10.0, 9.0]
+        )
+        self.assertEqual(connection.timeouts[-1], 0.25)
+
+    def test_console_deadline_exhaustion_stops_before_auth_send(self):
+        connection = FakeSocket([self.AUTH_BANNER])
+        client = bridge.EmulatorConsole(token=self.TOKEN, timeout=15)
+
+        with (
+            patch.object(bridge.socket, "socket", return_value=connection),
+            patch.object(
+                bridge.time,
+                "monotonic",
+                side_effect=[100.0, 101.0, 102.0, 116.0, 117.0],
+            ),
+            self.assertRaisesRegex(bridge.ConsoleError, "timed out"),
+        ):
+            client.command("avd", "name")
+
+        self.assertEqual(connection.sent, [])
+
+    def test_console_success_payload_cannot_echo_auth_token(self):
+        connection = FakeSocket(
+            [
+                self.AUTH_BANNER,
+                self.READY_BANNER,
+                f"{self.TOKEN}\r\nOK\r\n".encode(),
+            ]
+        )
+        client = bridge.EmulatorConsole(token=self.TOKEN)
+
+        with (
+            patch.object(bridge.socket, "socket", return_value=connection),
+            self.assertRaises(bridge.ConsoleError) as raised,
+        ):
+            client.command("avd", "name")
+
+        self.assertNotIn(self.TOKEN, str(raised.exception))
+
+
 class RuntimeHealthTests(unittest.TestCase):
     def setUp(self):
         bridge._RUNTIME_HEALTH_CACHE = None
+        self.console = FakeConsole()
+        self.console_patch = patch.object(bridge, "CONSOLE_CLIENT", self.console)
+        self.console_patch.start()
+        self.addCleanup(self.console_patch.stop)
 
     def test_liveness_does_not_touch_adb_runtime_health(self):
         handler = object.__new__(bridge.Handler)
@@ -172,6 +522,9 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(observed["properties"]["api_level"], "37")
         self.assertEqual(observed["properties"]["abi"], "arm64-v8a")
         self.assertEqual(observed["properties"]["page_size_bytes"], "16384")
+        self.assertEqual(
+            observed["console"]["avd_name"], "Pixel_9_Android_17_Play_ARM64"
+        )
         self.assertIn(("getconf", "PAGE_SIZE"), adb.shell_calls)
         self.assertEqual(len(adb.timeout_calls), 11)
         self.assertTrue(
@@ -187,11 +540,12 @@ class RuntimeHealthTests(unittest.TestCase):
                 "com.google.android.gms": True,
             },
         )
+        self.assertEqual(self.console.calls[0][0], ("avd", "name"))
 
     def test_runtime_probe_caps_each_command_by_remaining_aggregate_budget(self):
         handler = object.__new__(bridge.Handler)
         adb = RuntimeAdb()
-        ticks = [100.0, *(100.0 + offset for offset in range(11))]
+        ticks = [100.0, *(100.0 + offset for offset in range(12))]
 
         with (
             patch.object(bridge, "ADB_CLIENT", adb),
@@ -204,6 +558,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertTrue(healthy)
         self.assertEqual(reason, "ready")
         self.assertEqual(adb.timeout_calls, list(range(20, 9, -1)))
+        self.assertEqual(self.console.calls[0][1]["timeout"], 9)
 
     def test_runtime_probe_stops_before_command_after_budget_exhaustion(self):
         handler = object.__new__(bridge.Handler)
@@ -233,6 +588,32 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertFalse(healthy)
         self.assertFalse(observed["packages"]["com.android.vending"])
         self.assertIn("com.android.vending is not installed", reason)
+
+    def test_runtime_probe_fails_closed_when_console_is_unavailable(self):
+        handler = object.__new__(bridge.Handler)
+        adb = RuntimeAdb()
+        self.console.error = bridge.ConsoleError("console transport failed")
+        with patch.object(bridge, "ADB_CLIENT", adb):
+            healthy, reason, observed = handler._runtime_health()
+
+        self.assertFalse(healthy)
+        self.assertFalse(observed["console"]["available"])
+        self.assertIn("emulator console is unavailable", reason)
+
+    def test_health_endpoint_returns_503_when_console_is_unavailable(self):
+        handler = object.__new__(bridge.Handler)
+        handler.path = "/healthz"
+        handler._json = Mock()
+        adb = RuntimeAdb()
+        self.console.error = bridge.ConsoleError("emulator console transport failed")
+
+        with patch.object(bridge, "ADB_CLIENT", adb):
+            handler.do_GET()
+
+        status, payload = handler._json.call_args.args
+        self.assertEqual(status, 503)
+        self.assertFalse(payload["ready"])
+        self.assertIn("emulator console is unavailable", payload["reason"])
 
     def test_deep_health_cache_reuses_one_probe_within_ttl(self):
         handler = object.__new__(bridge.Handler)
@@ -327,6 +708,21 @@ class RuntimeHealthTests(unittest.TestCase):
         healthy, reason = bridge._assess_runtime_health(healthy_observation())
         self.assertTrue(healthy)
         self.assertEqual(reason, "ready")
+
+    def test_console_avd_name_must_match_exactly(self):
+        for wrong_name in (
+            "Pixel_8_Android_17_Play_ARM64",
+            " Pixel_9_Android_17_Play_ARM64",
+            "Pixel_9_Android_17_Play_ARM64 ",
+        ):
+            with self.subTest(wrong_name=wrong_name):
+                observed = healthy_observation()
+                observed["console"]["avd_name"] = wrong_name
+
+                healthy, reason = bridge._assess_runtime_health(observed)
+
+                self.assertFalse(healthy)
+                self.assertIn("emulator console AVD name", reason)
 
     def test_x86_64_guest_abi_is_unhealthy(self):
         observed = healthy_observation()
@@ -473,19 +869,31 @@ class MutationTests(unittest.TestCase):
     def setUp(self):
         self.handler = object.__new__(bridge.Handler)
         self.adb = FakeAdb()
-        self.patch = patch.object(bridge, "ADB_CLIENT", self.adb)
-        self.patch.start()
+        self.console = FakeConsole(result="ok")
+        self.adb_patch = patch.object(bridge, "ADB_CLIENT", self.adb)
+        self.console_patch = patch.object(bridge, "CONSOLE_CLIENT", self.console)
+        self.adb_patch.start()
+        self.console_patch.start()
 
     def tearDown(self):
-        self.patch.stop()
+        self.console_patch.stop()
+        self.adb_patch.stop()
 
     def test_location_preserves_longitude_latitude_order(self):
         self.handler._mutation("/v1/location", {"longitude": 121.4, "latitude": 31.2})
-        self.assertEqual(self.adb.calls[-1], ("emu", ("geo", "fix", "121.4", "31.2", "0.0")))
+        self.assertEqual(
+            self.console.calls[-1][0],
+            ("geo", "fix", "121.4", "31.2", "0.0"),
+        )
+        self.assertEqual(self.adb.calls, [])
 
     def test_network_is_allowlisted(self):
         self.handler._mutation("/v1/network", {"speed": "lte", "delay": "none"})
-        self.assertEqual(len(self.adb.calls), 2)
+        self.assertEqual(
+            [parts for parts, _ in self.console.calls],
+            [("network", "speed", "lte"), ("network", "delay", "none")],
+        )
+        self.assertEqual(self.adb.calls, [])
         with self.assertRaises(ValueError):
             self.handler._mutation("/v1/network", {"speed": "arbitrary", "delay": "none"})
 
@@ -493,9 +901,74 @@ class MutationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.handler._mutation("/v1/shell", {"command": "id"})
 
-    def test_sms_validates_sender(self):
-        with self.assertRaises(ValueError):
-            self.handler._mutation("/v1/sms", {"from": "1;id", "text": "hello"})
+    def test_sms_routes_safe_text_to_console_and_rejects_raw_controls(self):
+        text = "你好；Android 17 ✅; still one line"
+        self.handler._mutation(
+            "/v1/sms", {"from": "+15551234567", "text": text}
+        )
+        self.assertEqual(
+            self.console.calls[-1][0],
+            ("sms", "send", "+15551234567", text),
+        )
+        invalid = [
+            {"from": "1;id", "text": "hello"},
+            {"from": "+15551234567", "text": "hello\rquit"},
+            {"from": "+15551234567", "text": "hello\nquit"},
+            {"from": "+15551234567", "text": "hello\x00quit"},
+            {"from": "+15551234567", "text": "hello\x7fquit"},
+            {"from": "+15551234567", "text": "hello\tquit"},
+            {"from": "+15551234567", "text": "hello\u0085quit"},
+        ]
+        for body in invalid:
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                self.handler._mutation("/v1/sms", body)
+
+    def test_gsm_hold_retains_remote_number_and_uses_console(self):
+        self.handler._mutation(
+            "/v1/call", {"action": "hold", "number": "+15551234567"}
+        )
+
+        self.assertEqual(
+            self.console.calls[-1][0],
+            ("gsm", "hold", "+15551234567"),
+        )
+        self.assertEqual(self.adb.calls, [])
+
+    def test_battery_uses_console_while_input_and_rotation_remain_adb_shell(self):
+        self.handler._mutation("/v1/battery", {"level": 85})
+        self.handler._mutation("/v1/input/tap", {"x": 10, "y": 20})
+        self.handler._mutation("/v1/rotation", {"rotation": 2})
+
+        self.assertEqual(self.console.calls[0][0], ("power", "capacity", "85"))
+        self.assertEqual(
+            self.adb.calls,
+            [
+                ("shell", ("input", "tap", "10", "20")),
+                (
+                    "shell",
+                    ("settings", "put", "system", "accelerometer_rotation", "0"),
+                ),
+                (
+                    "shell",
+                    ("settings", "put", "system", "user_rotation", "2"),
+                ),
+            ],
+        )
+
+    def test_console_mutation_failure_is_reported_as_bad_gateway(self):
+        self.handler.path = "/v1/battery"
+        self.handler._require_auth = Mock(return_value=True)
+        self.handler._read_json = Mock(return_value={"level": 50})
+        self.handler._json = Mock()
+        self.handler._error = Mock()
+        self.console.error = bridge.ConsoleError("emulator console transport failed")
+
+        self.handler.do_POST()
+
+        self.handler._error.assert_called_once_with(
+            502, "CONSOLE_FAILED", "emulator console transport failed"
+        )
+        self.handler._json.assert_not_called()
 
     def test_input_text_rejects_shell_metacharacters(self):
         with self.assertRaises(ValueError):

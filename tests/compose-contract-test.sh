@@ -10,6 +10,7 @@ emulator_entrypoint=${ROOT}/docker/emulator/bin/entrypoint.sh
 emulator_runtime_lib=${ROOT}/docker/emulator/bin/runtime-lib.sh
 emulator_preflight=${ROOT}/docker/emulator/bin/runtime-preflight.sh
 emulator_healthcheck=${ROOT}/docker/emulator/bin/healthcheck.sh
+volume_initializer=${ROOT}/docker/bootstrap/init-volumes.sh
 ramdisk_builder=${ROOT}/docker/emulator/bin/build-ramdisk-overlay.sh
 obsolete_dispatcher=${ROOT}/docker/emulator/bin/qemu-system-x86_64-headless-dispatcher.sh
 evidence_google_repo=${ROOT}/services/evidence-gate/src/evidence_gate/google_repo.py
@@ -27,6 +28,13 @@ grep -q 'fd37:17:37::/64' "${compose_file}"
 emulator_block=$(sed -n '/^  emulator:$/,/^  device-bridge:$/p' "${compose_file}")
 bridge_block=$(sed -n '/^  device-bridge:$/,/^  controller:$/p' "${compose_file}")
 evidence_block=$(sed -n '/^  evidence-gate:$/,/^  emulator:$/p' "${compose_file}")
+volume_init_block=$(sed -n '/^  volume-init:$/,/^  adb-key-init:$/p' "${compose_file}")
+compose_port_directives=$(awk '
+  /^    (ports|expose):/ { in_port_directive = 1; print; next }
+  in_port_directive && /^    [^ ]/ { in_port_directive = 0 }
+  in_port_directive && /^  [^ ]/ { in_port_directive = 0 }
+  in_port_directive { print }
+' "${compose_file}")
 
 for expected in \
   'GOOGLE_PLAY_PACKAGE_PATH: system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a' \
@@ -49,6 +57,63 @@ case "${emulator_block}" in
     exit 1
     ;;
 esac
+
+case "${emulator_block}" in
+  *'EMULATOR_CONSOLE_SOCKET: /run/emulator-console/console.sock'*) ;;
+  *)
+    printf '%s\n' 'FAIL: emulator does not use the shared authenticated Console Unix socket.' >&2
+    exit 1
+    ;;
+esac
+
+case "${emulator_block}" in
+  *'EMULATOR_CONSOLE_AUTH_TOKEN_FILE: /run/bridge-secrets/token'*) ;;
+  *)
+    printf '%s\n' 'FAIL: emulator does not use the shared bridge secret as its Console auth token.' >&2
+    exit 1
+    ;;
+esac
+
+case "${emulator_block}" in
+  *'bridge-secrets:/run/bridge-secrets:ro'*'emulator-console:/run/emulator-console:rw'*) ;;
+  *)
+    printf '%s\n' 'FAIL: emulator does not mount the token read-only and Console socket volume read-write.' >&2
+    exit 1
+    ;;
+esac
+
+case "${bridge_block}" in
+  *'EMULATOR_CONSOLE_SOCKET: /run/emulator-console/console.sock'*'emulator-console:/run/emulator-console:ro'*) ;;
+  *)
+    printf '%s\n' 'FAIL: device bridge does not receive the Console socket volume read-only.' >&2
+    exit 1
+    ;;
+esac
+
+if printf '%s\n' "${compose_port_directives}" \
+  | grep -Eq '(^|[^0-9])(5554|5556)([^0-9]|$)'; then
+  printf '%s\n' 'FAIL: authenticated Console must never appear in any Compose ports or expose directive.' >&2
+  exit 1
+fi
+
+case "${volume_init_block}" in
+  *'network_mode: none'*'emulator-console:/volumes/emulator-console'*) ;;
+  *)
+    printf '%s\n' 'FAIL: network-isolated volume initializer does not mount the shared Console socket volume.' >&2
+    exit 1
+    ;;
+esac
+grep -Fq 'install -d -m 0700 /volumes/emulator-console' "${volume_initializer}"
+grep -Fq 'chown 10001:10001 /volumes/bridge-secrets /volumes/emulator /volumes/adb-keys /volumes/emulator-console' \
+  "${volume_initializer}"
+grep -Fq 'chmod 0700 /volumes/emulator-console' "${volume_initializer}"
+grep -Fq 'head -c 32 /dev/urandom' "${volume_initializer}"
+grep -Fq 'chmod 0400 "${token}"' "${volume_initializer}"
+grep -Fxq '  emulator-console:' "${compose_file}"
+if [ "$(grep -Fc 'emulator-console:' "${compose_file}")" -ne 4 ]; then
+  printf '%s\n' 'FAIL: emulator-console volume has a consumer other than volume-init, emulator, or device-bridge.' >&2
+  exit 1
+fi
 
 grep -Fxq 'AvdId=Pixel_9_Android_17_Play_ARM64' "${avd_config}"
 grep -Fxq 'abi.type=arm64-v8a' "${avd_config}"
@@ -113,6 +178,29 @@ grep -Fq 'EMULATOR_BIN=${EMULATOR_BIN:-${NATIVE_AEMU_RUNNER}}' \
 grep -Fq 'EMULATOR_CORES=${EMULATOR_CORES:-8}' "${emulator_entrypoint}"
 grep -Fq 'EMULATOR_CORES=${EMULATOR_CORES:-8}' "${emulator_preflight}"
 grep -Fq 'EMULATOR_CORES=8' "${emulator_dockerfile}"
+grep -Fq 'EMULATOR_CONSOLE_SOCKET=/run/emulator-console/console.sock' \
+  "${emulator_dockerfile}"
+grep -Fq 'EMULATOR_CONSOLE_AUTH_TOKEN_FILE=/run/bridge-secrets/token' \
+  "${emulator_dockerfile}"
+grep -Fq 'EXPOSE 5555/tcp 8554/tcp' "${emulator_dockerfile}"
+if grep -Eq '^EXPOSE .*(5554|5556)' "${emulator_dockerfile}"; then
+  printf '%s\n' 'FAIL: Dockerfile exposes an authenticated Console TCP port.' >&2
+  exit 1
+fi
+grep -Fq 'installed_token=${HOME}/.emulator_console_auth_token' \
+  "${emulator_entrypoint}"
+grep -Fq 'chmod 0600 "${installed_token}"' "${emulator_entrypoint}"
+grep -Fq 'temporary_token=${installed_token}.tmp.$$' "${emulator_entrypoint}"
+grep -Fq 'mv "${temporary_token}" "${installed_token}"' "${emulator_entrypoint}"
+grep -Fq "grep -Eq '^[0-9a-f]{64}$'" "${emulator_entrypoint}"
+grep -Fq '"UNIX-LISTEN:${EMULATOR_CONSOLE_SOCKET},unlink-early,fork,mode=0600" "TCP4:127.0.0.1:${EMULATOR_CONSOLE_PORT},connect-timeout=5"' \
+  "${emulator_entrypoint}"
+grep -Fq 'CONSOLE_SOCAT_PID=$!' "${emulator_entrypoint}"
+grep -Fq 'if ! kill -0 "${CONSOLE_SOCAT_PID}"' "${emulator_entrypoint}"
+if grep -Fq 'TCP4-LISTEN:${EMULATOR_CONSOLE' "${emulator_entrypoint}"; then
+  printf '%s\n' 'FAIL: entrypoint exposes the authenticated Console over TCP.' >&2
+  exit 1
+fi
 case "${emulator_block}" in
   *'EMULATOR_CORES: ${EMULATOR_CORES:-8}'*) ;;
   *)

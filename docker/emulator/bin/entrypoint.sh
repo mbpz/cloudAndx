@@ -18,6 +18,8 @@ EMULATOR_CORES=${EMULATOR_CORES:-8}
 EMULATOR_MEMORY_MB=${EMULATOR_MEMORY_MB:-4096}
 EMULATOR_GPU=${EMULATOR_GPU:-swiftshader}
 EMULATOR_CONSOLE_PORT=${EMULATOR_CONSOLE_PORT:-5556}
+EMULATOR_CONSOLE_SOCKET=${EMULATOR_CONSOLE_SOCKET:-/run/emulator-console/console.sock}
+EMULATOR_CONSOLE_AUTH_TOKEN_FILE=${EMULATOR_CONSOLE_AUTH_TOKEN_FILE:-/run/bridge-secrets/token}
 EMULATOR_ADB_PORT=${EMULATOR_ADB_PORT:-5557}
 ADB_PROXY_PORT=${ADB_PROXY_PORT:-5555}
 EMULATOR_GRPC_INTERNAL_PORT=${EMULATOR_GRPC_INTERNAL_PORT:-8556}
@@ -36,7 +38,8 @@ ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
 
 export ANDROID_SDK_ROOT ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT HOME
 export AVD_NAME EMULATOR_ACCEL EMULATOR_CORES EMULATOR_MEMORY_MB EMULATOR_GPU
-export EMULATOR_CONSOLE_PORT EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
+export EMULATOR_CONSOLE_PORT EMULATOR_CONSOLE_SOCKET EMULATOR_CONSOLE_AUTH_TOKEN_FILE
+export EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
 export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE ANDROID_RUNTIME_IMPLEMENTATION NATIVE_AEMU_ROOT NATIVE_AEMU_RUNNER
 export EMULATOR_BIN ADB_BIN SOCAT_BIN
 
@@ -132,6 +135,91 @@ install_adb_keys() {
   "${ADB_BIN}" start-server >/dev/null
 }
 
+install_console_auth_token() {
+  source_token=${EMULATOR_CONSOLE_AUTH_TOKEN_FILE}
+  installed_token=${HOME}/.emulator_console_auth_token
+  temporary_token=${installed_token}.tmp.$$
+
+  [ -f "${source_token}" ] \
+    || runtime_die "Emulator Console auth token is missing: ${source_token}" \
+    || return 1
+  [ ! -L "${source_token}" ] \
+    || runtime_die "Emulator Console auth token source must not be a symbolic link: ${source_token}" \
+    || return 1
+  [ -r "${source_token}" ] \
+    || runtime_die "Emulator Console auth token is not readable by uid $(id -u): ${source_token}" \
+    || return 1
+  token_size=$(wc -c <"${source_token}" | tr -d '[:space:]')
+  if [ "${token_size}" != 64 ] \
+    || ! LC_ALL=C grep -Eq '^[0-9a-f]{64}$' "${source_token}"; then
+    runtime_die "Emulator Console auth token must contain exactly 64 lowercase hexadecimal characters: ${source_token}"
+    return 1
+  fi
+  [ ! -L "${installed_token}" ] \
+    || runtime_die "Installed Emulator Console auth token path must not be a symbolic link: ${installed_token}" \
+    || return 1
+  [ ! -e "${installed_token}" ] || [ -f "${installed_token}" ] \
+    || runtime_die "Installed Emulator Console auth token path is not a regular file: ${installed_token}" \
+    || return 1
+
+  rm -f "${temporary_token}" \
+    || runtime_die "Could not clear temporary Emulator Console auth token path: ${temporary_token}" \
+    || return 1
+  [ ! -e "${temporary_token}" ] && [ ! -L "${temporary_token}" ] \
+    || runtime_die "Temporary Emulator Console auth token path is unsafe: ${temporary_token}" \
+    || return 1
+  cp "${source_token}" "${temporary_token}" \
+    || runtime_die "Could not copy Emulator Console auth token from ${source_token}." \
+    || return 1
+  [ -f "${temporary_token}" ] && [ ! -L "${temporary_token}" ] \
+    || runtime_die "Temporary Emulator Console auth token is not a regular file: ${temporary_token}" \
+    || return 1
+  chmod 0600 "${temporary_token}"
+  cmp -s "${source_token}" "${temporary_token}" \
+    || runtime_die "Copied Emulator Console auth token does not match ${source_token}." \
+    || return 1
+  [ ! -L "${installed_token}" ] \
+    || runtime_die "Installed Emulator Console auth token path must not be a symbolic link: ${installed_token}" \
+    || return 1
+  [ ! -e "${installed_token}" ] || [ -f "${installed_token}" ] \
+    || runtime_die "Installed Emulator Console auth token path is not a regular file: ${installed_token}" \
+    || return 1
+  mv "${temporary_token}" "${installed_token}"
+  chmod 0600 "${installed_token}"
+  [ -f "${installed_token}" ] && [ ! -L "${installed_token}" ] \
+    || runtime_die "Installed Emulator Console auth token is not a regular file: ${installed_token}" \
+    || return 1
+}
+
+validate_console_socket_path() {
+  case ${EMULATOR_CONSOLE_SOCKET} in
+    /*/console.sock) ;;
+    *)
+      runtime_die "EMULATOR_CONSOLE_SOCKET must be an absolute path ending in /console.sock."
+      return 1
+      ;;
+  esac
+  case ${EMULATOR_CONSOLE_SOCKET} in
+    *'/../'*|*'/./'*|*'//'*)
+      runtime_die "EMULATOR_CONSOLE_SOCKET must not contain relative or empty path segments."
+      return 1
+      ;;
+  esac
+
+  console_socket_dir=${EMULATOR_CONSOLE_SOCKET%/*}
+  [ -d "${console_socket_dir}" ] && [ ! -L "${console_socket_dir}" ] \
+    || runtime_die "Emulator Console socket directory is missing or unsafe: ${console_socket_dir}" \
+    || return 1
+  [ -w "${console_socket_dir}" ] && [ -x "${console_socket_dir}" ] \
+    || runtime_die "Emulator Console socket directory is not writable and searchable by uid $(id -u): ${console_socket_dir}" \
+    || return 1
+  if [ -e "${EMULATOR_CONSOLE_SOCKET}" ] || [ -L "${EMULATOR_CONSOLE_SOCKET}" ]; then
+    [ -S "${EMULATOR_CONSOLE_SOCKET}" ] && [ ! -L "${EMULATOR_CONSOLE_SOCKET}" ] \
+      || runtime_die "Existing Emulator Console socket path is not a Unix socket: ${EMULATOR_CONSOLE_SOCKET}" \
+      || return 1
+  fi
+}
+
 print_argv() {
   index=0
   for argument do
@@ -200,6 +288,7 @@ EOF
 
   engine_kind=$(selected_engine_kind "${DOCKER_ENGINE_ARCHITECTURE}" "${ANDROID_RUNTIME_IMPLEMENTATION}")
   runtime_log "Starting Android 17 API 37.0 Google Play r06 with engine=${engine_kind}, acceleration=${effective_accel}, gpu=${EMULATOR_GPU}."
+  runtime_log "The authenticated Emulator Console stays on loopback port ${EMULATOR_CONSOLE_PORT}; a supervised Unix socket is available at ${EMULATOR_CONSOLE_SOCKET}."
   runtime_log "gRPC is enabled internally on ${EMULATOR_GRPC_INTERNAL_PORT}; a supervised proxy exposes container port ${EMULATOR_GRPC_PORT}. Publish it to host loopback only."
   "$@" &
   EMULATOR_PID=$!
@@ -208,7 +297,7 @@ EOF
 stop_children() {
   trap - EXIT INT TERM HUP
 
-  for child in "${ADB_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -TERM "${child}" 2>/dev/null || true
     fi
@@ -217,7 +306,7 @@ stop_children() {
   remaining=20
   while [ "${remaining}" -gt 0 ]; do
     live=0
-    for child in "${ADB_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+    for child in "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
       if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
         live=1
       fi
@@ -227,7 +316,7 @@ stop_children() {
     remaining=$((remaining - 1))
   done
 
-  for child in "${ADB_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -KILL "${child}" 2>/dev/null || true
     fi
@@ -237,7 +326,7 @@ stop_children() {
 }
 
 on_signal() {
-  runtime_log "Received termination signal; stopping emulator and ADB proxy."
+  runtime_log "Received termination signal; stopping emulator and supervised proxies."
   stop_children
   exit 143
 }
@@ -254,6 +343,8 @@ if [ "${MODE}" = print ]; then
   exit 0
 fi
 
+validate_console_socket_path
+install_console_auth_token
 install_adb_keys
 
 trap on_signal INT TERM HUP
@@ -263,6 +354,9 @@ start_emulator "${effective_accel}" "$@"
 "${SOCAT_BIN}" "TCP4-LISTEN:${ADB_PROXY_PORT},reuseaddr,fork" "TCP4:127.0.0.1:${EMULATOR_ADB_PORT}" &
 ADB_SOCAT_PID=$!
 runtime_log "ADB proxy is listening on container port ${ADB_PROXY_PORT} and forwarding to emulator loopback port ${EMULATOR_ADB_PORT}."
+"${SOCAT_BIN}" "UNIX-LISTEN:${EMULATOR_CONSOLE_SOCKET},unlink-early,fork,mode=0600" "TCP4:127.0.0.1:${EMULATOR_CONSOLE_PORT},connect-timeout=5" &
+CONSOLE_SOCAT_PID=$!
+runtime_log "Authenticated Console proxy is listening on Unix socket ${EMULATOR_CONSOLE_SOCKET} and forwarding to emulator loopback port ${EMULATOR_CONSOLE_PORT}."
 "${SOCAT_BIN}" "TCP4-LISTEN:${EMULATOR_GRPC_PORT},reuseaddr,fork" "TCP4:127.0.0.1:${EMULATOR_GRPC_INTERNAL_PORT}" &
 GRPC_SOCAT_PID=$!
 runtime_log "gRPC proxy is listening on container port ${EMULATOR_GRPC_PORT} and forwarding to emulator port ${EMULATOR_GRPC_INTERNAL_PORT}."
@@ -279,6 +373,11 @@ while :; do
   fi
   if ! kill -0 "${ADB_SOCAT_PID}" 2>/dev/null; then
     runtime_log "ERROR: ADB proxy exited unexpectedly."
+    status=1
+    break
+  fi
+  if ! kill -0 "${CONSOLE_SOCAT_PID}" 2>/dev/null; then
+    runtime_log "ERROR: authenticated Console proxy exited unexpectedly."
     status=1
     break
   fi

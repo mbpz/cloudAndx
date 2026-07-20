@@ -12,6 +12,7 @@ EMULATOR_CORES=${EMULATOR_CORES:-8}
 EMULATOR_MEMORY_MB=${EMULATOR_MEMORY_MB:-4096}
 EMULATOR_GPU=${EMULATOR_GPU:-swiftshader}
 EMULATOR_CONSOLE_PORT=${EMULATOR_CONSOLE_PORT:-5556}
+EMULATOR_CONSOLE_SOCKET=${EMULATOR_CONSOLE_SOCKET:-/run/emulator-console/console.sock}
 EMULATOR_ADB_PORT=${EMULATOR_ADB_PORT:-5557}
 ADB_PROXY_PORT=${ADB_PROXY_PORT:-5555}
 EMULATOR_GRPC_INTERNAL_PORT=${EMULATOR_GRPC_INTERNAL_PORT:-8556}
@@ -159,6 +160,8 @@ printf '%s\n' \
   "kvm.usable=$(if kvm_is_usable "${KVM_DEVICE}"; then printf yes; else printf no; fi)" \
   "accel.requested=${EMULATOR_ACCEL}" \
   "accel.effective=${effective_accel}" \
+  "console.internal-port=${EMULATOR_CONSOLE_PORT}" \
+  "console.socket=${EMULATOR_CONSOLE_SOCKET}" \
   "adb.proxy-port=${ADB_PROXY_PORT}" \
   "grpc.internal-port=${EMULATOR_GRPC_INTERNAL_PORT}" \
   "grpc.proxy-port=${EMULATOR_GRPC_PORT}"

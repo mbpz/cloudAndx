@@ -33,6 +33,7 @@ for that ABI remains queryable, but the runtime path fails closed rather than cl
 - Nothing changes OrbStack configuration, macOS networking, DNS, routes, hypervisor settings, or system packages.
 - The default path does not use `--privileged`, host networking, capabilities, or a host device.
 - ADB and insecure emulator gRPC are published only on `127.0.0.1` in every example.
+- The authenticated Emulator Console is available only through a mode-`0600` Unix socket shared with the device bridge; it has no container-network or host TCP exposure.
 - The container runs as uid/gid `10001`, with all Linux capabilities dropped and a read-only root filesystem.
 
 The `/data` volume is single-instance. On container restart the entrypoint removes only
@@ -183,6 +184,8 @@ Container port `5555` is a `socat` proxy to the emulator's loopback ADB port. If
 
 Because the runtime is uid `10001`, both secret files must be readable by that uid (or its group). The entrypoint fails closed when mounted key files exist but are unreadable or only one member of the pair is present.
 
+The mode-`0600` Unix socket `/run/emulator-console/console.sock` is a supervised `socat` proxy to AEMU's loopback-only Console on port `5556`; each connection to that loopback target has a five-second deadline. A dedicated named volume carries the socket: volume initialization fixes its directory to mode `0700` and uid/gid `10001`, the emulator mounts it read-write, and the device bridge mounts it read-only. There is no container-network-facing Console TCP listener, Dockerfile `EXPOSE`, Compose `expose`, or host `ports` mapping. The emulator reuses the generated `bridge-secrets/token`: the volume is mounted read-only at `/run/bridge-secrets`, and the entrypoint accepts only a regular, non-symlink file containing exactly 64 lowercase hexadecimal characters. It atomically installs the unchanged token at `$HOME/.emulator_console_auth_token` with mode `0600` before AEMU starts, without logging its contents. AEMU therefore requires the Console client's initial `auth` command. Invalid or uncopyable token input fails closed, as does any later exit of the supervised Unix-socket proxy.
+
 Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control and display stream on internal port `8556`. This avoids depending on which interface a particular Emulator build binds. gRPC is not itself a browser UI; a compatible gRPC/WebRTC client is required. The emulator's `-grpc` mode is unauthenticated, so keep the host publish address at `127.0.0.1`.
 
 ## Runtime controls
@@ -195,6 +198,8 @@ Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control a
 | `EMULATOR_GPU` | `swiftshader` | The ARM64 runtime requires the packaged SwiftShader GLES/Vulkan stack; every other value fails closed. |
 | `EMULATOR_CORES` | `8` | Validated in the range 1–32. Eight vCPUs are the ARM TCG default; lower values materially increase first-boot watchdog pressure. |
 | `EMULATOR_MEMORY_MB` | `4096` | Validated in the emulator-supported range 1536–8192. |
+| `EMULATOR_CONSOLE_SOCKET` | `/run/emulator-console/console.sock` | Mode-`0600` Unix socket shared only with the device bridge; no Console TCP port is exposed. |
+| `EMULATOR_CONSOLE_AUTH_TOKEN_FILE` | `/run/bridge-secrets/token` | Read-only shared token source copied to AEMU's required home-directory path before startup. |
 | `EMULATOR_WIPE_DATA` | `0` | Set to `1` for one destructive guest-data reset. |
 
 Additional Docker command arguments are passed as individual emulator arguments without `eval` or string splitting. For example:

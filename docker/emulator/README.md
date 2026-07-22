@@ -48,11 +48,11 @@ Review the Android SDK license first, then explicitly acknowledge it:
 
 ```sh
 cd ../..
-ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl build-emulator
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine emulator
 ```
 
-The controller derives the immutable native-engine source-lock and ordered
-patch-set identities, then performs both Docker builds in dependency order.
+Compose supplies the immutable native-engine source-lock and ordered patch-set
+identities, then performs both Docker builds in dependency order.
 The native-engine build and all source fetching remain inside Docker.
 The main image verifies that bundle before merging only the pinned Google SDK
 `macros/` and `macroPreviews/` resource directories. Those additions receive a
@@ -82,9 +82,10 @@ permissions are all gated consistently:
 
 ```sh
 cd ../..
-./androidctl doctor
-./androidctl preflight
-ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl up
+docker compose config --quiet
+docker compose run --rm evidence-gate
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose up -d --build
 ```
 
 The current ARM64 path uses the native AEMU child and never attempts KVM for the official
@@ -169,10 +170,10 @@ virtualization settings.
 Use the bundled `adb` through the root CLI:
 
 ```sh
-./androidctl adb wait-for-device
-./androidctl shell getprop ro.build.version.release
-./androidctl shell pm path com.android.vending
-./androidctl adb install /data/app.apk
+docker compose exec -T emulator adb -s emulator-5556 wait-for-device
+docker compose exec -T emulator adb -s emulator-5556 shell getprop ro.build.version.release
+docker compose exec -T emulator adb -s emulator-5556 shell pm path com.android.vending
+docker compose exec -T emulator adb -s emulator-5556 install /data/app.apk
 ```
 
 Container port `5555` is a `socat` proxy to the emulator's loopback ADB port. If an external ADB client is required, mount both members of an existing key pair read-only so the same key is trusted by the guest:
@@ -192,8 +193,8 @@ Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control a
 
 | Variable | Values/default | Behavior |
 |---|---|---|
-| `DOCKER_ENGINE_ARCHITECTURE` | supplied by `androidctl` | ARM64/aarch64 is the current supported build path; x86_64/amd64 is deferred and fails closed, as do missing and unknown values. |
-| `ANDROID_RUNTIME_IMPLEMENTATION` | derived by `androidctl` | Exactly `hybrid-aemu-arm64` for the current Docker build path. |
+| `DOCKER_ENGINE_ARCHITECTURE` | `arm64` | ARM64/aarch64 is the current supported build path; x86_64/amd64 is deferred and fails closed. |
+| `ANDROID_RUNTIME_IMPLEMENTATION` | `hybrid-aemu-arm64` | Exactly `hybrid-aemu-arm64` for the current Docker build path. |
 | `EMULATOR_ACCEL` | `auto` (default), `off` | Both resolve to software execution on ARM64. `kvm` and every x86_64 path fail closed. |
 | `EMULATOR_GPU` | `swiftshader` | The ARM64 runtime requires the packaged SwiftShader GLES/Vulkan stack; every other value fails closed. |
 | `EMULATOR_CORES` | `8` | Validated in the range 1–32. Eight vCPUs are the ARM TCG default; lower values materially increase first-boot watchdog pressure. |
@@ -208,7 +209,7 @@ Additional Docker command arguments are passed as individual emulator arguments 
 docker run ... cloudandx/android17-play-emulator:37.0-r06 -camera-back emulated
 ```
 
-`./androidctl preflight` performs the repository gate. The image's `preflight` and
+`docker compose run --rm evidence-gate` performs the repository gate. The image's `preflight` and
 `print-command` entrypoints also require a supported `DOCKER_ENGINE_ARCHITECTURE`; the root CLI
 supplies this fact from Docker Engine metadata rather than trusting a persisted `.env` value.
 

@@ -54,7 +54,7 @@ validate_engine_architecture() {
       runtime_die "ARM64 requires the verified hybrid-aemu-arm64 implementation."
       ;;
     '')
-      runtime_die "DOCKER_ENGINE_ARCHITECTURE is required; start through androidctl."
+      runtime_die "DOCKER_ENGINE_ARCHITECTURE is required in the Compose runtime contract."
       ;;
     *)
       runtime_die "Unsupported Docker Engine architecture '${1}'."

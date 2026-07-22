@@ -55,14 +55,6 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(hasattr(bridge, "EMULATOR_CONSOLE_HOST"))
         self.assertFalse(hasattr(bridge, "EMULATOR_CONSOLE_PORT"))
 
-    def test_session_health_path_is_strict(self):
-        session_id = "ses_" + "a" * 32
-        match = bridge.SESSION_HEALTH_RE.fullmatch(f"/sessions/{session_id}/healthz")
-        self.assertEqual(match.group(1), session_id)
-        self.assertIsNone(bridge.SESSION_HEALTH_RE.fullmatch(f"/sessions/{session_id}/healthz/extra"))
-        self.assertIsNone(bridge.SESSION_HEALTH_RE.fullmatch("/sessions/not-a-session/healthz"))
-
-
 class FakeAdb:
     def __init__(self):
         self.calls = []
@@ -685,25 +677,6 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(results[0], results[1])
         handler._runtime_health.assert_called_once_with()
 
-    def test_session_health_uses_timestamp_paired_with_cached_result(self):
-        handler = object.__new__(bridge.Handler)
-        observed_at = "2026-07-19T12:34:56Z"
-        handler._cached_runtime_health = Mock(
-            return_value=((True, "ready", healthy_observation()), observed_at)
-        )
-        handler._json = Mock()
-        bridge._RUNTIME_HEALTH_CACHE = (
-            0.0,
-            "wrong-timestamp",
-            (False, "wrong-result", {"serial": bridge.ADB_SERIAL}),
-        )
-
-        handler._session_health("ses_" + "d" * 32)
-
-        _, payload = handler._json.call_args.args
-        self.assertTrue(payload["healthy"])
-        self.assertEqual(payload["observed_at"], observed_at)
-
     def test_all_required_evidence_is_healthy(self):
         healthy, reason = bridge._assess_runtime_health(healthy_observation())
         self.assertTrue(healthy)
@@ -805,20 +778,6 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertIn("API level is not an integer", reason)
         self.assertIn("could not verify required package com.google.android.gms", reason)
 
-    def test_healthy_session_envelope_remains_controller_compatible(self):
-        handler = object.__new__(bridge.Handler)
-        handler._runtime_health = Mock(return_value=(True, "ready", healthy_observation()))
-        handler._json = Mock()
-        session_id = "ses_" + "a" * 32
-
-        handler._session_health(session_id)
-
-        status, payload = handler._json.call_args.args
-        self.assertEqual(status, 200)
-        self.assertEqual(set(payload), {"session_id", "healthy", "observed_at"})
-        self.assertEqual(payload["session_id"], session_id)
-        self.assertTrue(payload["healthy"])
-
     def test_screenshot_uses_tcg_safe_read_timeout(self):
         handler = object.__new__(bridge.Handler)
         handler.path = "/v1/screenshot.png"
@@ -836,34 +795,6 @@ class RuntimeHealthTests(unittest.TestCase):
         handler._send.assert_called_once_with(
             200, b"\x89PNG\r\n\x1a\nimage", "image/png"
         )
-
-    def test_unhealthy_session_exposes_reason_and_observations(self):
-        handler = object.__new__(bridge.Handler)
-        observed = healthy_observation()
-        observed["packages"]["com.android.vending"] = False
-        handler._runtime_health = Mock(return_value=(False, "Play Store missing", observed))
-        handler._json = Mock()
-
-        handler._session_health("ses_" + "b" * 32)
-
-        status, payload = handler._json.call_args.args
-        self.assertEqual(status, 503)
-        self.assertFalse(payload["healthy"])
-        self.assertEqual(payload["reason"], "Play Store missing")
-        self.assertEqual(payload["observed"], observed)
-
-    def test_adb_failure_cannot_produce_healthy_session_evidence(self):
-        handler = object.__new__(bridge.Handler)
-        handler._runtime_health = Mock(side_effect=bridge.AdbError("transport offline"))
-        handler._json = Mock()
-
-        handler._session_health("ses_" + "c" * 32)
-
-        status, payload = handler._json.call_args.args
-        self.assertEqual(status, 503)
-        self.assertFalse(payload["healthy"])
-        self.assertIn("transport offline", payload["reason"])
-
 
 class MutationTests(unittest.TestCase):
     def setUp(self):

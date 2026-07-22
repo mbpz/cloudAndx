@@ -75,7 +75,6 @@ MAX_CONSOLE_LINE_BYTES = 4096
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
 PHONE_RE = re.compile(r"^[+0-9*#]{1,32}$")
 CONSOLE_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
-SESSION_HEALTH_RE = re.compile(r"^/sessions/(ses_[a-f0-9]{32})/healthz$")
 MIN_ANDROID_API_LEVEL = 37
 EXPECTED_ANDROID_ABI = "arm64-v8a"
 EXPECTED_PAGE_SIZE_BYTES = 16384
@@ -592,25 +591,10 @@ class Handler(BaseHTTPRequestHandler):
             _RUNTIME_HEALTH_CACHE = (time.monotonic(), observed_at, result)
             return result, observed_at
 
-    def _session_health(self, session_id: str) -> None:
-        (ready, reason, observed), observed_at = self._cached_runtime_health()
-
-        payload: dict[str, Any] = {
-            "session_id": session_id,
-            "healthy": ready,
-            "observed_at": observed_at,
-        }
-        if not ready:
-            payload.update({"reason": reason, "observed": observed})
-        self._json(HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE, payload)
-
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         try:
-            session_match = SESSION_HEALTH_RE.fullmatch(parsed.path)
-            if session_match:
-                self._session_health(session_match.group(1))
-            elif parsed.path == "/livez":
+            if parsed.path == "/livez":
                 self._json(HTTPStatus.OK, {"alive": True})
             elif parsed.path == "/healthz":
                 (ready, reason, observed), _ = self._cached_runtime_health()

@@ -376,17 +376,12 @@ assert_contains '/opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1' \
   "${ENGINE_DIR}/Dockerfile"
 assert_contains '/opt/cloudandx/native-aemu/lib64/vulkan:/opt/cloudandx/native-aemu/lib64' \
   "${ENGINE_DIR}/Dockerfile"
-assert_contains 'NATIVE_AEMU_SOURCE_LOCK_SHA256=$(sha256_file "${NATIVE_AEMU_LOCK}")' \
-  "${REPO_ROOT}/androidctl"
-assert_contains 'NATIVE_AEMU_PATCH_SET_SHA256=$(' \
-  "${REPO_ROOT}/androidctl"
-build_emulator_case=$(sed -n '/^  build-emulator)/,/^    ;;/p' \
-  "${REPO_ROOT}/androidctl")
-grep -Fq 'ensure_native_engine' <<<"${build_emulator_case}" \
-  || fail 'build-emulator must reuse a locally verified native engine'
-if grep -Fq 'build_native_engine' <<<"${build_emulator_case}"; then
-  fail 'build-emulator must not unconditionally rebuild the native engine'
-fi
+assert_contains 'NATIVE_AEMU_REVISION: ${NATIVE_AEMU_REVISION:-37.1.7}' \
+  "${REPO_ROOT}/compose.yaml"
+assert_contains 'NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:-4663a00b87c46e488124549ec7c55dcdc334d18f95b9a865122e9b437f5df134}' \
+  "${REPO_ROOT}/compose.yaml"
+assert_contains 'NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}' \
+  "${REPO_ROOT}/compose.yaml"
 assert_contains 'source_lock_sha256=${NATIVE_AEMU_SOURCE_LOCK_SHA256}' \
   "${REPO_ROOT}/docker/emulator/bin/runtime-lib.sh"
 assert_contains 'patch_set_sha256=${NATIVE_AEMU_PATCH_SET_SHA256}' \

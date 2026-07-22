@@ -16,8 +16,15 @@ obsolete_dispatcher=${ROOT}/docker/emulator/bin/qemu-system-x86_64-headless-disp
 evidence_google_repo=${ROOT}/services/evidence-gate/src/evidence_gate/google_repo.py
 avd_config=${ROOT}/docker/emulator/avd/config.ini
 avd_marker=${ROOT}/docker/emulator/avd/template-version
-dashboard_app=${ROOT}/docker/dashboard/app.js
-dashboard_nginx=${ROOT}/docker/dashboard/nginx.conf
+if grep -Eq '^  (controller|dashboard):|services/controller|docker/dashboard|controller-data|/api/controller' "${compose_file}"; then
+  echo 'FAIL: the single-device runtime must not include controller or browser dashboard services' >&2
+  exit 1
+fi
+grep -q '^  device-bridge:$' "${compose_file}"
+grep -q '^  native-engine:$' "${compose_file}"
+grep -Fq 'NATIVE_AEMU_REVISION: ${NATIVE_AEMU_REVISION:-37.1.7}' "${compose_file}"
+grep -Fq 'NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:-4663a00b87c46e488124549ec7c55dcdc334d18f95b9a865122e9b437f5df134}' "${compose_file}"
+grep -Fq 'NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}' "${compose_file}"
 
 grep -q '^  runtime-compatibility:$' "${compose_file}"
 grep -q 'DOCKER_ENGINE_ARCHITECTURE:' "${compose_file}"
@@ -26,7 +33,7 @@ grep -q '^networks:$' "${compose_file}"
 grep -q 'enable_ipv6: true' "${compose_file}"
 grep -q 'fd37:17:37::/64' "${compose_file}"
 emulator_block=$(sed -n '/^  emulator:$/,/^  device-bridge:$/p' "${compose_file}")
-bridge_block=$(sed -n '/^  device-bridge:$/,/^  controller:$/p' "${compose_file}")
+bridge_block=$(sed -n '/^  device-bridge:$/,/^volumes:$/p' "${compose_file}")
 evidence_block=$(sed -n '/^  evidence-gate:$/,/^  emulator:$/p' "${compose_file}")
 volume_init_block=$(sed -n '/^  volume-init:$/,/^  adb-key-init:$/p' "${compose_file}")
 compose_port_directives=$(awk '
@@ -307,31 +314,6 @@ case "${bridge_block}" in
     ;;
 esac
 
-controller_block=$(sed -n '/^  controller:$/,/^  dashboard:$/p' "${compose_file}")
-case "${controller_block}" in
-  *'PROBE_TIMEOUT_MILLIS: "300000"'*) ;;
-  *)
-    printf '%s\n' 'FAIL: controller probe timeout cannot cover one bounded ARM TCG evidence pass.' >&2
-    exit 1
-    ;;
-esac
-
-case "${controller_block}" in
-  *'HTTP_WRITE_TIMEOUT_MILLIS: "305000"'*) ;;
-  *)
-    printf '%s\n' 'FAIL: controller HTTP write timeout does not cover its slow probe budget.' >&2
-    exit 1
-    ;;
-esac
-
-case "${controller_block}" in
-  *'PROBE_MAX_AGE_SECONDS: "90"'*) ;;
-  *)
-    printf '%s\n' 'FAIL: controller evidence age does not cover the bounded bridge cache.' >&2
-    exit 1
-    ;;
-esac
-
 case "${emulator_block}" in
   *'restart: "on-failure:3"'*) ;;
   *)
@@ -356,14 +338,6 @@ grep -Fq '`ro.hw_timeout_multiplier=50` and `dalvik.vm.finalizer-timeout-ms=5000
   "${ROOT}/docker/emulator/README.md"
 grep -Fq '`bluetooth.hci.timeout_milliseconds=100000` and' \
   "${ROOT}/docker/emulator/README.md"
-if [ "$(grep -Fc 'proxy_read_timeout 310s;' "${dashboard_nginx}")" -ne 2 ]; then
-  printf '%s\n' 'FAIL: dashboard proxy timeouts do not cover bounded ARM TCG reads.' >&2
-  exit 1
-fi
-grep -Fq 'let refreshInFlight=false;' "${dashboard_app}"
-grep -Fq 'if(refreshInFlight||screenInFlight)return;' "${dashboard_app}"
-grep -Fq 'let screenInFlight=false;' "${dashboard_app}"
-grep -Fq 'if(screenInFlight||refreshInFlight)return;' "${dashboard_app}"
 grep -Fxq 'hw.camera.back=emulated' "${ROOT}/docker/emulator/avd/config.ini"
 grep -Fq 'set -- "$@" -no-boot-anim -camera-back emulated' "${emulator_entrypoint}"
 grep -Fq -- '-no-boot-anim' "${emulator_entrypoint}"
@@ -394,6 +368,6 @@ if grep -q 'KVM_GID:-0' "${ROOT}/compose.kvm.yaml"; then
   printf '%s\n' 'FAIL: KVM override silently falls back to the root group.' >&2
   exit 1
 fi
-grep -q 'KVM_GID must be supplied by androidctl' "${ROOT}/compose.kvm.yaml"
+grep -q 'KVM_GID must be supplied explicitly' "${ROOT}/compose.kvm.yaml"
 
 printf '%s\n' 'PASS: Compose hybrid runtime and fail-closed contracts'

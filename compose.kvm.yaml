@@ -5,7 +5,7 @@ services:
     devices:
       - /dev/kvm:/dev/kvm
     group_add:
-      - "${KVM_GID:?KVM_GID must be supplied by androidctl}"
+      - "${KVM_GID:?KVM_GID must be supplied explicitly}"
 
   emulator:
     environment:
@@ -13,9 +13,4 @@ services:
     devices:
       - /dev/kvm:/dev/kvm
     group_add:
-      - "${KVM_GID:?KVM_GID must be supplied by androidctl}"
-
-  controller:
-    environment:
-      KVM_AVAILABLE: "true"
-      RUNTIME_MODE: kvm
+      - "${KVM_GID:?KVM_GID must be supplied explicitly}"

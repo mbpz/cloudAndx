@@ -25,11 +25,11 @@ blob-verified x86_64 helper. It is classified outside the AArch64 `DT_NEEDED`
 closure and is retained because the amd64 parent runtime executes Google's
 x86_64 SDK tools while the AArch64 engine runs natively.
 
-Build the final stage through the Docker-only controller. It derives the
-immutable build arguments from the current source lock and ordered patch list:
+Build the final stage through Docker Compose. The immutable build arguments
+must match the current source lock and ordered patch list:
 
 ```sh
-./androidctl build-native-engine
+docker compose --profile build build native-engine
 ```
 
 The final image is a scratch carrier whose exact bundle root is

@@ -27,9 +27,10 @@ x86_64 host 构建和运行验证当前 deferred；控制面在该架构上失�
 环境变量确认本次本地构建（不会写入本机全局环境）：
 
 ```sh
-./androidctl doctor
-./androidctl preflight
-ACCEPT_ANDROID_SDK_LICENSES=yes ./androidctl up
+docker compose config --quiet
+docker compose run --rm evidence-gate
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose up -d --build
 ```
 
 也可以复制 [.env.example](.env.example) 为工作区内的 `.env`，将
@@ -39,27 +40,29 @@ ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与
 
 启动后：
 
-- 控制台：<http://127.0.0.1:8080>
-- 租约与能力 API：<http://127.0.0.1:18081>
 - 受限设备控制 API：<http://127.0.0.1:8090>
 - ADB：`127.0.0.1:5555`
 - Emulator gRPC：`127.0.0.1:8554`
 
-控制台支持屏幕截图、点击、Android 导航键和安全文本输入。变更设备状态需要本地
-bearer token；运行 `./androidctl token` 后只把它粘贴到控制台当前标签页，令牌仅
-保存在该标签页的 `sessionStorage` 中，关闭标签页即清除，也不会写入镜像。
+本机已安装的 scrcpy（最低 4.0；当前验证为 4.1）直接通过仅监听回环地址的 ADB 端口连接：
+
+```sh
+scrcpy --serial 127.0.0.1:5555
+```
+
+scrcpy client/server 必须保持同版。ADB 不对局域网或公网发布；跨主机使用时先通过
+SSH/VPN/零信任通道安全转发回环端口，不直接把 Compose 端口改为 `0.0.0.0`。
 
 常用命令：
 
 ```sh
-./androidctl status
-./androidctl shell getprop ro.build.version.release
-./androidctl adb install /data/app.apk
-./androidctl verify-runtime
-./androidctl logs emulator
-./androidctl down       # 保留 Android 数据
-./androidctl destroy    # 删除本项目容器和命名卷
-./androidctl test       # 全部离线测试均在 Docker 内运行
+docker compose ps -a
+docker compose exec -T emulator adb -s emulator-5556 shell getprop ro.build.version.release
+docker compose exec -T emulator adb -s emulator-5556 install /data/app.apk
+docker compose exec -T emulator /usr/local/bin/runtime-preflight.sh
+docker compose logs --follow --tail 200 emulator
+docker compose down                 # 保留 Android 数据
+docker compose down --volumes       # 删除本项目容器和命名卷
 ```
 
 ## ARM64 / OrbStack 执行边界
@@ -97,8 +100,8 @@ headless 启动则锁定后置摄像头为 `emulated`，避开无窗口模式下
 纯 TCG 首次冷启动会进行大量 userdata 初始化和包优化；项目默认使用 8 个 guest vCPU，
 应为 Docker Engine 提供至少 8 个 CPU。在容器仍持续消耗 CPU/块 I/O且没有重启或
 OOM 时，不应中断该过程。
-`androidctl` 只在 ARM64 Docker Engine 上选择 `hybrid-aemu-arm64`；x86_64、缺失和
-未知架构组合一律失败关闭。
+Compose 默认锁定当前已验收的 ARM64 `hybrid-aemu-arm64` 路径；x86_64 运行仍未进入
+验收范围，不能通过修改架构变量绕过运行时门禁。
 
 Compose 只创建当前项目的 IPv6 Docker bridge，供 AEMU 虚拟 modem 使用；不会修改
 OrbStack 配置，也不会改 macOS 的 DNS、路由、防火墙或其他网络设置。ARM64 上
@@ -113,11 +116,8 @@ OrbStack 配置，也不会改 macOS 的 DNS、路由、防火墙或其他网络
   软件/KVM 加速选择和严格启动健康检查。
 - `services/evidence-gate/`：实时验证 Google 仓库中的 package path、tag、revision、
   URL、checksum、架构与 KVM，原子保存证据。
-- `services/controller/`：单设备租约、幂等 API、原子持久化、容量限制、能力矩阵与
-  Prometheus metrics；只有真实设备新鲜探针通过才报告 `RUNNING`。
 - `services/device-bridge/`：无任意 shell 的 allowlist API，覆盖截图、APK、应用列表、
   logcat、触控、按键、GPS、短信、来电、网络、电量、旋转和重启。
-- `docker/dashboard/`：设备画面、交互控制、会话、平台事实和能力边界。
 - `compose.yaml` / `compose.kvm.yaml`：默认 ARM64 guest/AEMU 软件执行路径、失败关闭且
   延后验证的 x86_64 路径，以及仅限项目范围的 IPv6 bridge。
 

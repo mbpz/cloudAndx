@@ -5,7 +5,7 @@ architecture=${1:-${DOCKER_ENGINE_ARCHITECTURE:-}}
 implementation=${ANDROID_RUNTIME_IMPLEMENTATION:-}
 
 if [ -z "${architecture}" ]; then
-  printf '%s\n' 'ERROR: Docker Engine architecture was not supplied by androidctl; refusing direct startup.' >&2
+  printf '%s\n' 'ERROR: Docker Engine architecture is missing; refusing startup.' >&2
   exit 78
 fi
 

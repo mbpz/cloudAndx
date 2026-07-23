@@ -36,6 +36,21 @@ SOCAT_BIN=${SOCAT_BIN:-socat}
 ADB_PRIVATE_KEY_FILE=${ADB_PRIVATE_KEY_FILE:-/run/secrets/adbkey}
 ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
 BRIDGE_SCRIPT=${BRIDGE_SCRIPT:-/opt/cloudandx/device-bridge/bridge.py}
+DISPLAY=${DISPLAY:-:0}
+XVFB_SCREEN=${XVFB_SCREEN:-0}
+XVFB_RESOLUTION=${XVFB_RESOLUTION:-1440x3120x24}
+XVFB_SOCKET_WAIT_SECONDS=${XVFB_SOCKET_WAIT_SECONDS:-30}
+NOVNC_PORT=${NOVNC_PORT:-6080}
+VNC_PORT=${VNC_PORT:-5900}
+NOVNC_ROOT=${NOVNC_ROOT:-/opt/cloudandx/novnc}
+SCRCPY_ROOT=${SCRCPY_ROOT:-/opt/cloudandx/scrcpy}
+SCRCPY_BIN=${SCRCPY_BIN:-${SCRCPY_ROOT}/scrcpy}
+SCRCPY_SERIAL=${SCRCPY_SERIAL:-emulator-${EMULATOR_CONSOLE_PORT}}
+SCRCPY_RETRY_DELAY_SECONDS=${SCRCPY_RETRY_DELAY_SECONDS:-2}
+XVFB_BIN=${XVFB_BIN:-Xvfb}
+X11VNC_BIN=${X11VNC_BIN:-x11vnc}
+WEBSOCKIFY_BIN=${WEBSOCKIFY_BIN:-websockify}
+PYTHON_BIN=${PYTHON_BIN:-python3}
 
 export ANDROID_SDK_ROOT ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT HOME
 export AVD_NAME EMULATOR_ACCEL EMULATOR_CORES EMULATOR_MEMORY_MB EMULATOR_GPU
@@ -43,6 +58,8 @@ export EMULATOR_CONSOLE_PORT EMULATOR_CONSOLE_SOCKET EMULATOR_CONSOLE_AUTH_TOKEN
 export EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
 export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE ANDROID_RUNTIME_IMPLEMENTATION NATIVE_AEMU_ROOT NATIVE_AEMU_RUNNER
 export EMULATOR_BIN ADB_BIN SOCAT_BIN
+export DISPLAY XVFB_SCREEN XVFB_RESOLUTION NOVNC_PORT VNC_PORT NOVNC_ROOT
+export SCRCPY_ROOT SCRCPY_BIN SCRCPY_SERIAL SCRCPY_RETRY_DELAY_SECONDS
 
 initialize_single_container_state() {
   token_dir=${EMULATOR_CONSOLE_AUTH_TOKEN_FILE%/*}
@@ -335,10 +352,84 @@ EOF
   EMULATOR_PID=$!
 }
 
+wait_for_display_socket() {
+  display_number=${DISPLAY#:}
+  socket_path=/tmp/.X11-unix/X${display_number}
+  remaining=${XVFB_SOCKET_WAIT_SECONDS}
+
+  [ "${remaining}" -gt 0 ] || return 0
+
+  while [ "${remaining}" -gt 0 ]; do
+    [ -S "${socket_path}" ] && return 0
+    sleep 1
+    remaining=$((remaining - 1))
+  done
+
+  runtime_die "Xvfb did not expose ${socket_path} for DISPLAY=${DISPLAY}."
+}
+
+start_xvfb() {
+  "${XVFB_BIN}" "${DISPLAY}" -screen "${XVFB_SCREEN}" "${XVFB_RESOLUTION}" -nolisten tcp -ac &
+  XVFB_PID=$!
+  wait_for_display_socket
+  runtime_log "Xvfb is serving DISPLAY=${DISPLAY} with screen ${XVFB_SCREEN}=${XVFB_RESOLUTION}."
+}
+
+start_x11vnc() {
+  "${X11VNC_BIN}" \
+    -display "${DISPLAY}" \
+    -rfbport "${VNC_PORT}" \
+    -localhost \
+    -shared \
+    -forever \
+    -nopw \
+    -quiet &
+  X11VNC_PID=$!
+  runtime_log "x11vnc is listening on loopback-only port ${VNC_PORT} for DISPLAY=${DISPLAY}."
+}
+
+start_novnc() {
+  "${WEBSOCKIFY_BIN}" --web "${NOVNC_ROOT}" "${NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" &
+  NOVNC_PID=$!
+  runtime_log "noVNC is listening on container port ${NOVNC_PORT} and proxying loopback VNC port ${VNC_PORT}."
+}
+
+wait_for_scrcpy_target() {
+  while :; do
+    if [ -n "${EMULATOR_PID-}" ] && ! kill -0 "${EMULATOR_PID}" 2>/dev/null; then
+      return 1
+    fi
+    state=$("${ADB_BIN}" -s "${SCRCPY_SERIAL}" get-state 2>/dev/null || true)
+    boot_completed=$("${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+    if [ "${state}" = device ] && [ "${boot_completed}" = 1 ]; then
+      return 0
+    fi
+    sleep "${SCRCPY_RETRY_DELAY_SECONDS}"
+  done
+}
+
+start_scrcpy() {
+  (
+    set -eu
+    cd "${SCRCPY_ROOT}"
+    while :; do
+      wait_for_scrcpy_target || exit 1
+      runtime_log "Starting scrcpy on ${DISPLAY} for ${SCRCPY_SERIAL}."
+      set +e
+      ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" "${SCRCPY_BIN}" --serial "${SCRCPY_SERIAL}" --no-audio
+      scrcpy_status=$?
+      set -e
+      runtime_log "scrcpy exited with status ${scrcpy_status}; retrying in ${SCRCPY_RETRY_DELAY_SECONDS}s."
+      sleep "${SCRCPY_RETRY_DELAY_SECONDS}"
+    done
+  ) &
+  SCRCPY_PID=$!
+}
+
 stop_children() {
   trap - EXIT INT TERM HUP
 
-  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${SCRCPY_PID-}" "${XVFB_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -TERM "${child}" 2>/dev/null || true
     fi
@@ -347,7 +438,7 @@ stop_children() {
   remaining=20
   while [ "${remaining}" -gt 0 ]; do
     live=0
-    for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+    for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${SCRCPY_PID-}" "${XVFB_PID-}" "${EMULATOR_PID-}"; do
       if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
         live=1
       fi
@@ -357,7 +448,7 @@ stop_children() {
     remaining=$((remaining - 1))
   done
 
-  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${SCRCPY_PID-}" "${XVFB_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -KILL "${child}" 2>/dev/null || true
     fi
@@ -367,7 +458,7 @@ stop_children() {
 }
 
 on_signal() {
-  runtime_log "Received termination signal; stopping emulator and supervised proxies."
+  runtime_log "Received termination signal; stopping emulator, browser runtime, and supervised proxies."
   stop_children
   exit 143
 }
@@ -404,9 +495,13 @@ runtime_log "Authenticated Console proxy is listening on Unix socket ${EMULATOR_
 "${SOCAT_BIN}" "TCP4-LISTEN:${EMULATOR_GRPC_PORT},reuseaddr,fork" "TCP4:127.0.0.1:${EMULATOR_GRPC_INTERNAL_PORT}" &
 GRPC_SOCAT_PID=$!
 runtime_log "gRPC proxy is listening on container port ${EMULATOR_GRPC_PORT} and forwarding to emulator port ${EMULATOR_GRPC_INTERNAL_PORT}."
-python3 "${BRIDGE_SCRIPT}" &
+"${PYTHON_BIN}" "${BRIDGE_SCRIPT}" &
 BRIDGE_PID=$!
 runtime_log "Device bridge is listening on container port ${LISTEN_PORT:-8090}."
+start_xvfb
+start_x11vnc
+start_novnc
+start_scrcpy
 
 status=0
 while :; do
@@ -435,6 +530,26 @@ while :; do
   fi
   if ! kill -0 "${BRIDGE_PID}" 2>/dev/null; then
     runtime_log "ERROR: device bridge exited unexpectedly."
+    status=1
+    break
+  fi
+  if ! kill -0 "${XVFB_PID}" 2>/dev/null; then
+    runtime_log "ERROR: Xvfb exited unexpectedly."
+    status=1
+    break
+  fi
+  if ! kill -0 "${X11VNC_PID}" 2>/dev/null; then
+    runtime_log "ERROR: x11vnc exited unexpectedly."
+    status=1
+    break
+  fi
+  if ! kill -0 "${NOVNC_PID}" 2>/dev/null; then
+    runtime_log "ERROR: noVNC exited unexpectedly."
+    status=1
+    break
+  fi
+  if ! kill -0 "${SCRCPY_PID}" 2>/dev/null; then
+    runtime_log "ERROR: scrcpy exited unexpectedly."
     status=1
     break
   fi

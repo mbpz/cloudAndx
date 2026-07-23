@@ -11,6 +11,7 @@ EMULATOR_ADB_PORT=${EMULATOR_ADB_PORT:-5557}
 EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
 SOCAT_BIN=${SOCAT_BIN:-socat}
 TIMEOUT_BIN=${TIMEOUT_BIN:-timeout}
+NOVNC_PORT=${NOVNC_PORT:-6080}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
 ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
 EXPECTED_ANDROID_ABI=${EXPECTED_ANDROID_ABI:-arm64-v8a}
@@ -39,6 +40,7 @@ validate_uint_range EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS "${EXPECTED_BLUETO
 [ "${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" -eq "$((EXPECTED_HW_TIMEOUT_MULTIPLIER * 5000))" ] \
   || runtime_die "Bluetooth HCI restart timeout must match the hardware timeout multiplier."
 validate_uint_range ADB_HEALTH_COMMAND_TIMEOUT_SECONDS "${ADB_HEALTH_COMMAND_TIMEOUT_SECONDS}" 1 300
+validate_uint_range NOVNC_PORT "${NOVNC_PORT}" 1024 65535
 expected_engine=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 engine_process_matches_expected "${expected_engine}"
 "${SOCAT_BIN}" -T2 -u OPEN:/dev/null "TCP4:127.0.0.1:${EMULATOR_GRPC_PORT},connect-timeout=2" >/dev/null 2>&1
@@ -77,4 +79,5 @@ printf '%s\n' "${guest_health}" | grep -q '^play=package:'
 printf '%s\n' "${guest_health}" | grep -q '^gms=package:'
 if command -v python3 >/dev/null 2>&1; then
   python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/livez', timeout=3)"
+  python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${NOVNC_PORT}/vnc.html', timeout=3)"
 fi

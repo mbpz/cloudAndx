@@ -382,7 +382,28 @@ chmod 0700 "${console_socket_dir}"
 console_auth_token_source=${tmp}/console-auth-token
 printf '%s' 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   >"${console_auth_token_source}"
-common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} EMULATOR_CONSOLE_SOCKET=${console_socket} EMULATOR_CONSOLE_AUTH_TOKEN_FILE=${console_auth_token_source} KVM_DEVICE=/missing-kvm ANDROID_RAMDISK_ROOT=${ramdisk_root} ANDROID_RAMDISK_ORIGINAL_SHA256=${ramdisk_original_sha256} ANDROID_RAMDISK_CPIO_SHA256=${ramdisk_cpio_sha256} ANDROID_RAMDISK_DERIVED_SHA256=${ramdisk_derived_sha256}"
+novnc_root=${tmp}/novnc
+scrcpy_root=${tmp}/scrcpy
+mkdir -p "${novnc_root}" "${scrcpy_root}"
+printf '%s\n' '<!doctype html>' >"${novnc_root}/vnc.html"
+printf '%s\n' '{"version": "1.7.0"}' >"${novnc_root}/package.json"
+printf '%s\n' '#!/bin/sh' 'case ${1-} in --version) echo "scrcpy 4.1" ;; *) exec sleep 30 ;; esac' \
+  >"${scrcpy_root}/scrcpy"
+printf '%s\n' server >"${scrcpy_root}/scrcpy-server"
+chmod 0755 "${scrcpy_root}/scrcpy"
+for remote_ui_tool in Xvfb x11vnc websockify; do
+  tool_path=${tmp}/${remote_ui_tool}
+  if [ "${remote_ui_tool}" = websockify ]; then
+    printf '%s\n' '#!/bin/sh' 'case ${1-} in --version) echo "websockify 0.13.0" ;; *) exec sleep 30 ;; esac' >"${tool_path}"
+  else
+    printf '%s\n' '#!/bin/sh' 'exec sleep 30' >"${tool_path}"
+  fi
+  chmod 0755 "${tool_path}"
+done
+python_stub=${tmp}/python3
+printf '%s\n' '#!/bin/sh' 'exec sleep 30' >"${python_stub}"
+chmod 0755 "${python_stub}"
+common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} EMULATOR_CONSOLE_SOCKET=${console_socket} EMULATOR_CONSOLE_AUTH_TOKEN_FILE=${console_auth_token_source} KVM_DEVICE=/missing-kvm ANDROID_RAMDISK_ROOT=${ramdisk_root} ANDROID_RAMDISK_ORIGINAL_SHA256=${ramdisk_original_sha256} ANDROID_RAMDISK_CPIO_SHA256=${ramdisk_cpio_sha256} ANDROID_RAMDISK_DERIVED_SHA256=${ramdisk_derived_sha256} NOVNC_ROOT=${novnc_root} SCRCPY_ROOT=${scrcpy_root} SCRCPY_BIN=${scrcpy_root}/scrcpy XVFB_BIN=${tmp}/Xvfb X11VNC_BIN=${tmp}/x11vnc WEBSOCKIFY_BIN=${tmp}/websockify PYTHON_BIN=${python_stub} XVFB_SOCKET_WAIT_SECONDS=0"
 
 preflight_output=$(env ${common_env} EMULATOR_ACCEL=auto "${ROOT}/bin/runtime-preflight.sh" 2>&1)
 assert_contains "${preflight_output}" 'android.release=17' 'preflight reports Android release'

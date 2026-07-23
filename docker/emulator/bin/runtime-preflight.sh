@@ -27,6 +27,18 @@ NATIVE_AEMU_INTERPRETER=${NATIVE_AEMU_INTERPRETER:-/lib/ld-linux-aarch64.so.1}
 EMULATOR_BIN=${EMULATOR_BIN:-${NATIVE_AEMU_RUNNER}}
 ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 SOCAT_BIN=${SOCAT_BIN:-socat}
+DISPLAY=${DISPLAY:-:0}
+XVFB_SCREEN=${XVFB_SCREEN:-0}
+XVFB_RESOLUTION=${XVFB_RESOLUTION:-1440x3120x24}
+NOVNC_PORT=${NOVNC_PORT:-6080}
+VNC_PORT=${VNC_PORT:-5900}
+NOVNC_ROOT=${NOVNC_ROOT:-/opt/cloudandx/novnc}
+SCRCPY_ROOT=${SCRCPY_ROOT:-/opt/cloudandx/scrcpy}
+SCRCPY_BIN=${SCRCPY_BIN:-${SCRCPY_ROOT}/scrcpy}
+SCRCPY_SERIAL=${SCRCPY_SERIAL:-emulator-${EMULATOR_CONSOLE_PORT}}
+XVFB_BIN=${XVFB_BIN:-Xvfb}
+X11VNC_BIN=${X11VNC_BIN:-x11vnc}
+WEBSOCKIFY_BIN=${WEBSOCKIFY_BIN:-websockify}
 SYSTEM_IMAGE_DIR=${SYSTEM_IMAGE_DIR:-${ANDROID_SDK_ROOT}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a}
 ANDROID_RAMDISK_ROOT=${ANDROID_RAMDISK_ROOT:-/opt/cloudandx/android-ramdisk}
 ANDROID_RAMDISK_ORIGINAL_SHA256=${ANDROID_RAMDISK_ORIGINAL_SHA256:-be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87441dd5a5cb7c5fcfdff8}
@@ -61,6 +73,38 @@ if [ "${SOCAT_BIN}" = "socat" ]; then
 else
   [ -x "${SOCAT_BIN}" ] || runtime_die "socat is missing or not executable: ${SOCAT_BIN}"
 fi
+[ "${DISPLAY#*:}" != "${DISPLAY}" ] || runtime_die "DISPLAY must be in X11 :N form."
+validate_uint_range XVFB_SCREEN "${XVFB_SCREEN}" 0 16
+validate_uint_range NOVNC_PORT "${NOVNC_PORT}" 1024 65535
+validate_uint_range VNC_PORT "${VNC_PORT}" 1024 65535
+[ "${NOVNC_PORT}" -ne "${VNC_PORT}" ] \
+  || runtime_die "NOVNC_PORT and VNC_PORT must differ."
+[ "${NOVNC_PORT}" -ne "${ADB_PROXY_PORT}" ] \
+  || runtime_die "NOVNC_PORT must differ from ADB_PROXY_PORT."
+[ "${NOVNC_PORT}" -ne "${EMULATOR_GRPC_PORT}" ] \
+  || runtime_die "NOVNC_PORT must differ from EMULATOR_GRPC_PORT."
+[ "${VNC_PORT}" -ne "${ADB_PROXY_PORT}" ] \
+  || runtime_die "VNC_PORT must differ from ADB_PROXY_PORT."
+[ "${VNC_PORT}" -ne "${EMULATOR_GRPC_PORT}" ] \
+  || runtime_die "VNC_PORT must differ from EMULATOR_GRPC_PORT."
+[ -d "${NOVNC_ROOT}" ] || runtime_die "noVNC root is missing: ${NOVNC_ROOT}"
+[ -f "${NOVNC_ROOT}/vnc.html" ] || runtime_die "noVNC UI is missing vnc.html."
+grep -Fq "\"version\": \"${NOVNC_VERSION:-1.7.0}\"" "${NOVNC_ROOT}/package.json" \
+  || runtime_die "noVNC package.json does not match the locked version."
+[ -d "${SCRCPY_ROOT}" ] || runtime_die "scrcpy root is missing: ${SCRCPY_ROOT}"
+[ -x "${SCRCPY_BIN}" ] || runtime_die "scrcpy binary is missing or not executable: ${SCRCPY_BIN}"
+[ -s "${SCRCPY_ROOT}/scrcpy-server" ] || runtime_die "scrcpy server is missing from ${SCRCPY_ROOT}."
+[ "${SCRCPY_SERIAL}" = "emulator-${EMULATOR_CONSOLE_PORT}" ] \
+  || runtime_die "SCRCPY_SERIAL must match the in-container emulator serial."
+command -v "${XVFB_BIN}" >/dev/null 2>&1 || runtime_die "Xvfb is not installed."
+command -v "${X11VNC_BIN}" >/dev/null 2>&1 || runtime_die "x11vnc is not installed."
+command -v "${WEBSOCKIFY_BIN}" >/dev/null 2>&1 || runtime_die "websockify is not installed."
+scrcpy_version_output=$("${SCRCPY_BIN}" --version 2>&1 || true)
+printf '%s\n' "${scrcpy_version_output}" | grep -Fq "scrcpy ${SCRCPY_VERSION:-4.1}" \
+  || runtime_die "scrcpy binary does not match the locked version."
+websockify_version_output=$("${WEBSOCKIFY_BIN}" --version 2>&1 || true)
+printf '%s\n' "${websockify_version_output}" | grep -Fq "${WEBSOCKIFY_VERSION:-0.13.0}" \
+  || runtime_die "websockify does not match the locked version."
 [ -s "${SYSTEM_IMAGE_DIR}/system.img" ] || runtime_die "Android 17 system.img is missing: ${SYSTEM_IMAGE_DIR}/system.img"
 [ -s "${SYSTEM_IMAGE_DIR}/vendor.img" ] || runtime_die "Android 17 vendor.img is missing: ${SYSTEM_IMAGE_DIR}/vendor.img"
 [ -s "${SYSTEM_IMAGE_DIR}/ramdisk.img" ] || runtime_die "Android 17 derived ramdisk is missing: ${SYSTEM_IMAGE_DIR}/ramdisk.img"

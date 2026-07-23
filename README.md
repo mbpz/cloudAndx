@@ -39,12 +39,14 @@ ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与
 
 默认 Compose 只启动一个 `emulator` 容器，使用唯一运行镜像
 `cloudandx/android17-play-emulator:37.0-r06`。其 PID 1 依次执行兼容性检查、ADB
-密钥/Console 令牌初始化和证据门禁，再统一监督模拟器、ADB/gRPC/Console 代理与设备桥接。
+密钥/Console 令牌初始化和证据门禁，再统一监督模拟器、ADB/gRPC/Console 代理、设备桥接
+以及容器内 `scrcpy -> Xvfb -> x11vnc -> websockify/noVNC` 浏览器交互链路。
 `native-engine` 仅是显式 `build` profile 使用的跨架构构建制品，不会作为运行容器启动。
 
 启动后：
 
 - 受限设备控制 API：<http://127.0.0.1:8090>
+- 浏览器 Android：<http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale>
 - ADB：`127.0.0.1:5555`
 - Emulator gRPC：`127.0.0.1:8554`
 
@@ -54,8 +56,12 @@ ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与
 scrcpy --serial 127.0.0.1:5555
 ```
 
-scrcpy client/server 必须保持同版。ADB 不对局域网或公网发布；跨主机使用时先通过
-SSH/VPN/零信任通道安全转发回环端口，不直接把 Compose 端口改为 `0.0.0.0`。
+浏览器中的鼠标点击、拖动和键盘输入由容器内 scrcpy 4.1 注入同一台 Android；noVNC
+1.7.0 和 websockify 0.13.0 只发布到宿主回环地址，raw VNC 5900 不发布。
+
+宿主 scrcpy client/server 必须保持同版。ADB 不对局域网或公网发布；跨主机使用时先通过
+SSH/VPN/零信任通道安全转发 6080，不直接把 Compose 端口改为 `0.0.0.0`，也不转发
+ADB、raw VNC 或 Emulator gRPC。
 
 常用命令：
 

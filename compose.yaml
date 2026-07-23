@@ -65,6 +65,9 @@ services:
       ADB_READ_TIMEOUT_SECONDS: "180"
       RUNTIME_HEALTH_BUDGET_SECONDS: "180"
       RUNTIME_HEALTH_TTL_SECONDS: "60"
+      DISPLAY: ":0"
+      NOVNC_PORT: "6080"
+      VNC_PORT: "5900"
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=512m
       - /run:rw,noexec,nosuid,nodev,size=16m
@@ -75,6 +78,7 @@ services:
       - 127.0.0.1:${ANDROID_ADB_PORT:-5555}:5555/tcp
       - 127.0.0.1:${ANDROID_GRPC_PORT:-8554}:8554/tcp
       - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
+      - 127.0.0.1:${ANDROID_NOVNC_PORT:-6080}:6080/tcp
     stop_grace_period: 45s
     restart: "on-failure:3"
 

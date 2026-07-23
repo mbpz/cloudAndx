@@ -14,6 +14,12 @@ ARG ANDROID_RAMDISK_ORIGINAL_SHA256=be1c34d44bdf2484c9bb0f4458b1cb3b8133d887bc87
 ARG ANDROID_RAMDISK_CPIO_SHA256=56328ce8b964a5f53c7c6922d4c2415a3d10a2d36f100150d522a817054110ed
 ARG ANDROID_RAMDISK_DERIVED_SHA256=bfaeb73b28c50733a90337ceb93d66b5eb652f713b807744d86532f28344035c
 ARG ANDROID_RAMDISK_OVERLAY_PATH=system/etc/ramdisk/build.prop
+ARG NOVNC_VERSION=1.7.0
+ARG NOVNC_SHA256=b1003a11b6e6e8d8f7f5e5586daae7f8ca651d8aee0aa155ff9ac841c48f52c6
+ARG WEBSOCKIFY_VERSION=0.13.0
+ARG WEBSOCKIFY_SHA256=b6413e364efd04f3c92ec8c17747e3c4adc20157c2ef1c5d019a26d944a46df8
+ARG SCRCPY_VERSION=4.1
+ARG SCRCPY_SHA256=ad56ae8bfeedf41e824945c11dbf55fcb092b3e615b9b486f48a50e30d389635
 
 # This target deliberately has no network or Android artifact dependency. It is
 # used to validate the runtime scripts and the complete Dockerfile on any host.
@@ -81,6 +87,43 @@ RUN set -eu; \
     test -s "${image_parent}/arm64-v8a/system.img"; \
     test -s "${image_parent}/arm64-v8a/vendor.img"; \
     rm -f /tmp/system-image.zip
+
+FROM artifact-download-base AS remote-ui-fetcher
+
+ARG NOVNC_VERSION
+ARG NOVNC_SHA256
+ARG WEBSOCKIFY_VERSION
+ARG WEBSOCKIFY_SHA256
+ARG SCRCPY_VERSION
+ARG SCRCPY_SHA256
+
+RUN set -eu; \
+    mkdir -p /opt/cloudandx/dist /opt/cloudandx/ui; \
+    curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 \
+      --output /tmp/novnc.tar.gz \
+      "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz"; \
+    echo "${NOVNC_SHA256}  /tmp/novnc.tar.gz" | sha256sum --check --strict -; \
+    tar -xzf /tmp/novnc.tar.gz -C /opt/cloudandx/ui; \
+    mv "/opt/cloudandx/ui/noVNC-${NOVNC_VERSION}" /opt/cloudandx/novnc; \
+    test -f /opt/cloudandx/novnc/vnc.html; \
+    ln -s vnc.html /opt/cloudandx/novnc/index.html; \
+    rm -f /tmp/novnc.tar.gz; \
+    curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 \
+      --output /tmp/websockify.tar.gz \
+      "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz"; \
+    echo "${WEBSOCKIFY_SHA256}  /tmp/websockify.tar.gz" | sha256sum --check --strict -; \
+    install -D -m 0444 /tmp/websockify.tar.gz \
+      "/opt/cloudandx/dist/websockify-${WEBSOCKIFY_VERSION}.tar.gz"; \
+    rm -f /tmp/websockify.tar.gz; \
+    curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 \
+      --output /tmp/scrcpy.tar.gz \
+      "https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-linux-x86_64-v${SCRCPY_VERSION}.tar.gz"; \
+    echo "${SCRCPY_SHA256}  /tmp/scrcpy.tar.gz" | sha256sum --check --strict -; \
+    tar -xzf /tmp/scrcpy.tar.gz -C /opt/cloudandx/ui; \
+    mv "/opt/cloudandx/ui/scrcpy-linux-x86_64-v${SCRCPY_VERSION}" /opt/cloudandx/scrcpy; \
+    test -x /opt/cloudandx/scrcpy/scrcpy; \
+    test -s /opt/cloudandx/scrcpy/scrcpy-server; \
+    rm -f /tmp/scrcpy.tar.gz
 
 FROM artifact-download-base AS ramdisk-overlay-builder
 
@@ -153,6 +196,8 @@ RUN apt-get update \
       python3 \
       python3-pip \
       socat \
+      x11vnc \
+      xvfb \
       zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 android \
@@ -193,6 +238,12 @@ ARG ANDROID_RAMDISK_ORIGINAL_SHA256
 ARG ANDROID_RAMDISK_CPIO_SHA256
 ARG ANDROID_RAMDISK_DERIVED_SHA256
 ARG ANDROID_RAMDISK_OVERLAY_PATH
+ARG NOVNC_VERSION
+ARG NOVNC_SHA256
+ARG WEBSOCKIFY_VERSION
+ARG WEBSOCKIFY_SHA256
+ARG SCRCPY_VERSION
+ARG SCRCPY_SHA256
 
 LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-only)" \
       org.opencontainers.image.description="Google Android 17 API 37.0 Play arm64-v8a 16 KB r06 with native AEMU 37.1.7 and SDK resources from Emulator 36.6.11" \
@@ -219,6 +270,9 @@ LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-on
 COPY --from=tool-fetcher /opt/android-sdk/ /opt/android-sdk/
 COPY --from=system-image-fetcher /opt/android-sdk/system-images/ /opt/android-sdk/system-images/
 COPY --from=ramdisk-overlay-builder /opt/cloudandx/android-ramdisk/ /opt/cloudandx/android-ramdisk/
+COPY --from=remote-ui-fetcher /opt/cloudandx/novnc/ /opt/cloudandx/novnc/
+COPY --from=remote-ui-fetcher /opt/cloudandx/scrcpy/ /opt/cloudandx/scrcpy/
+COPY --from=remote-ui-fetcher /opt/cloudandx/dist/ /opt/cloudandx/dist/
 COPY --from=ramdisk-overlay-builder \
   /opt/cloudandx/android-ramdisk/derived-ramdisk.img \
   /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img
@@ -231,7 +285,8 @@ COPY services/evidence-gate/requirements.txt /opt/cloudandx/evidence-gate/requir
 COPY services/evidence-gate/src/ /opt/cloudandx/evidence-gate/src/
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir --disable-pip-version-check \
-      -r /opt/cloudandx/evidence-gate/requirements.txt
+      -r /opt/cloudandx/evidence-gate/requirements.txt \
+      "/opt/cloudandx/dist/websockify-${WEBSOCKIFY_VERSION}.tar.gz"
 
 RUN set -eu; \
     test -n "${NATIVE_AEMU_REVISION}"; \
@@ -314,6 +369,11 @@ RUN set -eu; \
     && grep -Fq '"library_path": "./libvk_swiftshader.so"' \
       /opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json \
     && test -x /opt/cloudandx/native-aemu/vulkan-smoke \
+    && test -f /opt/cloudandx/novnc/vnc.html \
+    && grep -Fq "\"version\": \"${NOVNC_VERSION}\"" /opt/cloudandx/novnc/package.json \
+    && websockify --version 2>&1 | grep -Fq "${WEBSOCKIFY_VERSION}" \
+    && /opt/cloudandx/scrcpy/scrcpy --version 2>&1 | grep -Fq "scrcpy ${SCRCPY_VERSION}" \
+    && test -s /opt/cloudandx/scrcpy/scrcpy-server \
     && test -d /opt/android-sdk/emulator/resources \
     && test -d /opt/cloudandx/native-aemu/resources \
     && for resource_dir in macros macroPreviews; do \
@@ -329,6 +389,7 @@ RUN set -eu; \
       && test -s sdk-resources.SHA256SUMS \
       && sha256sum -c sdk-resources.SHA256SUMS) \
     && chmod -R a-w /opt/android-sdk /opt/android-avd-template \
+      /opt/cloudandx/dist /opt/cloudandx/novnc /opt/cloudandx/scrcpy \
       /opt/cloudandx/android-ramdisk \
       /opt/cloudandx/native-aemu \
     && test -x /opt/android-sdk/emulator/emulator \
@@ -358,6 +419,14 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     EMULATOR_WIPE_DATA=0 \
     ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \
     NATIVE_AEMU_ROOT=/opt/cloudandx/native-aemu \
+    NOVNC_VERSION=${NOVNC_VERSION} \
+    NOVNC_ROOT=/opt/cloudandx/novnc \
+    NOVNC_PORT=6080 \
+    VNC_PORT=5900 \
+    SCRCPY_VERSION=${SCRCPY_VERSION} \
+    SCRCPY_ROOT=/opt/cloudandx/scrcpy \
+    SCRCPY_SERIAL=emulator-5556 \
+    SCRCPY_RETRY_DELAY_SECONDS=2 \
     NATIVE_AEMU_REVISION=${NATIVE_AEMU_REVISION} \
     NATIVE_AEMU_SOURCE_LOCK_SHA256=${NATIVE_AEMU_SOURCE_LOCK_SHA256} \
     NATIVE_AEMU_PATCH_SET_SHA256=${NATIVE_AEMU_PATCH_SET_SHA256} \
@@ -370,7 +439,10 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     EXPECTED_FINALIZER_TIMEOUT_MS=${ANDROID_FINALIZER_TIMEOUT_MS} \
     EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS=${ANDROID_BLUETOOTH_HCI_TIMEOUT_MS} \
     EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=${ANDROID_BLUETOOTH_HCI_RESTART_TIMEOUT_MS} \
-    ADB_MDNS_OPENSCREEN=0
+    ADB_MDNS_OPENSCREEN=0 \
+    DISPLAY=:0 \
+    XVFB_SCREEN=0 \
+    XVFB_RESOLUTION=1440x3120x24
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -381,7 +453,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 USER android:android
 WORKDIR /data
 VOLUME ["/data"]
-EXPOSE 5555/tcp 8090/tcp 8554/tcp
+EXPOSE 5555/tcp 6080/tcp 8090/tcp 8554/tcp
 
 HEALTHCHECK --start-period=60m --start-interval=1m --interval=10m --timeout=5m --retries=10 \
   CMD ["/usr/local/bin/healthcheck.sh"]

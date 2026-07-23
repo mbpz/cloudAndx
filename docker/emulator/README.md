@@ -189,6 +189,8 @@ The mode-`0600` Unix socket `/run/emulator-console/console.sock` is a supervised
 
 Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control and display stream on internal port `8556`. This avoids depending on which interface a particular Emulator build binds. gRPC is not itself a browser UI; a compatible gRPC/WebRTC client is required. The emulator's `-grpc` mode is unauthenticated, so keep the host publish address at `127.0.0.1`.
 
+Port `6080` serves the browser interaction path from the same runtime container. A pinned scrcpy 4.1 client controls the internal ADB serial and renders into Xvfb; x11vnc exposes that display only on container loopback, and pinned websockify/noVNC translates it for the browser. Compose publishes only noVNC on host loopback. Raw VNC port `5900`, the X11 socket, ADB internals and emulator gRPC are never browser-facing. Closing or reconnecting the browser does not create another Android instance.
+
 ## Runtime controls
 
 | Variable | Values/default | Behavior |

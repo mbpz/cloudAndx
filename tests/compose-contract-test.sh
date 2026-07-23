@@ -37,7 +37,7 @@ grep -Fq '"${SCRIPT_DIR}/check-runtime-arch.sh"' "${supervisor}"
 grep -Fq 'python3 -m evidence_gate preflight' "${supervisor}"
 grep -Fq 'exec "${SCRIPT_DIR}/entrypoint.sh" "$@"' "${supervisor}"
 grep -Fq 'initialize_single_container_state' "${entrypoint}"
-grep -Fq 'python3 "${BRIDGE_SCRIPT}" &' "${entrypoint}"
+grep -Fq '"${PYTHON_BIN}" "${BRIDGE_SCRIPT}" &' "${entrypoint}"
 grep -Fq 'BRIDGE_PID=$!' "${entrypoint}"
 grep -Fq 'device bridge exited unexpectedly' "${entrypoint}"
 grep -Fq '"${BRIDGE_PID-}"' "${entrypoint}"
@@ -51,6 +51,13 @@ grep -Fq "urllib.request.urlopen('http://127.0.0.1:8090/livez'" "${healthcheck}"
 # Host exposure remains loopback-only; authenticated Console is Unix-only.
 grep -Fq '127.0.0.1:${ANDROID_ADB_PORT:-5555}:5555/tcp' "${compose_file}"
 grep -Fq '127.0.0.1:${ANDROID_GRPC_PORT:-8554}:8554/tcp' "${compose_file}"
+grep -Fq '127.0.0.1:${ANDROID_NOVNC_PORT:-6080}:6080/tcp' "${compose_file}"
+grep -Fq 'NOVNC_PORT: "6080"' "${compose_file}"
+grep -Fq 'VNC_PORT: "5900"' "${compose_file}"
+if grep -Eq '127\.0\.0\.1:.*:5900|0\.0\.0\.0:.*:(5555|5900|6080|8090|8554)' "${compose_file}"; then
+  echo 'FAIL: raw VNC and public remote-control ports must not be published' >&2
+  exit 1
+fi
 if grep -Eq '(^|[^0-9])(5554|5556)([^0-9]|$)' "${compose_file}"; then
   echo 'FAIL: authenticated Console must not be published' >&2
   exit 1
@@ -67,7 +74,17 @@ grep -Fxq 'hw.cpu.arch=arm64' "${avd_config}"
 grep -Fq 'qemu/linux-aarch64/qemu-system-aarch64-headless' "${runtime_lib}"
 grep -Fq 'system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a' "${preflight}"
 grep -Fq 'HEALTHCHECK --start-period=60m' "${dockerfile}"
-grep -Fq 'EXPOSE 5555/tcp 8090/tcp 8554/tcp' "${dockerfile}"
+grep -Fq 'EXPOSE 5555/tcp 6080/tcp 8090/tcp 8554/tcp' "${dockerfile}"
+
+# Browser interaction stays inside the one supervised runtime image.
+grep -Fq 'NOVNC_VERSION=1.7.0' "${dockerfile}"
+grep -Fq 'WEBSOCKIFY_VERSION=0.13.0' "${dockerfile}"
+grep -Fq 'SCRCPY_VERSION=4.1' "${dockerfile}"
+grep -Fq 'Xvfb' "${entrypoint}"
+grep -Fq 'x11vnc' "${entrypoint}"
+grep -Fq 'websockify' "${entrypoint}"
+grep -Fq 'scrcpy' "${entrypoint}"
+grep -Fq 'noVNC exited unexpectedly' "${entrypoint}"
 
 # Container remains least-privileged with one persistent project volume.
 grep -Fq 'read_only: true' "${compose_file}"

@@ -19,11 +19,11 @@ ARG ANDROID_RAMDISK_OVERLAY_PATH=system/etc/ramdisk/build.prop
 # used to validate the runtime scripts and the complete Dockerfile on any host.
 FROM ${TEST_BASE_IMAGE} AS self-test
 WORKDIR /work
-COPY bin/ ./bin/
-COPY avd/ ./avd/
-COPY tests/ ./tests/
-COPY native-engine/bin/run-qemu-system-aarch64-headless ./native-engine/bin/run-qemu-system-aarch64-headless
-COPY native-engine/bin/netsimd ./native-engine/bin/netsimd
+COPY docker/emulator/bin/ ./bin/
+COPY docker/emulator/avd/ ./avd/
+COPY docker/emulator/tests/ ./tests/
+COPY docker/emulator/native-engine/bin/run-qemu-system-aarch64-headless ./native-engine/bin/run-qemu-system-aarch64-headless
+COPY docker/emulator/native-engine/bin/netsimd ./native-engine/bin/netsimd
 RUN chmod 0555 bin/*.sh tests/*.sh \
       native-engine/bin/run-qemu-system-aarch64-headless native-engine/bin/netsimd \
     && tests/self-test.sh
@@ -102,7 +102,7 @@ RUN apt-get update \
 COPY --from=system-image-fetcher \
   /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img \
   /work/official-ramdisk.img
-COPY bin/build-ramdisk-overlay.sh /usr/local/bin/build-ramdisk-overlay.sh
+COPY docker/emulator/bin/build-ramdisk-overlay.sh /usr/local/bin/build-ramdisk-overlay.sh
 
 RUN chmod 0555 /usr/local/bin/build-ramdisk-overlay.sh \
     && /usr/local/bin/build-ramdisk-overlay.sh \
@@ -150,6 +150,8 @@ RUN apt-get update \
       libxrender1 \
       libxtst6 \
       procps \
+      python3 \
+      python3-pip \
       socat \
       zlib1g \
     && rm -rf /var/lib/apt/lists/* \
@@ -221,8 +223,15 @@ COPY --from=ramdisk-overlay-builder \
   /opt/cloudandx/android-ramdisk/derived-ramdisk.img \
   /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img
 COPY --from=native-engine-bundle /opt/cloudandx/native-aemu/ /opt/cloudandx/native-aemu/
-COPY avd/ /opt/android-avd-template/
-COPY bin/entrypoint.sh bin/healthcheck.sh bin/runtime-lib.sh bin/runtime-preflight.sh /usr/local/bin/
+COPY docker/emulator/avd/ /opt/android-avd-template/
+COPY docker/emulator/bin/entrypoint.sh docker/emulator/bin/single-container-entrypoint.sh docker/emulator/bin/healthcheck.sh docker/emulator/bin/runtime-lib.sh docker/emulator/bin/runtime-preflight.sh /usr/local/bin/
+COPY docker/bootstrap/check-runtime-arch.sh /usr/local/bin/
+COPY services/device-bridge/bridge.py /opt/cloudandx/device-bridge/bridge.py
+COPY services/evidence-gate/requirements.txt /opt/cloudandx/evidence-gate/requirements.txt
+COPY services/evidence-gate/src/ /opt/cloudandx/evidence-gate/src/
+
+RUN python3 -m pip install --break-system-packages --no-cache-dir --disable-pip-version-check \
+      -r /opt/cloudandx/evidence-gate/requirements.txt
 
 RUN set -eu; \
     test -n "${NATIVE_AEMU_REVISION}"; \
@@ -232,9 +241,12 @@ RUN set -eu; \
     test "${#ANDROID_RAMDISK_CPIO_SHA256}" -eq 64; \
     test "${#ANDROID_RAMDISK_DERIVED_SHA256}" -eq 64; \
     chmod 0555 /usr/local/bin/entrypoint.sh \
+      /usr/local/bin/single-container-entrypoint.sh \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/runtime-lib.sh \
       /usr/local/bin/runtime-preflight.sh \
+      /usr/local/bin/check-runtime-arch.sh \
+      /opt/cloudandx/device-bridge/bridge.py \
     && install -m 0555 /opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1 \
       /lib/ld-linux-aarch64.so.1 \
     && cmp -s /opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1 \
@@ -360,12 +372,18 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=${ANDROID_BLUETOOTH_HCI_RESTART_TIMEOUT_MS} \
     ADB_MDNS_OPENSCREEN=0
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/opt/cloudandx/evidence-gate/src \
+    CONTRACTS_DIR=/contracts \
+    PREFLIGHT_OUTPUT=/evidence/preflight.json
+
 USER android:android
 WORKDIR /data
 VOLUME ["/data"]
-EXPOSE 5555/tcp 8554/tcp
+EXPOSE 5555/tcp 8090/tcp 8554/tcp
 
 HEALTHCHECK --start-period=60m --start-interval=1m --interval=10m --timeout=5m --retries=10 \
   CMD ["/usr/local/bin/healthcheck.sh"]
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/single-container-entrypoint.sh"]

@@ -1,12 +1,5 @@
 name: cloudandx-android17
 
-x-service-security: &service-security
-  read_only: true
-  security_opt:
-    - no-new-privileges:true
-  cap_drop:
-    - ALL
-
 services:
   native-engine:
     profiles: ["build"]
@@ -20,80 +13,39 @@ services:
         NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:-4663a00b87c46e488124549ec7c55dcdc334d18f95b9a865122e9b437f5df134}
         NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}
 
-  runtime-compatibility:
-    image: alpine:3.22.1
-    user: "65532:65532"
-    network_mode: none
+  emulator:
+    image: cloudandx/android17-play-emulator:37.0-r06
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: docker/emulator/Dockerfile
+      target: runtime
+      args:
+        ACCEPT_ANDROID_SDK_LICENSES: ${ACCEPT_ANDROID_SDK_LICENSES:-no}
+        NATIVE_ENGINE_IMAGE: ${NATIVE_ENGINE_IMAGE:-cloudandx/aemu-native-engine:37.1.7}
+        NATIVE_AEMU_REVISION: ${NATIVE_AEMU_REVISION:-37.1.7}
+        NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:-4663a00b87c46e488124549ec7c55dcdc334d18f95b9a865122e9b437f5df134}
+        NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}
+    init: true
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    shm_size: 2gb
     environment:
       DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-arm64}
       ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
-    volumes:
-      - ./docker/bootstrap/check-runtime-arch.sh:/usr/local/bin/check-runtime-arch.sh:ro
-    entrypoint: ["/bin/sh", "/usr/local/bin/check-runtime-arch.sh"]
-    restart: "no"
-
-  volume-init:
-    image: alpine:3.22.1
-    user: "0:0"
-    network_mode: none
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    volumes:
-      - evidence-data:/volumes/evidence
-      - bridge-secrets:/volumes/bridge-secrets
-      - emulator-data:/volumes/emulator
-      - emulator-console:/volumes/emulator-console
-      - adb-keys:/volumes/adb-keys
-      - ./docker/bootstrap/init-volumes.sh:/usr/local/bin/init-volumes.sh:ro
-    entrypoint: ["/bin/sh", "/usr/local/bin/init-volumes.sh"]
-    restart: "no"
-
-  adb-key-init:
-    image: cloudandx/android-device-bridge:37.0.0
-    platform: linux/amd64
-    build:
-      context: ./services/device-bridge
-    user: "0:0"
-    network_mode: none
-    read_only: true
-    environment:
-      HOME: /tmp/home
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    volumes:
-      - adb-keys:/keys
-    entrypoint: ["/bin/sh", "-euc"]
-    command:
-      - |
-        mkdir -p "$$HOME"
-        if [ ! -s /keys/adbkey ] || [ ! -s /keys/adbkey.pub ]; then
-          rm -f /keys/adbkey /keys/adbkey.pub
-          /opt/platform-tools/adb keygen /keys/adbkey >/dev/null
-        fi
-        chown 10001:10001 /keys/adbkey /keys/adbkey.pub
-        chmod 0600 /keys/adbkey
-        chmod 0644 /keys/adbkey.pub
-    depends_on:
-      volume-init:
-        condition: service_completed_successfully
-    restart: "no"
-
-  evidence-gate:
-    image: cloudandx/android-evidence-gate:1.0.0
-    build:
-      context: .
-      dockerfile: services/evidence-gate/Dockerfile
-      target: runtime
-    <<: *service-security
-    environment:
+      AVD_NAME: Pixel_9_Android_17_Play_ARM64
+      EMULATOR_ACCEL: "off"
+      EMULATOR_CORES: ${EMULATOR_CORES:-8}
+      EMULATOR_MEMORY_MB: ${EMULATOR_MEMORY_MB:-4096}
+      EMULATOR_GPU: ${EMULATOR_GPU:-swiftshader}
+      EMULATOR_CONSOLE_SOCKET: /data/runtime/console/console.sock
+      EMULATOR_CONSOLE_AUTH_TOKEN_FILE: /data/runtime/secrets/token
+      ADB_PRIVATE_KEY_FILE: /data/runtime/adb/adbkey
+      ADB_PUBLIC_KEY_FILE: /data/runtime/adb/adbkey.pub
+      EMULATOR_WIPE_DATA: ${EMULATOR_WIPE_DATA:-0}
       ANDROID_VERSION: "17"
       ANDROID_API_LEVEL: "37"
       GOOGLE_PLAY_TAG: google_apis_playstore
@@ -106,98 +58,28 @@ services:
       GOOGLE_PLAY_EXPECTED_CHECKSUM: sha1:ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4
       GOOGLE_REPOSITORY_URLS: https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-4.xml
       ALLOW_SOFTWARE_EMULATION_ONLY: "true"
-      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
-      PREFLIGHT_OUTPUT: /evidence/preflight.json
-    volumes:
-      - ./contracts:/contracts:ro
-      - evidence-data:/evidence
-    depends_on:
-      volume-init:
-        condition: service_completed_successfully
-    restart: "no"
-
-  emulator:
-    image: cloudandx/android17-play-emulator:37.0-r06
-    platform: linux/amd64
-    build:
-      context: ./docker/emulator
-      target: runtime
-      args:
-        ACCEPT_ANDROID_SDK_LICENSES: ${ACCEPT_ANDROID_SDK_LICENSES:-no}
-        NATIVE_ENGINE_IMAGE: ${NATIVE_ENGINE_IMAGE:-cloudandx/aemu-native-engine:37.1.7}
-        NATIVE_AEMU_REVISION: ${NATIVE_AEMU_REVISION:-37.1.7}
-        NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:-4663a00b87c46e488124549ec7c55dcdc334d18f95b9a865122e9b437f5df134}
-        NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}
-    <<: *service-security
-    init: true
-    shm_size: 2gb
-    environment:
-      DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-arm64}
-      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
-      AVD_NAME: Pixel_9_Android_17_Play_ARM64
-      EMULATOR_ACCEL: "off"
-      EMULATOR_CORES: ${EMULATOR_CORES:-8}
-      EMULATOR_MEMORY_MB: ${EMULATOR_MEMORY_MB:-4096}
-      EMULATOR_GPU: ${EMULATOR_GPU:-swiftshader}
-      EMULATOR_CONSOLE_SOCKET: /run/emulator-console/console.sock
-      EMULATOR_CONSOLE_AUTH_TOKEN_FILE: /run/bridge-secrets/token
-      EMULATOR_WIPE_DATA: ${EMULATOR_WIPE_DATA:-0}
+      PREFLIGHT_OUTPUT: /data/runtime/evidence/preflight.json
+      ADB_SERIAL: 127.0.0.1:5555
+      ADB_PATH: /opt/android-sdk/platform-tools/adb
+      BRIDGE_TOKEN_FILE: /data/runtime/secrets/token
+      ADB_READ_TIMEOUT_SECONDS: "180"
+      RUNTIME_HEALTH_BUDGET_SECONDS: "180"
+      RUNTIME_HEALTH_TTL_SECONDS: "60"
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=512m
       - /run:rw,noexec,nosuid,nodev,size=16m
     volumes:
       - emulator-data:/data
-      - adb-keys:/run/secrets:ro
-      - bridge-secrets:/run/bridge-secrets:ro
-      - emulator-console:/run/emulator-console:rw
+      - ./contracts:/contracts:ro
     ports:
       - 127.0.0.1:${ANDROID_ADB_PORT:-5555}:5555/tcp
       - 127.0.0.1:${ANDROID_GRPC_PORT:-8554}:8554/tcp
-    depends_on:
-      runtime-compatibility:
-        condition: service_completed_successfully
-      evidence-gate:
-        condition: service_completed_successfully
-      adb-key-init:
-        condition: service_completed_successfully
+      - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
     stop_grace_period: 45s
     restart: "on-failure:3"
 
-  device-bridge:
-    image: cloudandx/android-device-bridge:37.0.0
-    platform: linux/amd64
-    build:
-      context: ./services/device-bridge
-    <<: *service-security
-    environment:
-      ADB_SERIAL: emulator:5555
-      ADB_VENDOR_KEYS: /home/bridge/.android/adbkey
-      BRIDGE_TOKEN_FILE: /run/bridge-secrets/token
-      EMULATOR_CONSOLE_SOCKET: /run/emulator-console/console.sock
-      ADB_READ_TIMEOUT_SECONDS: "180"
-      RUNTIME_HEALTH_BUDGET_SECONDS: "180"
-      RUNTIME_HEALTH_TTL_SECONDS: "60"
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=320m
-    volumes:
-      - adb-keys:/home/bridge/.android:ro
-      - bridge-secrets:/run/bridge-secrets:ro
-      - emulator-console:/run/emulator-console:ro
-    ports:
-      - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
-    depends_on:
-      emulator:
-        condition: service_healthy
-      adb-key-init:
-        condition: service_completed_successfully
-    restart: unless-stopped
-
 volumes:
-  evidence-data:
-  bridge-secrets:
   emulator-data:
-  emulator-console:
-  adb-keys:
 
 networks:
   default:

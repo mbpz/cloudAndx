@@ -35,6 +35,7 @@ ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 SOCAT_BIN=${SOCAT_BIN:-socat}
 ADB_PRIVATE_KEY_FILE=${ADB_PRIVATE_KEY_FILE:-/run/secrets/adbkey}
 ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
+BRIDGE_SCRIPT=${BRIDGE_SCRIPT:-/opt/cloudandx/device-bridge/bridge.py}
 
 export ANDROID_SDK_ROOT ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT HOME
 export AVD_NAME EMULATOR_ACCEL EMULATOR_CORES EMULATOR_MEMORY_MB EMULATOR_GPU
@@ -42,6 +43,46 @@ export EMULATOR_CONSOLE_PORT EMULATOR_CONSOLE_SOCKET EMULATOR_CONSOLE_AUTH_TOKEN
 export EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
 export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE ANDROID_RUNTIME_IMPLEMENTATION NATIVE_AEMU_ROOT NATIVE_AEMU_RUNNER
 export EMULATOR_BIN ADB_BIN SOCAT_BIN
+
+initialize_single_container_state() {
+  token_dir=${EMULATOR_CONSOLE_AUTH_TOKEN_FILE%/*}
+  private_key_dir=${ADB_PRIVATE_KEY_FILE%/*}
+  console_dir=${EMULATOR_CONSOLE_SOCKET%/*}
+  mkdir -p "${token_dir}" "${private_key_dir}" "${console_dir}"
+  chmod 0700 "${token_dir}" "${private_key_dir}" "${console_dir}"
+
+  token=${EMULATOR_CONSOLE_AUTH_TOKEN_FILE}
+  if [ ! -s "${token}" ]; then
+    case ${token} in
+      /data/runtime/secrets/token)
+        temporary_token=${token}.tmp.$$
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"${temporary_token}"
+        mv "${temporary_token}" "${token}"
+        ;;
+      *) runtime_die "Emulator Console auth token is missing: ${token}" ;;
+    esac
+  fi
+  chmod 0600 "${token}"
+
+  private_present=0
+  public_present=0
+  [ -s "${ADB_PRIVATE_KEY_FILE}" ] && private_present=1
+  [ -s "${ADB_PUBLIC_KEY_FILE}" ] && public_present=1
+  if [ "${private_present}" -ne "${public_present}" ]; then
+    runtime_die "Persistent ADB key pair is incomplete under ${private_key_dir}."
+  fi
+  if [ "${private_present}" -eq 0 ]; then
+    case ${ADB_PRIVATE_KEY_FILE} in
+      /data/runtime/adb/adbkey)
+        "${ADB_BIN}" keygen "${ADB_PRIVATE_KEY_FILE}" >/dev/null
+        ;;
+    esac
+  fi
+  if [ -s "${ADB_PRIVATE_KEY_FILE}" ]; then
+    chmod 0600 "${ADB_PRIVATE_KEY_FILE}"
+    chmod 0644 "${ADB_PUBLIC_KEY_FILE}"
+  fi
+}
 
 MODE=run
 case ${1-} in
@@ -297,7 +338,7 @@ EOF
 stop_children() {
   trap - EXIT INT TERM HUP
 
-  for child in "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -TERM "${child}" 2>/dev/null || true
     fi
@@ -306,7 +347,7 @@ stop_children() {
   remaining=20
   while [ "${remaining}" -gt 0 ]; do
     live=0
-    for child in "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+    for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
       if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
         live=1
       fi
@@ -316,7 +357,7 @@ stop_children() {
     remaining=$((remaining - 1))
   done
 
-  for child in "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -KILL "${child}" 2>/dev/null || true
     fi
@@ -331,6 +372,9 @@ on_signal() {
   exit 143
 }
 
+if [ "${MODE}" = run ]; then
+  initialize_single_container_state
+fi
 seed_avd
 if [ "${MODE}" = run ]; then
   remove_stale_avd_locks "${ANDROID_AVD_HOME}/${AVD_NAME}.avd"
@@ -360,6 +404,9 @@ runtime_log "Authenticated Console proxy is listening on Unix socket ${EMULATOR_
 "${SOCAT_BIN}" "TCP4-LISTEN:${EMULATOR_GRPC_PORT},reuseaddr,fork" "TCP4:127.0.0.1:${EMULATOR_GRPC_INTERNAL_PORT}" &
 GRPC_SOCAT_PID=$!
 runtime_log "gRPC proxy is listening on container port ${EMULATOR_GRPC_PORT} and forwarding to emulator port ${EMULATOR_GRPC_INTERNAL_PORT}."
+python3 "${BRIDGE_SCRIPT}" &
+BRIDGE_PID=$!
+runtime_log "Device bridge is listening on container port ${LISTEN_PORT:-8090}."
 
 status=0
 while :; do
@@ -383,6 +430,11 @@ while :; do
   fi
   if ! kill -0 "${GRPC_SOCAT_PID}" 2>/dev/null; then
     runtime_log "ERROR: gRPC proxy exited unexpectedly."
+    status=1
+    break
+  fi
+  if ! kill -0 "${BRIDGE_PID}" 2>/dev/null; then
+    runtime_log "ERROR: device bridge exited unexpectedly."
     status=1
     break
   fi

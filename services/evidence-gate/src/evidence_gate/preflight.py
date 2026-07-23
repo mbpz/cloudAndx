@@ -126,7 +126,11 @@ class PreflightSettings:
 
 
 def detect_architecture(machine: str | None = None) -> dict[str, Any]:
-    raw = (machine or platform.machine()).lower()
+    raw = (
+        machine
+        or os.environ.get("DOCKER_ENGINE_ARCHITECTURE")
+        or platform.machine()
+    ).lower()
     aliases = {
         "x86_64": ("x86_64", "x86_64"),
         "amd64": ("x86_64", "x86_64"),

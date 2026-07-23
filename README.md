@@ -28,7 +28,6 @@ x86_64 host 构建和运行验证当前 deferred；控制面在该架构上失�
 
 ```sh
 docker compose config --quiet
-docker compose run --rm evidence-gate
 ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine
 ACCEPT_ANDROID_SDK_LICENSES=yes docker compose up -d --build
 ```
@@ -37,6 +36,11 @@ ACCEPT_ANDROID_SDK_LICENSES=yes docker compose up -d --build
 `ACCEPT_ANDROID_SDK_LICENSES` 改为 `yes`。首次构建会在 Docker 内编译固定源码的
 ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与 `up-kvm` 运行验证
 当前 deferred，待切换到 x86_64 电脑后执行；本机不会尝试编译或运行 x86 AEMU。
+
+默认 Compose 只启动一个 `emulator` 容器，使用唯一运行镜像
+`cloudandx/android17-play-emulator:37.0-r06`。其 PID 1 依次执行兼容性检查、ADB
+密钥/Console 令牌初始化和证据门禁，再统一监督模拟器、ADB/gRPC/Console 代理与设备桥接。
+`native-engine` 仅是显式 `build` profile 使用的跨架构构建制品，不会作为运行容器启动。
 
 启动后：
 

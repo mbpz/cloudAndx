@@ -119,6 +119,17 @@ class PreflightTests(unittest.TestCase):
                 self.assertTrue(detected["supported"])
                 self.assertEqual("arm64", detected["normalized"])
 
+    def test_declared_docker_engine_architecture_overrides_container_userland(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"DOCKER_ENGINE_ARCHITECTURE": "arm64"},
+            clear=True,
+        ), patch("evidence_gate.preflight.platform.machine", return_value="x86_64"):
+            detected = detect_architecture()
+
+        self.assertEqual("arm64", detected["normalized"])
+        self.assertEqual("arm64-v8a", detected["google_play_abi"])
+
     def test_hybrid_runtime_implementation_is_allowlisted(self) -> None:
         with patch.dict(
             os.environ,

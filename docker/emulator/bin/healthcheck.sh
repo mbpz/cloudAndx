@@ -75,3 +75,6 @@ printf '%s\n' "${guest_health}" | grep -Fxq 'camera=Service media.camera: found'
 printf '%s\n' "${guest_health}" | grep -Fxq 'bluetooth=Service bluetooth_manager: found'
 printf '%s\n' "${guest_health}" | grep -q '^play=package:'
 printf '%s\n' "${guest_health}" | grep -q '^gms=package:'
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/livez', timeout=3)"
+fi

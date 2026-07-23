@@ -31,12 +31,13 @@ host/guest combinations are `BLOCKED` except for the exact, explicitly declared
 
 ## Build and test
 
-Use the repository root as Docker build context:
+The evidence gate is packaged in the repository's single Android runtime image.
+Run its host-side unit tests without building a second image:
 
 ```sh
-docker build --target test -f services/evidence-gate/Dockerfile -t android-evidence-gate:test .
-docker run --rm android-evidence-gate:test
-docker build --target runtime -f services/evidence-gate/Dockerfile -t android-evidence-gate:1.0.0 .
+PYTHONPATH=services/evidence-gate/src \
+  python3 -m unittest discover -s services/evidence-gate/tests -v
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose build emulator
 ```
 
 Tests use local XML fixtures and make no network calls.
@@ -51,7 +52,8 @@ docker run --rm \
   -v "$PWD/evidence:/evidence" \
   -e GOOGLE_REPOSITORY_URLS=https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-4.xml \
   -e GOOGLE_PLAY_EXPECTED_CHANNEL=stable \
-  android-evidence-gate:1.0.0 preflight
+  --entrypoint python3 \
+  cloudandx/android17-play-emulator:37.0-r06 -m evidence_gate preflight
 ```
 
 The container runs as UID/GID `65532`; the evidence volume must be writable by that identity. Do not mount the Docker socket.
@@ -107,14 +109,16 @@ Set `IMAGE_MANIFEST_PATH` and/or `CAPABILITY_EVIDENCE_PATH` to validate those mo
 docker run --rm \
   -v "$PWD/contracts:/contracts:ro" \
   -v "$PWD/evidence:/evidence:ro" \
-  android-evidence-gate:1.0.0 \
-  validate-image /evidence/android-image-manifest.json
+  --entrypoint python3 \
+  cloudandx/android17-play-emulator:37.0-r06 \
+  -m evidence_gate validate-image /evidence/android-image-manifest.json
 
 docker run --rm \
   -v "$PWD/contracts:/contracts:ro" \
   -v "$PWD/evidence:/evidence:ro" \
-  android-evidence-gate:1.0.0 \
-  validate-capabilities /evidence/android-capability-evidence.json
+  --entrypoint python3 \
+  cloudandx/android17-play-emulator:37.0-r06 \
+  -m evidence_gate validate-capabilities /evidence/android-capability-evidence.json
 ```
 
 Both commands emit a JSON report containing schema/instance digests and every validation error. Exit code `0` means valid; exit code `2` means invalid, unreadable, or missing.

@@ -1,0 +1,11 @@
+/* Keep the connected Android surface visibly and physically interactive. */
+:root.noVNC_connected #noVNC_transition {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+:root.noVNC_connected #noVNC_container canvas {
+    cursor: pointer !important;
+    touch-action: none;
+}

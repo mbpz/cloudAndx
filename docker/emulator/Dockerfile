@@ -276,6 +276,9 @@ COPY --from=system-image-fetcher /opt/android-sdk/system-images/ /opt/android-sd
 COPY --from=ramdisk-overlay-builder /opt/cloudandx/android-ramdisk/ /opt/cloudandx/android-ramdisk/
 COPY --from=remote-ui-fetcher /opt/cloudandx/novnc/ /opt/cloudandx/novnc/
 COPY docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json
+COPY docker/emulator/novnc/cloudandx.css /opt/cloudandx/novnc/app/styles/cloudandx.css
+RUN sed -i '/app\/styles\/base.css/a\    <link rel="stylesheet" href="app/styles/cloudandx.css">' \
+      /opt/cloudandx/novnc/vnc.html
 COPY --from=remote-ui-fetcher /opt/cloudandx/scrcpy/ /opt/cloudandx/scrcpy/
 COPY --from=remote-ui-fetcher /opt/cloudandx/dist/ /opt/cloudandx/dist/
 COPY --from=ramdisk-overlay-builder \

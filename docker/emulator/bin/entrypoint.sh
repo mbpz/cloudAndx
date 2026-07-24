@@ -438,7 +438,13 @@ start_scrcpy() {
       "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell input keyevent WAKEUP >/dev/null 2>&1 || true
       "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell wm dismiss-keyguard >/dev/null 2>&1 || true
       set +e
-      ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" SDL_VIDEODRIVER=x11 "${SCRCPY_BIN}" \
+      # x11vnc injects core X11 pointer events. SDL's XInput2 path can observe
+      # the cursor while dropping its synthetic button/drag events, leaving a
+      # visible but uncontrollable Android screen. Keep scrcpy on SDL's core
+      # X11 input path so noVNC clicks and drags retain SDK touchscreen
+      # semantics (DOWN/MOVE/UP) on the same device.
+      ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" SDL_VIDEODRIVER=x11 \
+        SDL_VIDEO_X11_XINPUT2=0 "${SCRCPY_BIN}" \
         --serial "${SCRCPY_SERIAL}" --no-audio --stay-awake --max-size=1080 \
         --max-fps=30 --video-bit-rate=4M --video-buffer=0 \
         --mouse=sdk --keyboard=sdk \

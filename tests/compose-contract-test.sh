@@ -92,6 +92,7 @@ grep -Fq 'XVFB_RESOLUTION=${XVFB_RESOLUTION:-1080x2424x24}' "${entrypoint}"
 grep -Fq -- '--window-x=0 --window-y=0 --window-width=1080 --window-height=2424' "${entrypoint}"
 grep -Fq -- '--max-fps=30 --video-bit-rate=4M --video-buffer=0' "${entrypoint}"
 grep -Fq -- '--mouse=sdk --keyboard=sdk' "${entrypoint}"
+grep -Fq 'SDL_VIDEO_X11_XINPUT2=0' "${entrypoint}"
 grep -Fq 'scrcpy' "${entrypoint}"
 grep -Fq 'noVNC exited unexpectedly' "${entrypoint}"
 

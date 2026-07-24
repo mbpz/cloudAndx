@@ -275,6 +275,7 @@ COPY --from=tool-fetcher /opt/android-sdk/ /opt/android-sdk/
 COPY --from=system-image-fetcher /opt/android-sdk/system-images/ /opt/android-sdk/system-images/
 COPY --from=ramdisk-overlay-builder /opt/cloudandx/android-ramdisk/ /opt/cloudandx/android-ramdisk/
 COPY --from=remote-ui-fetcher /opt/cloudandx/novnc/ /opt/cloudandx/novnc/
+COPY docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json
 COPY --from=remote-ui-fetcher /opt/cloudandx/scrcpy/ /opt/cloudandx/scrcpy/
 COPY --from=remote-ui-fetcher /opt/cloudandx/dist/ /opt/cloudandx/dist/
 COPY --from=ramdisk-overlay-builder \

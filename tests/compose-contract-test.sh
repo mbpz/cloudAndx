@@ -79,6 +79,9 @@ grep -Fq 'EXPOSE 5555/tcp 6080/tcp 8090/tcp 8554/tcp' "${dockerfile}"
 
 # Browser interaction stays inside the one supervised runtime image.
 grep -Fq 'NOVNC_VERSION=1.7.0' "${dockerfile}"
+grep -Fq 'docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json' "${dockerfile}"
+grep -Fq '"view_only": false' docker/emulator/novnc/mandatory.json
+grep -Fq '"resize": "scale"' docker/emulator/novnc/mandatory.json
 grep -Fq 'WEBSOCKIFY_VERSION=0.13.0' "${dockerfile}"
 grep -Fq 'SCRCPY_VERSION=4.1' "${dockerfile}"
 grep -Fq 'Xvfb' "${entrypoint}"
@@ -86,7 +89,9 @@ grep -Fq 'x11vnc' "${entrypoint}"
 grep -Fq 'websockify' "${entrypoint}"
 grep -Fq -- '--ssl-only' "${entrypoint}"
 grep -Fq 'XVFB_RESOLUTION=${XVFB_RESOLUTION:-1080x2424x24}' "${entrypoint}"
-grep -Fq -- '--fullscreen --window-borderless' "${entrypoint}"
+grep -Fq -- '--window-x=0 --window-y=0 --window-width=1080 --window-height=2424' "${entrypoint}"
+grep -Fq -- '--max-fps=30 --video-bit-rate=4M --video-buffer=0' "${entrypoint}"
+grep -Fq -- '--mouse=sdk --keyboard=sdk' "${entrypoint}"
 grep -Fq 'scrcpy' "${entrypoint}"
 grep -Fq 'noVNC exited unexpectedly' "${entrypoint}"
 

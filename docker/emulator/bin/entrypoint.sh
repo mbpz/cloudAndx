@@ -440,7 +440,10 @@ start_scrcpy() {
       set +e
       ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" SDL_VIDEODRIVER=x11 "${SCRCPY_BIN}" \
         --serial "${SCRCPY_SERIAL}" --no-audio --stay-awake --max-size=1080 \
-        --fullscreen --window-borderless
+        --max-fps=30 --video-bit-rate=4M --video-buffer=0 \
+        --mouse=sdk --keyboard=sdk \
+        --window-x=0 --window-y=0 --window-width=1080 --window-height=2424 \
+        --window-borderless
       scrcpy_status=$?
       set -e
       runtime_log "scrcpy exited with status ${scrcpy_status}; retrying in ${SCRCPY_RETRY_DELAY_SECONDS}s."

@@ -28,4 +28,4 @@ ADB_VENDOR_KEYS=${ADB_KEY} adb start-server >/dev/null
 adb connect "${SERIAL}"
 SCRCPY_SERVER_PATH=${SERVER_JAR} \
   exec "${CLIENT}" --serial "${SERIAL}" --force-adb-forward --no-audio --stay-awake \
-    --mouse=uhid --keyboard=uhid "$@"
+    --video-buffer=0 --audio-buffer=0 --mouse=sdk --keyboard=uhid "$@"

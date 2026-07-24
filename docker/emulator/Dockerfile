@@ -77,16 +77,19 @@ FROM artifact-download-base AS system-image-fetcher
 ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-playstore-ps16k-37.0_r06.zip
 ARG SYSTEM_IMAGE_SHA1=ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4
 
-RUN set -eu; \
+RUN --mount=type=cache,id=cloudandx-android17-r06-system-image,target=/var/cache/cloudandx-downloads \
+    set -eu; \
     image_parent=/opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k; \
+    archive=/var/cache/cloudandx-downloads/arm64-v8a-playstore-ps16k-37.0_r06.zip; \
     mkdir -p "${image_parent}"; \
-    curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 \
-      --output /tmp/system-image.zip "${SYSTEM_IMAGE_URL}"; \
-    echo "${SYSTEM_IMAGE_SHA1}  /tmp/system-image.zip" | sha1sum --check --strict -; \
-    unzip -q /tmp/system-image.zip -d "${image_parent}"; \
+    if ! echo "${SYSTEM_IMAGE_SHA1}  ${archive}" | sha1sum --check --status -; then \
+      curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 \
+        --continue-at - --output "${archive}" "${SYSTEM_IMAGE_URL}"; \
+    fi; \
+    echo "${SYSTEM_IMAGE_SHA1}  ${archive}" | sha1sum --check --strict -; \
+    unzip -q "${archive}" -d "${image_parent}"; \
     test -s "${image_parent}/arm64-v8a/system.img"; \
-    test -s "${image_parent}/arm64-v8a/vendor.img"; \
-    rm -f /tmp/system-image.zip
+    test -s "${image_parent}/arm64-v8a/vendor.img"
 
 FROM artifact-download-base AS remote-ui-fetcher
 
@@ -192,6 +195,7 @@ RUN apt-get update \
       libxrandr2 \
       libxrender1 \
       libxtst6 \
+      openssl \
       procps \
       python3 \
       python3-pip \
@@ -370,9 +374,14 @@ RUN set -eu; \
       /opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json \
     && test -x /opt/cloudandx/native-aemu/vulkan-smoke \
     && test -f /opt/cloudandx/novnc/vnc.html \
-    && grep -Fq "\"version\": \"${NOVNC_VERSION}\"" /opt/cloudandx/novnc/package.json \
-    && websockify --version 2>&1 | grep -Fq "${WEBSOCKIFY_VERSION}" \
-    && /opt/cloudandx/scrcpy/scrcpy --version 2>&1 | grep -Fq "scrcpy ${SCRCPY_VERSION}" \
+    && novnc_version=$(python3 -c 'import json; print(json.load(open("/opt/cloudandx/novnc/package.json"))["version"])') \
+    && test "${novnc_version}" = "${NOVNC_VERSION}" \
+    && websockify_version=$(python3 -c 'import importlib.metadata; print(importlib.metadata.version("websockify"))') \
+    && printf '%s\n' "${websockify_version}" \
+    && printf '%s\n' "${websockify_version}" | grep -Fq "${WEBSOCKIFY_VERSION}" \
+    && scrcpy_version=$(/opt/cloudandx/scrcpy/scrcpy --version 2>&1) \
+    && printf '%s\n' "${scrcpy_version}" \
+    && printf '%s\n' "${scrcpy_version}" | grep -Fq "scrcpy ${SCRCPY_VERSION}" \
     && test -s /opt/cloudandx/scrcpy/scrcpy-server \
     && test -d /opt/android-sdk/emulator/resources \
     && test -d /opt/cloudandx/native-aemu/resources \
@@ -442,7 +451,7 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     ADB_MDNS_OPENSCREEN=0 \
     DISPLAY=:0 \
     XVFB_SCREEN=0 \
-    XVFB_RESOLUTION=1440x3120x24
+    XVFB_RESOLUTION=1080x2424x24
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

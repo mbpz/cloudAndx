@@ -46,18 +46,22 @@ ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与
 启动后：
 
 - 受限设备控制 API：<http://127.0.0.1:8090>
-- 浏览器 Android：<http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale>
+- 浏览器 Android：<https://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale>
 - ADB：`127.0.0.1:5555`
 - Emulator gRPC：`127.0.0.1:8554`
 
-本机已安装的 scrcpy（最低 4.0；当前验证为 4.1）直接通过仅监听回环地址的 ADB 端口连接：
+本机已安装的 scrcpy 4.1 提供 server；项目为 ARM TCG 的慢启动构建一个延长握手等待、仍保持 4.1 协议的本机 client。首次执行构建脚本，之后直接运行连接脚本：
 
 ```sh
-scrcpy --serial 127.0.0.1:5555
+scripts/build-scrcpy-arm-tcg-client.sh
+scripts/scrcpy-android17.sh
 ```
 
-浏览器中的鼠标点击、拖动和键盘输入由容器内 scrcpy 4.1 注入同一台 Android；noVNC
+连接脚本会自动把容器已信任的 ADB 私钥复制到被 Git 忽略的 `.runtime/container-adb/`，因此无需等待 Android 授权弹窗；并默认使用 UHID 鼠标和键盘，让 Android 将输入识别为物理设备。ADB、视频和输入仍只经过 `127.0.0.1`。后续连接直接运行第二条命令即可。
+
+首次访问需要接受项目持久化自签名证书；接受后页面使用 HTTPS/WSS 加密。浏览器中的鼠标点击、拖动和键盘输入由容器内 scrcpy 4.1 注入同一台 Android；noVNC
 1.7.0 和 websockify 0.13.0 只发布到宿主回环地址，raw VNC 5900 不发布。
+远程 X11 桌面与 Android 的 `1080x2424` 显示尺寸一致，scrcpy 以无边框全屏运行；配合 URL 中的 `resize=scale`，Android 画面会随浏览器可视区域自适应缩放。
 
 宿主 scrcpy client/server 必须保持同版。ADB 不对局域网或公网发布；跨主机使用时先通过
 SSH/VPN/零信任通道安全转发 6080，不直接把 Compose 端口改为 `0.0.0.0`，也不转发

@@ -53,6 +53,7 @@ grep -Fq '127.0.0.1:${ANDROID_ADB_PORT:-5555}:5555/tcp' "${compose_file}"
 grep -Fq '127.0.0.1:${ANDROID_GRPC_PORT:-8554}:8554/tcp' "${compose_file}"
 grep -Fq '127.0.0.1:${ANDROID_NOVNC_PORT:-6080}:6080/tcp' "${compose_file}"
 grep -Fq 'NOVNC_PORT: "6080"' "${compose_file}"
+grep -Fq 'NOVNC_TLS: "true"' "${compose_file}"
 grep -Fq 'VNC_PORT: "5900"' "${compose_file}"
 if grep -Eq '127\.0\.0\.1:.*:5900|0\.0\.0\.0:.*:(5555|5900|6080|8090|8554)' "${compose_file}"; then
   echo 'FAIL: raw VNC and public remote-control ports must not be published' >&2
@@ -83,6 +84,9 @@ grep -Fq 'SCRCPY_VERSION=4.1' "${dockerfile}"
 grep -Fq 'Xvfb' "${entrypoint}"
 grep -Fq 'x11vnc' "${entrypoint}"
 grep -Fq 'websockify' "${entrypoint}"
+grep -Fq -- '--ssl-only' "${entrypoint}"
+grep -Fq 'XVFB_RESOLUTION=${XVFB_RESOLUTION:-1080x2424x24}' "${entrypoint}"
+grep -Fq -- '--fullscreen --window-borderless' "${entrypoint}"
 grep -Fq 'scrcpy' "${entrypoint}"
 grep -Fq 'noVNC exited unexpectedly' "${entrypoint}"
 

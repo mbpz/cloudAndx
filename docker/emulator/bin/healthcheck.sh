@@ -12,6 +12,7 @@ EMULATOR_GRPC_PORT=${EMULATOR_GRPC_PORT:-8554}
 SOCAT_BIN=${SOCAT_BIN:-socat}
 TIMEOUT_BIN=${TIMEOUT_BIN:-timeout}
 NOVNC_PORT=${NOVNC_PORT:-6080}
+NOVNC_TLS=${NOVNC_TLS:-true}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
 ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
 EXPECTED_ANDROID_ABI=${EXPECTED_ANDROID_ABI:-arm64-v8a}
@@ -79,5 +80,9 @@ printf '%s\n' "${guest_health}" | grep -q '^play=package:'
 printf '%s\n' "${guest_health}" | grep -q '^gms=package:'
 if command -v python3 >/dev/null 2>&1; then
   python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/livez', timeout=3)"
-  python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${NOVNC_PORT}/vnc.html', timeout=3)"
+  if [ "${NOVNC_TLS}" = true ]; then
+    python3 -c "import ssl, urllib.request; urllib.request.urlopen('https://127.0.0.1:${NOVNC_PORT}/vnc.html', context=ssl._create_unverified_context(), timeout=3)"
+  else
+    python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${NOVNC_PORT}/vnc.html', timeout=3)"
+  fi
 fi

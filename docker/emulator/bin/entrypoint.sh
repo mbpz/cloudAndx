@@ -38,9 +38,12 @@ ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
 BRIDGE_SCRIPT=${BRIDGE_SCRIPT:-/opt/cloudandx/device-bridge/bridge.py}
 DISPLAY=${DISPLAY:-:0}
 XVFB_SCREEN=${XVFB_SCREEN:-0}
-XVFB_RESOLUTION=${XVFB_RESOLUTION:-1440x3120x24}
+XVFB_RESOLUTION=${XVFB_RESOLUTION:-1080x2424x24}
 XVFB_SOCKET_WAIT_SECONDS=${XVFB_SOCKET_WAIT_SECONDS:-30}
 NOVNC_PORT=${NOVNC_PORT:-6080}
+NOVNC_TLS=${NOVNC_TLS:-true}
+NOVNC_TLS_CERT=${NOVNC_TLS_CERT:-/data/runtime/novnc/tls-cert.pem}
+NOVNC_TLS_KEY=${NOVNC_TLS_KEY:-/data/runtime/novnc/tls-key.pem}
 VNC_PORT=${VNC_PORT:-5900}
 NOVNC_ROOT=${NOVNC_ROOT:-/opt/cloudandx/novnc}
 SCRCPY_ROOT=${SCRCPY_ROOT:-/opt/cloudandx/scrcpy}
@@ -369,6 +372,9 @@ wait_for_display_socket() {
 }
 
 start_xvfb() {
+  XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/data/runtime/xdg}
+  export XDG_RUNTIME_DIR
+  install -d -m 0700 "${XDG_RUNTIME_DIR}"
   "${XVFB_BIN}" "${DISPLAY}" -screen "${XVFB_SCREEN}" "${XVFB_RESOLUTION}" -nolisten tcp -ac &
   XVFB_PID=$!
   wait_for_display_socket
@@ -389,9 +395,23 @@ start_x11vnc() {
 }
 
 start_novnc() {
-  "${WEBSOCKIFY_BIN}" --web "${NOVNC_ROOT}" "${NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" &
+  if [ "${NOVNC_TLS}" = true ]; then
+    install -d -m 0700 "$(dirname "${NOVNC_TLS_CERT}")"
+    if [ ! -s "${NOVNC_TLS_CERT}" ] || [ ! -s "${NOVNC_TLS_KEY}" ]; then
+      openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
+        -subj '/CN=cloudAndx Android noVNC' \
+        -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+        -keyout "${NOVNC_TLS_KEY}" -out "${NOVNC_TLS_CERT}"
+      chmod 0600 "${NOVNC_TLS_CERT}" "${NOVNC_TLS_KEY}"
+    fi
+    "${WEBSOCKIFY_BIN}" --web "${NOVNC_ROOT}" --cert "${NOVNC_TLS_CERT}" --key "${NOVNC_TLS_KEY}" --ssl-only \
+      "${NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" &
+    runtime_log "Encrypted noVNC is listening on container port ${NOVNC_PORT} and proxying loopback VNC port ${VNC_PORT}."
+  else
+    "${WEBSOCKIFY_BIN}" --web "${NOVNC_ROOT}" "${NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" &
+    runtime_log "noVNC is listening without TLS on container port ${NOVNC_PORT} and proxying loopback VNC port ${VNC_PORT}."
+  fi
   NOVNC_PID=$!
-  runtime_log "noVNC is listening on container port ${NOVNC_PORT} and proxying loopback VNC port ${VNC_PORT}."
 }
 
 wait_for_scrcpy_target() {
@@ -415,8 +435,12 @@ start_scrcpy() {
     while :; do
       wait_for_scrcpy_target || exit 1
       runtime_log "Starting scrcpy on ${DISPLAY} for ${SCRCPY_SERIAL}."
+      "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell input keyevent WAKEUP >/dev/null 2>&1 || true
+      "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell wm dismiss-keyguard >/dev/null 2>&1 || true
       set +e
-      ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" "${SCRCPY_BIN}" --serial "${SCRCPY_SERIAL}" --no-audio
+      ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" SDL_VIDEODRIVER=x11 "${SCRCPY_BIN}" \
+        --serial "${SCRCPY_SERIAL}" --no-audio --stay-awake --max-size=1080 \
+        --fullscreen --window-borderless
       scrcpy_status=$?
       set -e
       runtime_log "scrcpy exited with status ${scrcpy_status}; retrying in ${SCRCPY_RETRY_DELAY_SECONDS}s."

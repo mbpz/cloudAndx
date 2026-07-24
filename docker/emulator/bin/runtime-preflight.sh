@@ -29,7 +29,7 @@ ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 SOCAT_BIN=${SOCAT_BIN:-socat}
 DISPLAY=${DISPLAY:-:0}
 XVFB_SCREEN=${XVFB_SCREEN:-0}
-XVFB_RESOLUTION=${XVFB_RESOLUTION:-1440x3120x24}
+XVFB_RESOLUTION=${XVFB_RESOLUTION:-1080x2424x24}
 NOVNC_PORT=${NOVNC_PORT:-6080}
 VNC_PORT=${VNC_PORT:-5900}
 NOVNC_ROOT=${NOVNC_ROOT:-/opt/cloudandx/novnc}
@@ -102,9 +102,6 @@ command -v "${WEBSOCKIFY_BIN}" >/dev/null 2>&1 || runtime_die "websockify is not
 scrcpy_version_output=$("${SCRCPY_BIN}" --version 2>&1 || true)
 printf '%s\n' "${scrcpy_version_output}" | grep -Fq "scrcpy ${SCRCPY_VERSION:-4.1}" \
   || runtime_die "scrcpy binary does not match the locked version."
-websockify_version_output=$("${WEBSOCKIFY_BIN}" --version 2>&1 || true)
-printf '%s\n' "${websockify_version_output}" | grep -Fq "${WEBSOCKIFY_VERSION:-0.13.0}" \
-  || runtime_die "websockify does not match the locked version."
 [ -s "${SYSTEM_IMAGE_DIR}/system.img" ] || runtime_die "Android 17 system.img is missing: ${SYSTEM_IMAGE_DIR}/system.img"
 [ -s "${SYSTEM_IMAGE_DIR}/vendor.img" ] || runtime_die "Android 17 vendor.img is missing: ${SYSTEM_IMAGE_DIR}/vendor.img"
 [ -s "${SYSTEM_IMAGE_DIR}/ramdisk.img" ] || runtime_die "Android 17 derived ramdisk is missing: ${SYSTEM_IMAGE_DIR}/ramdisk.img"

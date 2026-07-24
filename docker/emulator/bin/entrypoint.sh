@@ -38,7 +38,7 @@ ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
 BRIDGE_SCRIPT=${BRIDGE_SCRIPT:-/opt/cloudandx/device-bridge/bridge.py}
 DISPLAY=${DISPLAY:-:0}
 XVFB_SCREEN=${XVFB_SCREEN:-0}
-XVFB_RESOLUTION=${XVFB_RESOLUTION:-1080x2424x24}
+XVFB_RESOLUTION=${XVFB_RESOLUTION:-480x1080x24}
 XVFB_SOCKET_WAIT_SECONDS=${XVFB_SOCKET_WAIT_SECONDS:-30}
 NOVNC_PORT=${NOVNC_PORT:-6080}
 NOVNC_TLS=${NOVNC_TLS:-true}
@@ -444,11 +444,11 @@ start_scrcpy() {
       # X11 input path so noVNC clicks and drags retain SDK touchscreen
       # semantics (DOWN/MOVE/UP) on the same device.
       ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" SDL_VIDEODRIVER=x11 \
-        SDL_VIDEO_X11_XINPUT2=0 "${SCRCPY_BIN}" \
+        SDL_VIDEO_X11_XINPUT2=0 SDL_MOUSE_FOCUS_CLICKTHROUGH=1 "${SCRCPY_BIN}" \
         --serial "${SCRCPY_SERIAL}" --no-audio --stay-awake --max-size=1080 \
         --max-fps=30 --video-bit-rate=4M --video-buffer=0 \
         --mouse=sdk --keyboard=sdk \
-        --window-x=0 --window-y=0 --window-width=1080 --window-height=2424 \
+        --window-x=0 --window-y=0 --window-width=480 --window-height=1080 \
         --window-borderless
       scrcpy_status=$?
       set -e

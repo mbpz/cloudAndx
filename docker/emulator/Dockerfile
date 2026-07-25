@@ -277,7 +277,10 @@ COPY --from=ramdisk-overlay-builder /opt/cloudandx/android-ramdisk/ /opt/cloudan
 COPY --from=remote-ui-fetcher /opt/cloudandx/novnc/ /opt/cloudandx/novnc/
 COPY docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json
 COPY docker/emulator/novnc/cloudandx.css /opt/cloudandx/novnc/app/styles/cloudandx.css
+COPY docker/emulator/novnc/cloudandx-touch.js /opt/cloudandx/novnc/app/cloudandx-touch.js
 RUN sed -i '/app\/styles\/base.css/a\    <link rel="stylesheet" href="app/styles/cloudandx.css">' \
+      /opt/cloudandx/novnc/vnc.html \
+    && sed -i '/<\/body>/i\    <script type="module" src="app/cloudandx-touch.js"><\/script>' \
       /opt/cloudandx/novnc/vnc.html
 COPY --from=remote-ui-fetcher /opt/cloudandx/scrcpy/ /opt/cloudandx/scrcpy/
 COPY --from=remote-ui-fetcher /opt/cloudandx/dist/ /opt/cloudandx/dist/

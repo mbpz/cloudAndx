@@ -61,7 +61,7 @@ scripts/scrcpy-android17.sh
 
 首次访问需要接受项目持久化自签名证书；接受后页面使用 HTTPS/WSS 加密。浏览器中的鼠标点击、拖动和键盘输入由容器内 scrcpy 4.1 注入同一台 Android；noVNC
 1.7.0 和 websockify 0.13.0 只发布到宿主回环地址，raw VNC 5900 不发布。
-远程 X11 桌面与 scrcpy 的 `480x1080` 编码纹理尺寸一致，scrcpy 使用覆盖整个桌面的无边框窗口；noVNC 强制启用 `resize=scale` 并关闭 `view_only`，Android 画面会随浏览器可视区域自适应缩放，且不会被浏览器缓存的“仅查看”设置禁用输入。统一视频纹理、SDL 窗口和 VNC framebuffer 尺寸可避免鼠标坐标被重复放大。浏览器链路显式使用 scrcpy SDK 鼠标与键盘注入，左键点击和按住拖动按 Android 触控语义处理；视频限制为 30 FPS、零缓冲并使用 4 Mbps 码率，优先降低操作延迟。
+远程 X11 桌面与 scrcpy 的 `480x1080` 编码纹理尺寸一致，scrcpy 使用覆盖整个桌面的无边框窗口；noVNC 强制启用 `resize=scale` 并关闭 `view_only`，Android 画面会随浏览器可视区域自适应缩放，且不会被浏览器缓存的“仅查看”设置禁用输入。统一视频纹理、SDL 窗口和 VNC framebuffer 尺寸可避免鼠标坐标被重复放大。浏览器链路显式使用 scrcpy SDK 鼠标与键盘注入：左键点击和按住拖动按 Android 单指触控语义处理，Mac 触控板双指滚动会转换成连续的按下、移动、抬起手指滑动，不再作为桌面鼠标滚轮发送；视频限制为 30 FPS、零缓冲并使用 4 Mbps 码率，优先降低操作延迟。
 
 宿主 scrcpy client/server 必须保持同版。ADB 不对局域网或公网发布；跨主机使用时先通过
 SSH/VPN/零信任通道安全转发 6080，不直接把 Compose 端口改为 `0.0.0.0`，也不转发

@@ -81,12 +81,17 @@ grep -Fq 'EXPOSE 5555/tcp 6080/tcp 8090/tcp 8554/tcp' "${dockerfile}"
 grep -Fq 'NOVNC_VERSION=1.7.0' "${dockerfile}"
 grep -Fq 'docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json' "${dockerfile}"
 grep -Fq 'docker/emulator/novnc/cloudandx.css /opt/cloudandx/novnc/app/styles/cloudandx.css' "${dockerfile}"
+grep -Fq 'docker/emulator/novnc/cloudandx-touch.js /opt/cloudandx/novnc/app/cloudandx-touch.js' "${dockerfile}"
 grep -Fq 'app/styles/cloudandx.css' "${dockerfile}"
+grep -Fq 'app/cloudandx-touch.js' "${dockerfile}"
 grep -Fq '"view_only": false' docker/emulator/novnc/mandatory.json
 grep -Fq '"resize": "scale"' docker/emulator/novnc/mandatory.json
 grep -Fq ':root.noVNC_connected #noVNC_transition' docker/emulator/novnc/cloudandx.css
 grep -Fq 'pointer-events: none !important' docker/emulator/novnc/cloudandx.css
 grep -Fq 'cursor: pointer !important' docker/emulator/novnc/cloudandx.css
+grep -Fq "addEventListener('wheel'" docker/emulator/novnc/cloudandx-touch.js
+grep -Fq 'rfb._sendMouse(pointer.x, pointer.y, 1)' docker/emulator/novnc/cloudandx-touch.js
+grep -Fq 'rfb._sendMouse(pointer.x, pointer.y, 0)' docker/emulator/novnc/cloudandx-touch.js
 grep -Fq 'WEBSOCKIFY_VERSION=0.13.0' "${dockerfile}"
 grep -Fq 'SCRCPY_VERSION=4.1' "${dockerfile}"
 grep -Fq 'Xvfb' "${entrypoint}"

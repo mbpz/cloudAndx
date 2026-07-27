@@ -1,95 +1,46 @@
-name: cloudandx-android17
+name: cloudandx-android16
 
 services:
-  native-engine:
-    profiles: ["build"]
-    image: cloudandx/aemu-native-engine:37.1.7
+  android:
+    image: cloudandx/android16-redroid:16-r1
     platform: linux/arm64
     build:
-      context: ./docker/emulator/native-engine
-      target: bundle
-      args:
-        NATIVE_AEMU_REVISION: ${NATIVE_AEMU_REVISION:-37.1.7}
-        NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:-4663a00b87c46e488124549ec7c55dcdc334d18f95b9a865122e9b437f5df134}
-        NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}
-
-  emulator:
-    image: cloudandx/android17-play-emulator:37.0-r06
-    platform: linux/amd64
-    build:
       context: .
-      dockerfile: docker/emulator/Dockerfile
-      target: runtime
-      args:
-        ACCEPT_ANDROID_SDK_LICENSES: ${ACCEPT_ANDROID_SDK_LICENSES:-no}
-        NATIVE_ENGINE_IMAGE: ${NATIVE_ENGINE_IMAGE:-cloudandx/aemu-native-engine:37.1.7}
-        NATIVE_AEMU_REVISION: ${NATIVE_AEMU_REVISION:-37.1.7}
-        NATIVE_AEMU_SOURCE_LOCK_SHA256: ${NATIVE_AEMU_SOURCE_LOCK_SHA256:-4663a00b87c46e488124549ec7c55dcdc334d18f95b9a865122e9b437f5df134}
-        NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}
-    init: true
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+      dockerfile: docker/redroid/Dockerfile
+    privileged: true
     shm_size: 2gb
     environment:
-      DOCKER_ENGINE_ARCHITECTURE: ${DOCKER_ENGINE_ARCHITECTURE:-arm64}
-      ANDROID_RUNTIME_IMPLEMENTATION: ${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
-      AVD_NAME: Pixel_9_Android_17_Play_ARM64
-      EMULATOR_ACCEL: "off"
-      EMULATOR_CORES: ${EMULATOR_CORES:-8}
-      EMULATOR_MEMORY_MB: ${EMULATOR_MEMORY_MB:-4096}
-      EMULATOR_GPU: ${EMULATOR_GPU:-swiftshader}
-      EMULATOR_CONSOLE_SOCKET: /data/runtime/console/console.sock
-      EMULATOR_CONSOLE_AUTH_TOKEN_FILE: /data/runtime/secrets/token
-      ADB_PRIVATE_KEY_FILE: /data/runtime/adb/adbkey
-      ADB_PUBLIC_KEY_FILE: /data/runtime/adb/adbkey.pub
-      EMULATOR_WIPE_DATA: ${EMULATOR_WIPE_DATA:-0}
-      ANDROID_VERSION: "17"
-      ANDROID_API_LEVEL: "37"
-      GOOGLE_PLAY_TAG: google_apis_playstore
-      GOOGLE_PLAY_PACKAGE_PATH: system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a
-      GOOGLE_PLAY_ABI: arm64-v8a
-      GOOGLE_PLAY_EXPECTED_CHANNEL: stable
-      GOOGLE_PLAY_EXPECTED_CHANNEL_ID: channel-0
-      GOOGLE_PLAY_EXPECTED_REVISION: "6"
-      GOOGLE_PLAY_EXPECTED_URL: https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-playstore-ps16k-37.0_r06.zip
-      GOOGLE_PLAY_EXPECTED_CHECKSUM: sha1:ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4
-      GOOGLE_REPOSITORY_URLS: https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-4.xml
-      ALLOW_SOFTWARE_EMULATION_ONLY: "true"
-      PREFLIGHT_OUTPUT: /data/runtime/evidence/preflight.json
-      ADB_SERIAL: 127.0.0.1:5555
-      ADB_PATH: /opt/android-sdk/platform-tools/adb
-      BRIDGE_TOKEN_FILE: /data/runtime/secrets/token
-      ADB_READ_TIMEOUT_SECONDS: "180"
-      RUNTIME_HEALTH_BUDGET_SECONDS: "180"
-      RUNTIME_HEALTH_TTL_SECONDS: "60"
+      ANDROID_ADB_SERIAL: 127.0.0.1:5555
       DISPLAY: ":0"
       NOVNC_PORT: "6080"
       NOVNC_TLS: "true"
       VNC_PORT: "5900"
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=512m
-      - /run:rw,noexec,nosuid,nodev,size=16m
+    command:
+      - androidboot.redroid_width=${ANDROID_WIDTH:-1080}
+      - androidboot.redroid_height=${ANDROID_HEIGHT:-1920}
+      - androidboot.redroid_dpi=${ANDROID_DPI:-480}
+      - androidboot.redroid_fps=${ANDROID_FPS:-60}
+      - androidboot.redroid_gpu_mode=guest
+    devices:
+      - /dev/ashmem:/dev/ashmem
+      - /dev/dma_heap/system:/dev/dma_heap/system
     volumes:
       - emulator-data:/data
-      - ./contracts:/contracts:ro
+      - type: bind
+        source: /dev/binderfs/binder
+        target: /dev/binder
+      - type: bind
+        source: /dev/binderfs/hwbinder
+        target: /dev/hwbinder
+      - type: bind
+        source: /dev/binderfs/vndbinder
+        target: /dev/vndbinder
     ports:
       - 127.0.0.1:${ANDROID_ADB_PORT:-5555}:5555/tcp
-      - 127.0.0.1:${ANDROID_GRPC_PORT:-8554}:8554/tcp
-      - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
       - 127.0.0.1:${ANDROID_NOVNC_PORT:-6080}:6080/tcp
+      - 127.0.0.1:${DEVICE_BRIDGE_PORT:-8090}:8090/tcp
     stop_grace_period: 45s
     restart: "on-failure:3"
 
 volumes:
   emulator-data:
-
-networks:
-  default:
-    driver: bridge
-    enable_ipv6: true
-    ipam:
-      config:
-        - subnet: fd37:17:37::/64

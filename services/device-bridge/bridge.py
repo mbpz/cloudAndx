@@ -75,20 +75,30 @@ MAX_CONSOLE_LINE_BYTES = 4096
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
 PHONE_RE = re.compile(r"^[+0-9*#]{1,32}$")
 CONSOLE_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
-MIN_ANDROID_API_LEVEL = 37
-EXPECTED_ANDROID_ABI = "arm64-v8a"
-EXPECTED_PAGE_SIZE_BYTES = 16384
+MIN_ANDROID_API_LEVEL = _bounded_env_int("MIN_ANDROID_API_LEVEL", 37, 1, 100)
+EXPECTED_ANDROID_ABI = os.environ.get("EXPECTED_ANDROID_ABI", "arm64-v8a")
+EXPECTED_PAGE_SIZE_BYTES = _bounded_env_int(
+    "EXPECTED_PAGE_SIZE_BYTES", 16384, 4096, 65536
+)
 EXPECTED_AVD_NAME = os.environ.get(
     "EXPECTED_AVD_NAME", "Pixel_9_Android_17_Play_ARM64"
 )
-if not EXPECTED_AVD_NAME or any(
+if any(
     ord(character) < 32 or ord(character) == 127 for character in EXPECTED_AVD_NAME
 ):
     raise RuntimeError("EXPECTED_AVD_NAME must not contain control characters")
-REQUIRED_GOOGLE_PACKAGES = (
-    "com.android.vending",
-    "com.google.android.gms",
+REQUIRED_GOOGLE_PACKAGES = tuple(
+    package
+    for package in os.environ.get(
+        "REQUIRED_ANDROID_PACKAGES", "com.android.vending,com.google.android.gms"
+    ).split(",")
+    if package
 )
+CONSOLE_ENABLED = os.environ.get("EMULATOR_CONSOLE_ENABLED", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 ADB_READ_TIMEOUT_SECONDS = _bounded_env_int(
     "ADB_READ_TIMEOUT_SECONDS", 180, 30, 300
 )
@@ -441,14 +451,15 @@ def _assess_runtime_health(observed: dict[str, Any]) -> tuple[bool, str]:
         else:
             reasons.append(f"required package {package} is not installed")
 
-    avd_name = str(console.get("avd_name", ""))
-    if console.get("available") is not True:
-        console_error = str(console.get("error", "unavailable"))
-        reasons.append(f"emulator console is unavailable: {console_error}")
-    elif avd_name != EXPECTED_AVD_NAME:
-        reasons.append(
-            f"emulator console AVD name is {avd_name!r}; expected {EXPECTED_AVD_NAME!r}"
-        )
+    if CONSOLE_ENABLED:
+        avd_name = str(console.get("avd_name", ""))
+        if console.get("available") is not True:
+            console_error = str(console.get("error", "unavailable"))
+            reasons.append(f"emulator console is unavailable: {console_error}")
+        elif avd_name != EXPECTED_AVD_NAME:
+            reasons.append(
+                f"emulator console AVD name is {avd_name!r}; expected {EXPECTED_AVD_NAME!r}"
+            )
 
     return not reasons, "ready" if not reasons else "; ".join(reasons)
 
@@ -561,13 +572,14 @@ class Handler(BaseHTTPRequestHandler):
         observed["packages"] = packages
         if package_errors:
             observed["package_errors"] = package_errors
-        try:
-            avd_name = CONSOLE_CLIENT.command(
-                "avd", "name", timeout=_runtime_health_timeout(deadline)
-            )
-            observed["console"] = {"available": True, "avd_name": avd_name}
-        except ConsoleError as exc:
-            observed["console"] = {"available": False, "error": str(exc)}
+        if CONSOLE_ENABLED:
+            try:
+                avd_name = CONSOLE_CLIENT.command(
+                    "avd", "name", timeout=_runtime_health_timeout(deadline)
+                )
+                observed["console"] = {"available": True, "avd_name": avd_name}
+            except ConsoleError as exc:
+                observed["console"] = {"available": False, "error": str(exc)}
         ready, reason = _assess_runtime_health(observed)
         return ready, reason, observed
 

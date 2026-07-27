@@ -1,4 +1,6 @@
 {
+  "compression": 0,
+  "quality": 6,
   "resize": "scale",
   "view_only": false
 }

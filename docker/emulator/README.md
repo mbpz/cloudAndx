@@ -30,7 +30,7 @@ for that ABI remains queryable, but the runtime path fails closed rather than cl
 ## Safety boundary
 
 - Only Docker images, containers, volumes, and published loopback ports are used.
-- Nothing changes OrbStack configuration, macOS networking, DNS, routes, hypervisor settings, or system packages.
+- Nothing changes Docker Engine configuration, macOS networking, DNS, routes, hypervisor settings, or system packages.
 - The default path does not use `--privileged`, host networking, capabilities, or a host device.
 - ADB and insecure emulator gRPC are published only on `127.0.0.1` in every example.
 - The authenticated Emulator Console is available only through a mode-`0600` Unix socket shared with the device bridge; it has no container-network or host TCP exposure.
@@ -92,7 +92,7 @@ The current ARM64 path uses the native AEMU child and never attempts KVM for the
 arm64-v8a guest. Native x86_64 `up-kvm` build and runtime verification are intentionally
 deferred to an x86_64 host; nothing on this ARM machine attempts to build or run x86 AEMU.
 
-## ARM64 / OrbStack hybrid engine
+## ARM64 / Docker Engine hybrid engine
 
 The amd64 container entrypoint bypasses the x86_64 launcher for the ARM64 AVD and directly
 executes the bundled native AArch64 runner with the locked ARM64 `PT_INTERP` and bundle-local
@@ -162,7 +162,7 @@ no OSS `/dev/dsp`; this keeps guest audio timing and AEMU gRPC PCM/microphone
 paths without changing the guest or binding host audio devices.
 
 Compose enables IPv6 only on this project's Docker bridge for the virtual modem. It does not
-invoke `orb`/`orbctl` or change macOS/OrbStack networking, DNS, routes, firewall, or
+invoke provider CLIs or change macOS/Docker Engine networking, DNS, routes, firewall, or
 virtualization settings.
 
 ## Access without host installs

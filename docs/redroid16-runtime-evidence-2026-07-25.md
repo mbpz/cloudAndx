@@ -3,7 +3,7 @@
 ## 环境身份
 
 - 宿主：Apple M1 macOS；
-- Docker：`colima-cloudandx`，ARM64、VZ、Ubuntu 22.04、Linux 5.15；
+- Docker：ARM64 Linux Docker runtime，4 KiB pages、Ubuntu 22.04、Linux 5.15；
 - 容器镜像：`cloudandx/android16-redroid:16-r1`；
 - ReDroid 基础 digest：
   `sha256:7b1e389bd15f37af3bcd06138f5b2ffa7cfba4332bd5ef54c53e99c2f160a15b`；
@@ -50,7 +50,7 @@ P95 100 ms 目标；它只证明远程交互链路，不证明 Bluetooth、GMS �
   Android/容器健康检查随后仍通过；
 - Device Bridge 未授权写请求返回 401，带卷内 token 返回 200；
 - noVNC HTTPS 返回 200，明文 HTTP 被拒绝；
-- Colima 整机重启后容器恢复 `healthy`，Android 与三个入口恢复；
+- Docker Linux runtime 重启后容器恢复 `healthy`，Android 与三个入口恢复；
 - 故障注入杀死 Device Bridge 后，监督器关闭全部远程面且健康状态变为
   `unhealthy`；Android init 保持 PID 1，需外部编排或人工重启容器恢复。
 - 连续 1,878 秒（31 分 18 秒）按 10 秒间隔执行 180 次检查：Android boot、
@@ -87,6 +87,6 @@ sh tests/redroid-runtime-smoke-test.sh
 `sha256:b51bde9cef80f7bd7581148192f2b2f4d41f23c6344cfe88eceeb8ddd67490ee`
 隔离提取 HAL（文件 SHA-256
 `4d686c67288bb8154dc44d2b6ac761540aa4a5016e6d8aea6fc8971798e054b5`）。它同样使用
-`/system/bin/linker_asan64`，在当前 Android 16/Colima ARM64 环境收到 HCI 请求后于
+`/system/bin/linker_asan64`，在当前 Android 16/ARM64 Docker 环境收到 HCI 请求后于
 相同 libc/vDSO/ASan 路径崩溃。跨版本替换无效且不满足可维护性要求，测试制品已删除；
 后续只能验证无 ASan 的同版 HAL、remote RootCanal，或更换支持该 HAL 的宿主环境。

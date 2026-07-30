@@ -1,32 +1,41 @@
 # CloudAndx Android 16
 
-CloudAndx 在 Apple silicon 上以一个 ARM64 Docker 容器运行 Android 16 ReDroid，
-并让宿主 scrcpy 与浏览器 noVNC 独立控制同一台 Android。运行时只有一个
-`android` 容器和一个最终镜像；Android init 保持 PID 1，scrcpy、Xvfb、x11vnc、
+CloudAndx 以一个 ARM64 Docker 容器运行 Android 16 ReDroid，并让宿主 scrcpy
+与浏览器 noVNC 独立控制同一台 Android。运行时只有一个 `android` 容器和一个
+最终镜像；Android init 保持 PID 1，scrcpy、Xvfb、Openbox、x11vnc、
 websockify/noVNC、ADB 和受限 Device Bridge 由容器内监督器统一管理。
 
 ## 宿主要求
 
-ReDroid 依赖 Linux binder、ashmem 和 DMA-BUF。macOS 上必须使用项目专用的
-Ubuntu 22.04/5.15 ARM64 Colima profile；OrbStack 以及默认 6.8 内核不满足这条路线的
-设备契约。
+ReDroid 依赖 Linux binder、ashmem 和 DMA-BUF。本项目只通过 Docker CLI/Compose
+运行，不安装或调用任何 provider CLI；Docker context 由宿主基础设施预先配置，项目
+命令不会自行切换 context。Docker server 可以是本机 Linux、受控 Linux VM 或远程
+Linux 主机，但必须先通过项目能力门禁。执行以下命令前，Docker Engine 必须已经由
+宿主基础设施启动；项目不会启动或修复宿主 provider。
 
 ```sh
-CLOUDANDX_PROXY_URL=http://127.0.0.1:7897 ./scripts/setup-redroid-colima.sh
+./scripts/setup-redroid-host.sh
 ```
 
-脚本验证 4 KiB 页、IPv6、binderfs、ashmem、DMA-BUF，并完成一次 VM 重启恢复测试。
-所有项目命令显式指定 `colima-cloudandx`，避免 Docker 当前 context 被 OrbStack 改写。
-若旧 OrbStack Android 容器仍占用 5555/6080/8090，必须先停止它；runtime smoke 会用
-持久化 Bridge token 校验宿主端口确实属于当前 Colima 容器，并在串线时失败关闭。
+脚本在当前 Docker context 内以固定 ReDroid digest 运行特权探针，验证 4 KiB 页、IPv6、
+ashmem、binderfs 和 DMA-BUF；它不会安装内核模块或改变主机。能力不满足时探针会明确
+失败，必须先修复 Docker server 的内核设备；不得通过删除 Compose `devices`、切换未
+验证的 context 或降级到截图模式绕过门禁。
 
 ## 构建与启动
 
 ```sh
-docker --context colima-cloudandx compose build
-docker --context colima-cloudandx compose up -d
-docker --context colima-cloudandx compose ps
+docker compose build
+docker compose up -d
+docker compose ps
 ```
+
+构建阶段若 Docker server 无法直连 GitHub，可临时设置
+`CLOUDANDX_GITHUB_MIRROR=<HTTPS mirror>` 后再执行 `docker compose build`；下载制品仍
+按 Dockerfile 内固定 SHA-256 校验，mirror 只影响构建下载，不进入运行时配置。
+
+若宿主基础设施提供多个 Docker context，应在 Docker CLI 层预先选择通过门禁的 context；
+项目命令本身不创建、切换或管理这些 context。
 
 默认只发布到宿主回环地址：
 
@@ -49,8 +58,9 @@ scrcpy --serial 127.0.0.1:5555 --mouse=sdk --keyboard=sdk \
 ```
 
 容器中的 scrcpy client/server 同样固定为 4.1。浏览器链路是
-`scrcpy -> Xvfb -> x11vnc -> TLS websockify/noVNC`，使用 SDK 鼠标与键盘输入；左键
-点击、按住拖动和触控板滚动均转换为 Android 触摸语义。noVNC 固定 1.7.0，
+`scrcpy -> Xvfb/Openbox -> x11vnc -> TLS websockify/noVNC`，使用 SDK 鼠标与键盘输入；
+浏览器端显式捕获左键按下、拖动和释放，触控板滚动转换为 Android 触摸语义，避免
+Safari/WebKit 缩放 canvas 后丢失兼容鼠标事件。noVNC 固定 1.7.0，
 websockify 固定 0.13.0，下载制品均校验 SHA-256。
 
 当前 M1 使用 Chromium/noVNC canvas 内 `requestAnimationFrame` 实测 30 次浏览器
@@ -64,7 +74,7 @@ max 99.5 ms，达到验收文档的 P95 100 ms 门限。x11vnc 固定 1 ms poll/
 Device Bridge 只提供 allowlist API，没有任意 shell。读取 token：
 
 ```sh
-TOKEN=$(docker --context colima-cloudandx compose exec -T android sh -c 'cat /data/runtime/bridge/token')
+TOKEN=$(docker compose exec -T android sh -c 'cat /data/runtime/bridge/token')
 curl http://127.0.0.1:8090/livez
 curl http://127.0.0.1:8090/healthz
 curl -H "Authorization: Bearer ${TOKEN}" \
@@ -97,15 +107,16 @@ RootCanal 链路或支持该服务的新宿主环境，不能用跨版本二进�
 ## 运维
 
 ```sh
-docker --context colima-cloudandx compose logs --follow --tail 200 android
-docker --context colima-cloudandx compose exec -T android /opt/cloudandx/bin/healthcheck.sh
+docker compose logs --follow --tail 200 android
+docker compose exec -T android /opt/cloudandx/bin/healthcheck.sh
 sh tests/redroid-runtime-smoke-test.sh
-docker --context colima-cloudandx compose down            # 保留 Android 数据和 TLS/token
-docker --context colima-cloudandx compose down --volumes  # 删除项目数据卷
+docker compose down            # 保留 Android 数据和 TLS/token
+docker compose down --volumes  # 删除项目数据卷
 ```
 
 实现证据和路线边界见：
 
 - [双远程入口验收](docs/dual-remote-ui-acceptance.md)
+- [稳定运行方案与长期边界](docs/stable-runtime-architecture.md)
 - [远程 Android 经验与路线决策](docs/remote-android-lessons-and-next-steps.md)
 - [2026-07-25 ReDroid 16 运行证据](docs/redroid16-runtime-evidence-2026-07-25.md)

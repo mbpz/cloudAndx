@@ -23,7 +23,7 @@ fail() {
 cleanup() {
   trap - EXIT INT TERM HUP
   rm -f "${READY_FILE}"
-  for pid in "${BRIDGE_PID-}" "${SCRCPY_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${XVFB_PID-}"; do
+  for pid in "${BRIDGE_PID-}" "${SCRCPY_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${OPENBOX_PID-}" "${XVFB_PID-}"; do
     [ -z "${pid}" ] || kill -TERM "${pid}" 2>/dev/null || true
   done
 }
@@ -61,8 +61,19 @@ while [ "${remaining}" -gt 0 ]; do
 done
 [ -S /tmp/.X11-unix/X0 ] || fail 'Xvfb socket was not ready in 15 seconds'
 
+# Xvfb has no window manager. SDL can render without one, but it cannot
+# reliably transfer focus when a VNC client sends the first click. A tiny
+# in-container WM keeps the Android surface focused without adding a second
+# runtime container or changing Android input semantics.
+DISPLAY="${DISPLAY}" /usr/bin/openbox --sm-disable \
+  --config-file /opt/cloudandx/openbox/rc.xml \
+  >/data/runtime/openbox.log 2>&1 &
+OPENBOX_PID=$!
+sleep 1
+kill -0 "${OPENBOX_PID}" 2>/dev/null || fail 'openbox exited before scrcpy started'
+
 /usr/bin/x11vnc -display "${DISPLAY}" -rfbport "${VNC_PORT}" -localhost \
-  -shared -forever -nopw -wait 1 -defer 1 -nonap -nowait_bog -quiet &
+  -shared -forever -nopw -wait 1 -defer 1 -nonap -noxdamage -nowait_bog -quiet &
 X11VNC_PID=$!
 
 if [ ! -s "${TLS_CERT}" ] || [ ! -s "${TLS_KEY}" ]; then
@@ -87,7 +98,8 @@ ADB=/usr/bin/adb SCRCPY_SERVER_PATH=/opt/cloudandx/scrcpy/scrcpy-server \
     --stay-awake --max-size=1080 --max-fps=60 --video-bit-rate=8M \
     --video-buffer=0 --mouse=sdk --keyboard=sdk \
     --window-x=0 --window-y=0 --window-width=540 --window-height=960 \
-    --window-borderless >"${SCRCPY_LOG}" 2>&1 &
+    --window-borderless --always-on-top --window-title='CloudAndx Android' \
+    >"${SCRCPY_LOG}" 2>&1 &
 SCRCPY_PID=$!
 
 remaining=30
@@ -105,6 +117,7 @@ done
 
 while :; do
   kill -0 "${XVFB_PID}" 2>/dev/null || fail 'Xvfb exited unexpectedly'
+  kill -0 "${OPENBOX_PID}" 2>/dev/null || fail 'openbox exited unexpectedly'
   kill -0 "${X11VNC_PID}" 2>/dev/null || fail 'x11vnc exited unexpectedly'
   kill -0 "${NOVNC_PID}" 2>/dev/null || fail 'websockify exited unexpectedly'
   kill -0 "${SCRCPY_PID}" 2>/dev/null || fail 'scrcpy exited unexpectedly'

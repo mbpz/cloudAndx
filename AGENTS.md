@@ -12,7 +12,7 @@
 - 跨主机远程入口必须经过身份认证和授权，使用 SSH、VPN 或零信任通道；访问令牌不得写入镜像、源码、URL、持久化存储或日志。
 - Compose 默认端口继续绑定 `127.0.0.1`。noVNC 的 HTTPS/WSS 入口也必须绑定回环地址。需要跨主机访问时，只能通过受控的 HTTPS 反向代理、VPN 或零信任网关发布 noVNC，不得直接把内部控制端口绑定到 `0.0.0.0`。
 - Android 基线固定为 ARM64-only ReDroid 16 镜像 `redroid/redroid@sha256:7b1e389bd15f37af3bcd06138f5b2ffa7cfba4332bd5ef54c53e99c2f160a15b`。scrcpy 集成不得改变镜像来源、摘要校验、ARM64 运行架构、持久化卷或现有 fail-closed 门禁；远程管理层不能绕过 Compose 和证据门禁启动未验证的 Android 运行时。
-- Apple silicon 宿主固定使用独立的 ARM64 Colima profile、Ubuntu 22.04 和 5.15 内核。启动 Android 前必须 fail closed 校验 4 KiB 页、IPv6、ashmem、binderfs 及 DMA-BUF heaps，并验证这些设备跨 VM 重启恢复。OrbStack 与 6.8 内核不属于 ReDroid 16 支持路径。
+- 项目只使用 Docker Engine/CLI 与 Docker Compose 作为运行时入口；项目脚本、CI 和文档不得调用、安装、启动或硬编码 Colima、OrbStack 或其他 provider CLI，也不得自行切换 Docker context。Docker server 必须提供 ARM64 Linux、4 KiB 页、IPv6、ashmem、binderfs 及 DMA-BUF heaps；启动 Android 前必须由 `scripts/check-redroid-host.sh` fail closed 校验这些能力，宿主基础设施另行保证跨 VM/主机重启恢复。能力不满足时必须拒绝启动，不得删除设备挂载或降级成截图链路。
 - 新增或修改跨主机远程管理能力时，必须同时覆盖：未授权访问拒绝、权限边界、输入操作、断线重连、容器重启恢复及敏感信息不落盘测试，并更新 README 和相关架构/验收文档。
 
 ## 实施原则

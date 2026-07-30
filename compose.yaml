@@ -7,6 +7,8 @@ services:
     build:
       context: .
       dockerfile: docker/redroid/Dockerfile
+      args:
+        GITHUB_MIRROR: ${CLOUDANDX_GITHUB_MIRROR:-https://github.com}
     privileged: true
     shm_size: 2gb
     environment:

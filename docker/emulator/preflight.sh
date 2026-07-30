@@ -44,7 +44,7 @@ printf '%s\n' \
 case "${server_arch}" in
   x86_64|amd64)
     printf 'ERROR: x86_64 Docker Engine runtime is deferred until it is built and verified on x86_64 hardware.\n' >&2
-    printf '%s\n' 'No host, network, KVM, or OrbStack change was attempted.' >&2
+    printf '%s\n' 'No host, network, KVM, or Docker Engine change was attempted.' >&2
     exit 78
     ;;
   arm64|aarch64)

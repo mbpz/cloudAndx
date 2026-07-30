@@ -3,8 +3,9 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "${ROOT}"
-DOCKER_CONTEXT=${DOCKER_CONTEXT:-colima-cloudandx}
-export DOCKER_CONTEXT
+if [ -n "${DOCKER_CONTEXT:-}" ]; then
+  export DOCKER_CONTEXT
+fi
 
 container=$(docker compose ps -q android)
 [ -n "${container}" ]

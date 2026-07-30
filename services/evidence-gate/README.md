@@ -1,6 +1,6 @@
 # Android evidence gate
 
-This directory contains a Docker-only, fail-closed preflight and evidence validator for the Android 17 design. It does not start Android, change the host, configure OrbStack, or manage Kubernetes.
+This directory contains a Docker-only, fail-closed preflight and evidence validator for the Android 17 design. It does not start Android, change the host, configure the Docker Engine, or manage Kubernetes.
 
 ## What it proves
 

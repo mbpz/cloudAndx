@@ -10,6 +10,7 @@ ARG NOVNC_VERSION=1.7.0
 ARG NOVNC_SHA256=b1003a11b6e6e8d8f7f5e5586daae7f8ca651d8aee0aa155ff9ac841c48f52c6
 ARG WEBSOCKIFY_VERSION=0.13.0
 ARG WEBSOCKIFY_SHA256=b6413e364efd04f3c92ec8c17747e3c4adc20157c2ef1c5d019a26d944a46df8
+ARG GITHUB_MIRROR=https://github.com
 
 RUN sed -i \
       's|URIs: http://deb.debian.org/debian-security|URIs: http://mirrors.tuna.tsinghua.edu.cn/debian-security|; s|URIs: http://deb.debian.org/debian|URIs: http://mirrors.tuna.tsinghua.edu.cn/debian|' \
@@ -25,7 +26,7 @@ RUN sed -i \
         adb build-essential ca-certificates curl fonts-dejavu-core \
         libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev \
         libsdl3-dev libswresample-dev libusb-1.0-0-dev meson ninja-build \
-        openssl pkg-config procps python3 python3-pip x11vnc xvfb; do \
+        openbox openssl pkg-config procps python3 python3-pip x11vnc xvfb; do \
       attempt=$((attempt + 1)); test "${attempt}" -lt 12; \
       DEBIAN_FRONTEND=noninteractive apt-get -f install -y --fix-missing \
         -o Acquire::http::Proxy=false -o Acquire::https::Proxy=false \
@@ -34,13 +35,14 @@ RUN sed -i \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eu; \
+    github_mirror="${GITHUB_MIRROR%/}"; \
     curl --fail --location --retry 5 --retry-all-errors \
       --output /tmp/scrcpy.tar.gz \
-      "https://github.com/Genymobile/scrcpy/archive/refs/tags/v${SCRCPY_VERSION}.tar.gz"; \
+      "${github_mirror}/Genymobile/scrcpy/archive/refs/tags/v${SCRCPY_VERSION}.tar.gz"; \
     echo "${SCRCPY_SOURCE_SHA256}  /tmp/scrcpy.tar.gz" | sha256sum --check --strict -; \
     curl --fail --location --retry 5 --retry-all-errors \
       --output /tmp/scrcpy-server \
-      "https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-server-v${SCRCPY_VERSION}"; \
+      "${github_mirror}/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-server-v${SCRCPY_VERSION}"; \
     echo "${SCRCPY_SERVER_SHA256}  /tmp/scrcpy-server" | sha256sum --check --strict -; \
     mkdir -p /tmp/scrcpy-src /opt/cloudandx/scrcpy; \
     tar -xzf /tmp/scrcpy.tar.gz -C /tmp/scrcpy-src --strip-components=1; \
@@ -53,9 +55,10 @@ RUN set -eu; \
     rm -rf /tmp/scrcpy-src /tmp/scrcpy-build /tmp/scrcpy.tar.gz /tmp/scrcpy-server
 
 RUN set -eu; \
+    github_mirror="${GITHUB_MIRROR%/}"; \
     curl --fail --location --retry 5 --retry-all-errors \
       --output /tmp/novnc.tar.gz \
-      "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz"; \
+      "${github_mirror}/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz"; \
     echo "${NOVNC_SHA256}  /tmp/novnc.tar.gz" | sha256sum --check --strict -; \
     mkdir -p /opt/cloudandx; \
     tar -xzf /tmp/novnc.tar.gz -C /opt/cloudandx; \
@@ -63,7 +66,7 @@ RUN set -eu; \
     ln -s vnc.html /opt/cloudandx/novnc/index.html; \
     curl --fail --location --retry 5 --retry-all-errors \
       --output /tmp/websockify.tar.gz \
-      "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz"; \
+      "${github_mirror}/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz"; \
     echo "${WEBSOCKIFY_SHA256}  /tmp/websockify.tar.gz" | sha256sum --check --strict -; \
     python3 -m pip install --break-system-packages --no-cache-dir \
       /tmp/websockify.tar.gz; \
@@ -74,6 +77,7 @@ RUN set -eu; \
 COPY docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json
 COPY docker/emulator/novnc/cloudandx.css /opt/cloudandx/novnc/app/styles/cloudandx.css
 COPY docker/emulator/novnc/cloudandx-touch.js /opt/cloudandx/novnc/app/cloudandx-touch.js
+COPY docker/redroid/openbox/rc.xml /opt/cloudandx/openbox/rc.xml
 
 RUN sed -i '/app\/styles\/base.css/a\    <link rel="stylesheet" href="app/styles/cloudandx.css">' \
       /opt/cloudandx/novnc/vnc.html \

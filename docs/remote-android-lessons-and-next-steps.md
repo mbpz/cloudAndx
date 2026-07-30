@@ -15,14 +15,14 @@
 当前主路线固定为：
 
 ```text
-Apple silicon
-  -> Colima ARM64 / Virtualization.framework
-  -> Ubuntu 22.04 / Linux 5.15 / 4 KiB pages
+Apple silicon or ARM64 Linux host
+  -> provider-neutral Docker Linux runtime
+  -> kernel with 4 KiB pages and required Android devices
   -> ashmem + binderfs + DMA-BUF heaps
   -> ReDroid 16 ARM64-only（固定 digest）
   -> 同一 Android 实例
        +-- loopback ADB -> 宿主 scrcpy 4.1
-       +-- 容器内实时显示/输入 bridge -> x11vnc -> noVNC 1.7.0
+       +-- 容器内实时显示/输入 bridge -> Xvfb/Openbox -> x11vnc -> noVNC 1.7.0
        +-- 受限 Device Bridge API
 ```
 
@@ -48,7 +48,7 @@ Apple silicon
 
 ### 为什么仍然不可用
 
-OrbStack 没有为该 AEMU 路径提供 `/dev/kvm` 和可用 GPU render node，最终
+当前 ARM64 Docker runtime 没有为该 AEMU 路径提供 `/dev/kvm` 和可用 GPU render node，最终
 执行路径是 ARM TCG 加 SwiftShader。实测结果为：
 
 | 指标 | 结果 |
@@ -89,17 +89,16 @@ redroid/redroid@sha256:7b1e389bd15f37af3bcd06138f5b2ffa7cfba4332bd5ef54c53e99c2f
 ```
 
 使用 `16.0.0_64only` 路线是必要的。普通镜像包含 ARM32 用户态，在 ARM64-only
-Colima 内核中触发过 32 位 BoringSSL 自检 `Exec format error`，随后 Android
+此前的 ARM64 Linux Docker 内核中触发过 32 位 BoringSSL 自检 `Exec format error`，随后 Android
 按 fail-closed 逻辑重启。
 
 ### 宿主兼容性试验
 
 | 宿主 | 结果 | 证据 |
 | --- | --- | --- |
-| OrbStack Linux 7.0 | 不支持 | 有 binder 设备但没有可用 binderfs；ReDroid binder 返回 `EACCES` |
-| Colima Ubuntu 24.04 / 6.8 | 不支持 | binderfs、DMA-BUF 可用，但没有 ashmem；gralloc/SurfaceFlinger 循环崩溃 |
+| ARM64 Linux Docker / 6.8 | 不支持 | binderfs、DMA-BUF 可用，但没有 ashmem；gralloc/SurfaceFlinger 循环崩溃 |
+| ARM64 Linux Docker / 5.15 | 通过 | `ASHMEM=m`、`BINDERFS=m`、`DMABUF_HEAPS=y`、IPv6、4 KiB pages 均满足 |
 | 在 6.8 编译 redroid ashmem module | 不可行 | `vm_flags`、shrinker 等内核 API 已变化，模块无法直接编译 |
-| Colima Ubuntu 22.04 / 5.15 | 通过 | `ASHMEM=m`、`BINDERFS=m`、`DMABUF_HEAPS=y`、IPv6、4 KiB pages 均满足 |
 
 在 6.8 环境中，即使设置 `androidboot.use_memfd=true`、`sys.use_memfd=1` 并
 放宽 DMA heap 权限，当前 ReDroid 16 gralloc 仍尝试打开 `/dev/ashmem`，日志
@@ -124,13 +123,13 @@ RenderEngine: output buffer not gpu writeable
 /dev/binderfs/vndbinder -> /dev/vndbinder
 ```
 
-ashmem 和 DMA-BUF system heap 则作为字符设备映射。宿主初始化由
-`scripts/setup-redroid-colima.sh` 完成，并在启动 Android 前强制重启一次 VM，
-证明模块加载、binderfs mount 和权限不是仅当前 shell 有效。
+ashmem 和 DMA-BUF system heap 则作为字符设备映射。宿主设备由 provider 自己
+初始化；`scripts/setup-redroid-host.sh` 只在启动 Android 前执行能力预检，provider
+必须另外证明模块加载、binderfs mount 和权限在重启后仍有效。
 
 ### 已取得的运行结果
 
-在 M1、8 CPU、8 GB Colima profile 上已观察到：
+在已验证的 M1 ARM64 Linux provider、8 CPU、8 GB 配置上已观察到：
 
 - ReDroid 返回 `ro.build.version.release=16`；
 - `sys.boot_completed=1`；
@@ -140,13 +139,13 @@ ashmem 和 DMA-BUF system heap 则作为字符设备映射。宿主初始化由
 - 宿主 scrcpy 4.1 成功推送同版 server，识别 Android 16，Metal renderer
   输出 `Texture: 1080x1920`；
 - 实时 screencap 为 1080×1920，证明图形管线不是黑屏或静态占位图；
-- 容器内 scrcpy 4.1 产生 `Texture: 606x1080`，同一画面经 Xvfb、x11vnc、
+- 容器内 scrcpy 4.1 产生 `Texture: 606x1080`，同一画面经 Xvfb/Openbox、x11vnc、
   TLS websockify/noVNC 发布；
 - 浏览器点击打开 Gallery、连续拖动打开应用抽屉、键盘输入 `settings` 后
   Android 搜索框显示对应文本；
 - 默认 Compose 只有一个 `android` 服务，ADB/noVNC/Device Bridge 分别只绑定
   `127.0.0.1:5555/6080/8090`；
-- Colima 整机重启后容器恢复为 `healthy`，Android 与三个入口重新可用；
+- provider 整机重启后容器恢复为 `healthy`，Android 与三个入口重新可用；
 - Device Bridge 未授权写操作返回 401，使用卷内 token 后返回 200。
 
 这些证据证明 Android 16 与双远程入口主路径成立。30 次浏览器点击到首个可见
@@ -165,16 +164,16 @@ max 99.5 ms；较旧 AEMU 的 16.2 秒改善超过两个数量级，并达到原
 | scrcpy unauthorized/没有弹窗 | AEMU ADB key 与慢 UI 状态 | ReDroid loopback ADB 已直接进入 `device` |
 | noVNC 有画面但点击无反应 | 多级输入转译叠加慢 Android | 使用同一 ReDroid 的容器内 scrcpy 4.1 bridge，固定 SDK 鼠标语义并做可见状态验收 |
 | noVNC 黑屏 | bridge 首帧未进入 Xvfb | 首帧 marker 纳入健康检查；任一必需进程退出即关闭全部远程面并使容器 unhealthy |
-| OrbStack 不支持 ReDroid | binderfs/ashmem 接口不匹配 | 独立 Colima 5.15 profile；不改现有 OrbStack 项目 |
+| 某些 ARM64 Docker runtime 不支持 ReDroid | binderfs/ashmem/DMA-BUF 接口不匹配 | 预检失败则拒绝启动；不放宽 Compose 门禁 |
 | 6.8 SurfaceFlinger 崩溃 | ReDroid gralloc 仍依赖 ashmem | 固定 Ubuntu 22.04/5.15，不维护脆弱的 6.8 私有模块补丁 |
 | Android 17 ReDroid 编译困难 | 上游未支持且构建资源不足 | 产品基线调整到上游成熟 Android 16 |
-| Bluetooth 启动后保持 OFF | ReDroid 15/16 的 ASan RootCanal HAL 均在当前 Colima ARM64 的 libc/vDSO 路径崩溃 | 明确标记 `not_supported`；拒绝跨版本覆盖，后续只接受无 ASan 同版 HAL、remote RootCanal 或兼容宿主 |
+| Bluetooth 启动后保持 OFF | ReDroid 15/16 的 ASan RootCanal HAL 均在已验证 ARM64 Linux Docker 的 libc/vDSO 路径崩溃 | 明确标记 `not_supported`；拒绝跨版本覆盖，后续只接受无 ASan 同版 HAL、remote RootCanal 或兼容宿主 |
 
 ## 已完成与剩余工作
 
 已完成固定 ReDroid digest、单 ARM64 最终镜像、单运行容器、scrcpy 4.1、
-Xvfb/x11vnc、noVNC 1.7.0、websockify 0.13.0、TLS、Device Bridge 鉴权、
-回环端口和 Colima 重启恢复。默认 Compose 已切换到 ReDroid 16，不再构建或
+Xvfb/Openbox/x11vnc、noVNC 1.7.0、websockify 0.13.0、TLS、Device Bridge 鉴权、
+回环端口和 provider 重启恢复。默认 Compose 已切换到 ReDroid 16，不再构建或
 运行 AEMU/native-engine。
 
 剩余工作只有可量化的交付门禁：
@@ -187,7 +186,7 @@ Xvfb/x11vnc、noVNC 1.7.0、websockify 0.13.0、TLS、Device Bridge 鉴权、
 4. 新路线稳定后单独删除旧 `docker/emulator`、native AEMU 和 Android 17
    历史实现；在删除前保留它们作为旧方案证据，不再接入默认 Compose。
 5. Bluetooth 若进入交付范围，必须先通过 HAL 存活、Framework ON、扫描、配对和
-   重启恢复门禁；现有 M1/Colima 环境不把 Bluetooth 纳入已支持能力。
+   重启恢复门禁；现有 M1 ARM64 Docker 环境不把 Bluetooth 纳入已支持能力。
 
 ## 能力边界
 

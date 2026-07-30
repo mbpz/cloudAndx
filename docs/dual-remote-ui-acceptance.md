@@ -7,7 +7,7 @@
 
 ```text
 ReDroid 16 / one serial
-  +-- container-local ADB -> scrcpy 4.1 ARM64 -> Xvfb -> x11vnc
+  +-- container-local ADB -> scrcpy 4.1 ARM64 -> Xvfb/Openbox -> x11vnc
   |                                               -> noVNC 1.7.0 / HTTPS
   +-- host-loopback ADB ----------------------------> host scrcpy 4.1
   +-- container-local ADB --------------------------> authenticated Device Bridge
@@ -21,16 +21,16 @@ scrcpy，noVNC 也必须独立可用。宿主 scrcpy 退出或断线不能关闭
 
 进入 Android 启动前必须全部满足：
 
-- ARM64 Colima profile；
-- Ubuntu 22.04、Linux 5.15；
+- ARM64 Linux Docker runtime；
+- provider 已通过 `scripts/check-redroid-host.sh`；
 - page size 为 4096；
 - `CONFIG_IPV6=y`；
 - `CONFIG_DMABUF_HEAPS=y`；
 - `CONFIG_ASHMEM=m` 且 `/dev/ashmem` 可用；
 - `CONFIG_ANDROID_BINDERFS=m`，三个 binderfs 节点可用；
-- 所有条件在 Colima stop/start 后仍成立。
+- 所有条件在 provider 重启后仍成立。
 
-OrbStack、Linux 6.8、缺失 ashmem 或用伪造 binder device inode 的环境必须
+缺失 ashmem、binderfs、DMA-BUF 或用伪造 binder device inode 的环境必须
 fail closed，不允许以降级图形模式继续启动并产生黑屏。
 
 ## 功能矩阵
@@ -44,7 +44,7 @@ fail closed，不允许以降级图形模式继续启动并产生黑屏。
 | macOS 触控板手势 | 必须转换为 Android 触控 | scrcpy 原生支持 | 不互相锁死 |
 | 键盘、文本、返回与 Home | 必须 | 必须 | 输入目标一致 |
 | 客户端断线重连 | 必须 | 必须 | 另一入口不中断 |
-| 容器和 Colima 重启恢复 | 必须 | 必须 | 不创建第二 Android |
+| 容器和宿主 runtime 重启恢复 | 必须 | 必须 | 不创建第二 Android |
 | 数据持久化 | 必须 | 必须 | 重启后结果一致 |
 
 鼠标变成手形、RFB 有 pointer packet、ADB 返回成功或生成静态截图都不是功能
@@ -61,7 +61,7 @@ fail closed，不允许以降级图形模式继续启动并产生黑屏。
 
 ## 性能门禁
 
-只有目标 Apple silicon/Colima/ReDroid 16 环境的实测数据可以支持 `realtime`
+只有目标 ARM64 Linux/ReDroid 16 环境的实测数据可以支持 `realtime`
 声明：
 
 | 指标 | 门限 |
@@ -80,7 +80,7 @@ build、serial、客户端版本、时间戳和原始数据。不得用 ADB 命�
 
 | 项目 | 状态 | 当前证据 |
 | --- | --- | --- |
-| 5.15 宿主门禁与重启恢复 | 通过 | `setup-redroid-colima.sh` 已完整实跑 |
+| 宿主设备门禁与重启恢复 | 通过 | `setup-redroid-host.sh` + provider 重启实跑 |
 | Android 16 启动 | 通过 | `sys.boot_completed=1`，约 11–22 秒 |
 | Framework/图形 | 通过 | system_server、SurfaceFlinger、1080×1920 screencap |
 | 宿主 scrcpy 4.1 | 通过 | 状态 `device`、Metal、`Texture: 1080x1920` |

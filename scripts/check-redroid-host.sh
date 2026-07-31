@@ -36,9 +36,9 @@ log "checking Docker Linux ${architecture} kernel ${kernel}"
 # is intentional: the final Compose service is privileged as well, and a
 # non-privileged check would report the container sandbox rather than the host
 # kernel device contract.
-${DOCKER_BIN} run --rm --privileged --platform linux/arm64 \
+${DOCKER_BIN} run --rm --interactive --privileged --platform linux/arm64 \
   --volume /dev:/cloudandx-host-dev:ro \
-  --entrypoint /bin/sh "${PROBE_IMAGE}" -s cloudandx-host-probe "${PAGE_SIZE}" <<'EOF'
+  --entrypoint /bin/sh "${PROBE_IMAGE}" -s "${PAGE_SIZE}" <<'EOF'
 set -eu
 expected_page_size=$1
 page_size=$(getconf PAGESIZE 2>/dev/null || true)

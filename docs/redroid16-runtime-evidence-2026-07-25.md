@@ -1,5 +1,11 @@
 # ReDroid 16 运行证据（2026-07-25）
 
+> 本文运行数据来自通过 ashmem、binderfs 和 DMA-BUF 门禁的 ARM64 Linux Docker
+> server，不代表每个 macOS Docker provider 都支持 ReDroid。2026-07-30 在当前
+> Apple M1 的 OrbStack Docker context 复核时，修正后的探针因缺少
+> `/cloudandx-host-dev/ashmem`（并同时缺少 DMA-BUF system heap 与 binderfs）而 fail
+> closed；该环境没有新的 Android 双入口运行证据。
+
 ## 环境身份
 
 - 宿主：Apple M1 macOS；

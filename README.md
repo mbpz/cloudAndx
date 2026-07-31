@@ -22,6 +22,11 @@ ashmem、binderfs 和 DMA-BUF；它不会安装内核模块或改变主机。能
 失败，必须先修复 Docker server 的内核设备；不得通过删除 Compose `devices`、切换未
 验证的 context 或降级到截图模式绕过门禁。
 
+2026-07-30 在当前 Apple M1 的 OrbStack Docker context 复核时，探针正确失败并报告
+`/cloudandx-host-dev/ashmem` 缺失；同一 Linux runtime 也没有 DMA-BUF system heap
+和 binderfs 三节点。因此该 context 不能启动 ReDroid 16，Compose 不应被强行绕过；需要
+改用实际提供这些内核设备的 ARM64 Linux Docker server。项目不会安装或调用 OrbStack。
+
 ## 构建与启动
 
 ```sh
@@ -63,7 +68,8 @@ scrcpy --serial 127.0.0.1:5555 --mouse=sdk --keyboard=sdk \
 Safari/WebKit 缩放 canvas 后丢失兼容鼠标事件。noVNC 固定 1.7.0，
 websockify 固定 0.13.0，下载制品均校验 SHA-256。
 
-当前 M1 使用 Chromium/noVNC canvas 内 `requestAnimationFrame` 实测 30 次浏览器
+此前具备完整内核设备的 ARM64 Linux Docker server 上，使用 Chromium/noVNC canvas 内
+`requestAnimationFrame` 实测 30 次浏览器
 点击到首个可见画面变化为 min 9.2 ms、median 43.8 ms、P95 85.2 ms、
 max 99.5 ms，达到验收文档的 P95 100 ms 门限。x11vnc 固定 1 ms poll/defer，
 保持非线程事件循环，避免输入与画面更新排队。该结果证明交互延迟门限，不等同于

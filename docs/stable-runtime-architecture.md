@@ -20,6 +20,11 @@ noVNC 是两个独立客户端，共享同一个 `127.0.0.1:5555` Android serial
 只要通过 `scripts/check-redroid-host.sh` 即可作为实现；缺少 ARM64 Linux、ashmem、
 binderfs 或 DMA-BUF 时必须 fail closed，不能通过项目命令切换到另一个 context 绕过门禁。
 
+2026-07-30 复核当前 Apple M1 的 OrbStack Docker context 时，修正后的特权探针报告
+`/cloudandx-host-dev/ashmem` 缺失；该 context 同时没有 DMA-BUF system heap 与 binderfs
+三节点，故不属于 ReDroid 16 支持路径。历史运行证据来自通过全部门禁的 ARM64 Linux
+Docker server；不能把 OrbStack 的 Docker API 可用误认为 Android 内核能力满足。
+
 ## 为什么暂不切换 WebRTC/scrcpy Web
 
 官方 noVNC 1.7.0 + websockify 0.13.0 是版本稳定、协议成熟、可审计且能在单镜像内

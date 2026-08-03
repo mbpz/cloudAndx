@@ -75,7 +75,7 @@ sh tests/redroid-runtime-smoke-test.sh
 ## 仍需保留的边界
 
 - 当前镜像是 AOSP，不含 Google Play/GMS；
-- AEMU Console 专用的 GPS、短信、电话、网络和电池端点失败关闭；
+- Android Emulator Console 专用的 GPS、短信、电话、网络和电池端点失败关闭；
 - 真实基带、NFC/SE、TEE/StrongBox、Widevine L1、硬件 Play Integrity 和真实
   传感器不由容器方案提供；
 - 固定 ReDroid digest 的 `android.hardware.bluetooth@1.1-service.sim` 在 ARM64

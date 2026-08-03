@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Allowlisted HTTP bridge for an Android Emulator via ADB and Console."""
+"""Allowlisted HTTP bridge for Android via ADB and an optional emulator console."""
 
 from __future__ import annotations
 
@@ -75,13 +75,13 @@ MAX_CONSOLE_LINE_BYTES = 4096
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
 PHONE_RE = re.compile(r"^[+0-9*#]{1,32}$")
 CONSOLE_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
-MIN_ANDROID_API_LEVEL = _bounded_env_int("MIN_ANDROID_API_LEVEL", 37, 1, 100)
+MIN_ANDROID_API_LEVEL = _bounded_env_int("MIN_ANDROID_API_LEVEL", 36, 1, 100)
 EXPECTED_ANDROID_ABI = os.environ.get("EXPECTED_ANDROID_ABI", "arm64-v8a")
 EXPECTED_PAGE_SIZE_BYTES = _bounded_env_int(
-    "EXPECTED_PAGE_SIZE_BYTES", 16384, 4096, 65536
+    "EXPECTED_PAGE_SIZE_BYTES", 4096, 4096, 65536
 )
 EXPECTED_AVD_NAME = os.environ.get(
-    "EXPECTED_AVD_NAME", "Pixel_9_Android_17_Play_ARM64"
+    "EXPECTED_AVD_NAME", "CloudAndx_Android_Emulator"
 )
 if any(
     ord(character) < 32 or ord(character) == 127 for character in EXPECTED_AVD_NAME
@@ -90,11 +90,11 @@ if any(
 REQUIRED_GOOGLE_PACKAGES = tuple(
     package
     for package in os.environ.get(
-        "REQUIRED_ANDROID_PACKAGES", "com.android.vending,com.google.android.gms"
+        "REQUIRED_ANDROID_PACKAGES", ""
     ).split(",")
     if package
 )
-CONSOLE_ENABLED = os.environ.get("EMULATOR_CONSOLE_ENABLED", "true").lower() in {
+CONSOLE_ENABLED = os.environ.get("EMULATOR_CONSOLE_ENABLED", "false").lower() in {
     "1",
     "true",
     "yes",

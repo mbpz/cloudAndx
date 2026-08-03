@@ -43,9 +43,24 @@ grep -Fq 'ARG GITHUB_MIRROR=https://github.com' "${dockerfile}"
 grep -Fq 'GITHUB_MIRROR: ${CLOUDANDX_GITHUB_MIRROR:-https://github.com}' "${compose_file}"
 grep -Fq 'COPY --from=ui-toolchain /etc/alternatives/' "${dockerfile}"
 grep -Fq 'COPY services/device-bridge/bridge.py /opt/cloudandx/device-bridge/bridge.py' "${dockerfile}"
+grep -Fq 'blas/libblas.so.3.12.1' "${dockerfile}"
+grep -Fq '/opt/cloudandx/scrcpy/scrcpy --version' "${dockerfile}"
+grep -Fq 'COPY docker/redroid/novnc/mandatory.json' "${dockerfile}"
+grep -Fq 'COPY docker/redroid/novnc/cloudandx.css' "${dockerfile}"
+grep -Fq 'COPY docker/redroid/novnc/cloudandx-touch.js' "${dockerfile}"
 grep -Fq 'ENTRYPOINT ["/usr/bin/dash", "/opt/cloudandx/bin/container-entrypoint.sh"]' "${dockerfile}"
 
 grep -Fq 'exec /init qemu=1 androidboot.hardware=redroid "$@"' "${entrypoint}"
+grep -Fq 'getconf PAGESIZE' "${entrypoint}"
+grep -Fq '/proc/sys/net/ipv6/conf/all/disable_ipv6' "${entrypoint}"
+for device in /dev/ashmem /dev/dma_heap/system /dev/binder /dev/hwbinder /dev/vndbinder; do
+  grep -Fq "${device}" "${entrypoint}"
+done
+grep -Fq 'required character device is missing' "${entrypoint}"
+grep -Fq 'runtime preflight passed' "${entrypoint}"
+preflight_line=$(grep -n 'runtime preflight passed' "${entrypoint}" | cut -d: -f1)
+token_line=$(grep -n '/usr/bin/openssl rand -hex 32' "${entrypoint}" | cut -d: -f1)
+[ "${preflight_line}" -lt "${token_line}" ]
 grep -Fq 'SCRCPY_SERVER_PATH=/opt/cloudandx/scrcpy/scrcpy-server' "${supervisor}"
 grep -Fq '/usr/bin/stdbuf -oL -eL /opt/cloudandx/scrcpy/scrcpy' "${supervisor}"
 grep -Fq -- '--mouse=sdk --keyboard=sdk' "${supervisor}"
@@ -63,15 +78,33 @@ grep -Fq "kill -0 \"\${BRIDGE_PID}\"" "${supervisor}"
 grep -Fq '[ -f "${ready}" ]' "${healthcheck}"
 grep -Fq 'http://127.0.0.1:8090/livez' "${healthcheck}"
 
-grep -Fq '"view_only": false' docker/emulator/novnc/mandatory.json
-grep -Fq '"resize": "scale"' docker/emulator/novnc/mandatory.json
-grep -Fq '"compression": 0' docker/emulator/novnc/mandatory.json
+grep -Fq '"view_only": false' docker/redroid/novnc/mandatory.json
+grep -Fq '"resize": "scale"' docker/redroid/novnc/mandatory.json
+grep -Fq '"compression": 0' docker/redroid/novnc/mandatory.json
 grep -Fq -- '-wait 1 -defer 1 -nonap -noxdamage -nowait_bog' "${supervisor}"
 ! grep -Fq -- '-threads' "${supervisor}"
-grep -Fq "addEventListener('wheel'" docker/emulator/novnc/cloudandx-touch.js
-grep -Fq "addEventListener('mousedown'" docker/emulator/novnc/cloudandx-touch.js
-grep -Fq 'stopImmediatePropagation' docker/emulator/novnc/cloudandx-touch.js
+grep -Fq "addEventListener('wheel'" docker/redroid/novnc/cloudandx-touch.js
+grep -Fq "addEventListener('mousedown'" docker/redroid/novnc/cloudandx-touch.js
+grep -Fq 'stopImmediatePropagation' docker/redroid/novnc/cloudandx-touch.js
 grep -Fq "curl --noproxy '*'" "${runtime_smoke}"
 grep -Fq 'FAIL: noVNC accepted plaintext HTTP' "${runtime_smoke}"
+
+for retired_path in \
+  compose.kvm.yaml \
+  contracts \
+  docker/emulator \
+  services/evidence-gate; do
+  [ ! -e "${retired_path}" ] || {
+    printf 'FAIL: retired runtime path still exists: %s\n' "${retired_path}" >&2
+    exit 1
+  }
+done
+
+if grep -R -n -E 'docker/emulator|services/evidence-gate|compose\.kvm|native-engine' \
+  --exclude=compose-contract-test.sh \
+  README.md compose.yaml docker/redroid docs scripts services tests; then
+  echo 'FAIL: supported runtime still references a retired implementation' >&2
+  exit 1
+fi
 
 echo 'compose/redroid single-container contract: PASS'

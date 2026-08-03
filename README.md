@@ -5,6 +5,9 @@ CloudAndx 以一个 ARM64 Docker 容器运行 Android 16 ReDroid，并让宿主 
 最终镜像；Android init 保持 PID 1，scrcpy、Xvfb、Openbox、x11vnc、
 websockify/noVNC、ADB 和受限 Device Bridge 由容器内监督器统一管理。
 
+仓库只保留这条受支持的运行路径；历史实验分支及其多容器准入链路已经退役，
+不再参与构建、测试或部署。
+
 ## 宿主要求
 
 ReDroid 依赖 Linux binder、ashmem 和 DMA-BUF。本项目只通过 Docker CLI/Compose
@@ -88,7 +91,7 @@ curl -H "Authorization: Bearer ${TOKEN}" \
   -d '{"x":540,"y":960}' http://127.0.0.1:8090/v1/input/tap
 ```
 
-ReDroid 没有 AEMU Console，因此 GPS、短信、电话、网络和电池等 AEMU Console 专用
+ReDroid 没有 Android Emulator Console，因此 GPS、短信、电话、网络和电池等 Console 专用
 端点会失败关闭；截图、APK、应用列表、日志、点击、滑动、按键、文本、旋转和重启仍走
 ADB allowlist。token 与 noVNC TLS 私钥只保存在 `emulator-data` 卷中。
 
@@ -124,5 +127,4 @@ docker compose down --volumes  # 删除项目数据卷
 
 - [双远程入口验收](docs/dual-remote-ui-acceptance.md)
 - [稳定运行方案与长期边界](docs/stable-runtime-architecture.md)
-- [远程 Android 经验与路线决策](docs/remote-android-lessons-and-next-steps.md)
 - [2026-07-25 ReDroid 16 运行证据](docs/redroid16-runtime-evidence-2026-07-25.md)

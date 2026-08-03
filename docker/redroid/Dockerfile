@@ -74,9 +74,9 @@ RUN set -eu; \
     test "${websockify_version}" = "${WEBSOCKIFY_VERSION}"; \
     rm -f /tmp/novnc.tar.gz /tmp/websockify.tar.gz
 
-COPY docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json
-COPY docker/emulator/novnc/cloudandx.css /opt/cloudandx/novnc/app/styles/cloudandx.css
-COPY docker/emulator/novnc/cloudandx-touch.js /opt/cloudandx/novnc/app/cloudandx-touch.js
+COPY docker/redroid/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json
+COPY docker/redroid/novnc/cloudandx.css /opt/cloudandx/novnc/app/styles/cloudandx.css
+COPY docker/redroid/novnc/cloudandx-touch.js /opt/cloudandx/novnc/app/cloudandx-touch.js
 COPY docker/redroid/openbox/rc.xml /opt/cloudandx/openbox/rc.xml
 
 RUN sed -i '/app\/styles\/base.css/a\    <link rel="stylesheet" href="app/styles/cloudandx.css">' \
@@ -109,6 +109,12 @@ COPY services/device-bridge/bridge.py /opt/cloudandx/device-bridge/bridge.py
 COPY --chmod=0555 docker/redroid/bin/container-entrypoint.sh /opt/cloudandx/bin/container-entrypoint.sh
 COPY --chmod=0555 docker/redroid/bin/ui-supervisor.sh /opt/cloudandx/bin/ui-supervisor.sh
 COPY --chmod=0555 docker/redroid/bin/healthcheck.sh /opt/cloudandx/bin/healthcheck.sh
+
+# Debian's BLAS/LAPACK public names are alternatives symlinks. ReDroid owns
+# /etc, so overlaying the Debian alternatives directory is not reliable even
+# though the actual libraries under /usr are present. Keep the runtime names
+# inside the copied /usr tree and prove that scrcpy resolves every dependency.
+RUN ["/usr/bin/dash", "-ec", "ln -sfn blas/libblas.so.3.12.1 /usr/lib/aarch64-linux-gnu/libblas.so.3; ln -sfn lapack/liblapack.so.3.12.1 /usr/lib/aarch64-linux-gnu/liblapack.so.3; /opt/cloudandx/scrcpy/scrcpy --version | grep -F 'scrcpy 4.1'"]
 
 ENV DISPLAY=:0 \
     ANDROID_ADB_SERIAL=127.0.0.1:5555 \

@@ -11,6 +11,13 @@ from unittest.mock import Mock, call, patch
 
 
 os.environ.setdefault("BRIDGE_TOKEN", "test-token")
+os.environ.setdefault("MIN_ANDROID_API_LEVEL", "37")
+os.environ.setdefault("EXPECTED_PAGE_SIZE_BYTES", "16384")
+os.environ.setdefault(
+    "REQUIRED_ANDROID_PACKAGES", "com.android.vending,com.google.android.gms"
+)
+os.environ.setdefault("EMULATOR_CONSOLE_ENABLED", "true")
+os.environ.setdefault("EXPECTED_AVD_NAME", "CloudAndx_Android_Emulator")
 MODULE_PATH = Path(__file__).parents[1] / "bridge.py"
 SPEC = importlib.util.spec_from_file_location("bridge", MODULE_PATH)
 bridge = importlib.util.module_from_spec(SPEC)
@@ -19,6 +26,28 @@ SPEC.loader.exec_module(bridge)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_standalone_defaults_match_redroid_16(self):
+        names = (
+            "MIN_ANDROID_API_LEVEL",
+            "EXPECTED_PAGE_SIZE_BYTES",
+            "REQUIRED_ANDROID_PACKAGES",
+            "EMULATOR_CONSOLE_ENABLED",
+            "EXPECTED_AVD_NAME",
+        )
+        with patch.dict(os.environ, {name: "" for name in names}, clear=False):
+            for name in names:
+                os.environ.pop(name, None)
+            spec = importlib.util.spec_from_file_location("bridge_defaults", MODULE_PATH)
+            defaults = importlib.util.module_from_spec(spec)
+            assert spec.loader
+            spec.loader.exec_module(defaults)
+
+        self.assertEqual(defaults.MIN_ANDROID_API_LEVEL, 36)
+        self.assertEqual(defaults.EXPECTED_PAGE_SIZE_BYTES, 4096)
+        self.assertEqual(defaults.REQUIRED_GOOGLE_PACKAGES, ())
+        self.assertFalse(defaults.CONSOLE_ENABLED)
+        self.assertEqual(defaults.EXPECTED_AVD_NAME, "CloudAndx_Android_Emulator")
+
     def test_bounded_env_int_rejects_non_integer_and_out_of_range_values(self):
         with patch.dict(os.environ, {"TEST_SECONDS": "slow"}):
             with self.assertRaises(RuntimeError):
@@ -72,7 +101,7 @@ class FakeAdb:
 
 
 class FakeConsole:
-    def __init__(self, result="Pixel_9_Android_17_Play_ARM64", error=None):
+    def __init__(self, result="CloudAndx_Android_Emulator", error=None):
         self.result = result
         self.error = error
         self.calls = []
@@ -176,7 +205,7 @@ def healthy_observation():
         },
         "console": {
             "available": True,
-            "avd_name": "Pixel_9_Android_17_Play_ARM64",
+            "avd_name": "CloudAndx_Android_Emulator",
         },
     }
 
@@ -225,7 +254,7 @@ class ConsoleClientTests(unittest.TestCase):
                 self.AUTH_BANNER[:24],
                 self.AUTH_BANNER[24:],
                 self.READY_BANNER,
-                b"Pixel_9_Android_17_Play_ARM64\r\nOK\r\n",
+                b"CloudAndx_Android_Emulator\r\nOK\r\n",
             ]
         )
         socket_path = "/run/emulator-console/console.sock"
@@ -236,7 +265,7 @@ class ConsoleClientTests(unittest.TestCase):
         with patch.object(bridge.socket, "socket", return_value=connection) as factory:
             result = client.command("avd", "name")
 
-        self.assertEqual(result, "Pixel_9_Android_17_Play_ARM64")
+        self.assertEqual(result, "CloudAndx_Android_Emulator")
         factory.assert_called_once_with(socket.AF_UNIX, socket.SOCK_STREAM)
         self.assertEqual(connection.connects, [socket_path])
         self.assertEqual(
@@ -341,7 +370,7 @@ class ConsoleClientTests(unittest.TestCase):
                 self.assertEqual(connection.sent, [b"quit\r\n"])
 
     def test_console_sends_printable_utf8_sms_as_one_line(self):
-        text = "你好；Android 17 ✅; still one line"
+        text = "你好；Android ✅; still one line"
         connection = FakeSocket(
             [self.AUTH_BANNER, self.READY_BANNER, b"OK\r\n"]
         )
@@ -428,7 +457,7 @@ class ConsoleClientTests(unittest.TestCase):
             [
                 self.AUTH_BANNER,
                 self.READY_BANNER,
-                b"Pixel_9_Android_17_Play_ARM64\r\nOK\r\n",
+                b"CloudAndx_Android_Emulator\r\nOK\r\n",
             ]
         )
         client = bridge.EmulatorConsole(token=self.TOKEN, timeout=15)
@@ -515,7 +544,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(observed["properties"]["abi"], "arm64-v8a")
         self.assertEqual(observed["properties"]["page_size_bytes"], "16384")
         self.assertEqual(
-            observed["console"]["avd_name"], "Pixel_9_Android_17_Play_ARM64"
+            observed["console"]["avd_name"], "CloudAndx_Android_Emulator"
         )
         self.assertIn(("getconf", "PAGE_SIZE"), adb.shell_calls)
         self.assertEqual(len(adb.timeout_calls), 11)
@@ -684,9 +713,9 @@ class RuntimeHealthTests(unittest.TestCase):
 
     def test_console_avd_name_must_match_exactly(self):
         for wrong_name in (
-            "Pixel_8_Android_17_Play_ARM64",
-            " Pixel_9_Android_17_Play_ARM64",
-            "Pixel_9_Android_17_Play_ARM64 ",
+            "Other_Android_Emulator",
+            " CloudAndx_Android_Emulator",
+            "CloudAndx_Android_Emulator ",
         ):
             with self.subTest(wrong_name=wrong_name):
                 observed = healthy_observation()
@@ -706,7 +735,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertFalse(healthy)
         self.assertIn("ro.product.cpu.abi is 'x86_64'; expected 'arm64-v8a'", reason)
 
-    def test_4k_guest_page_size_is_unhealthy(self):
+    def test_4k_guest_page_size_is_unhealthy_for_16k_profile(self):
         observed = healthy_observation()
         observed["properties"]["page_size_bytes"] = "4096"
 
@@ -778,7 +807,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertIn("API level is not an integer", reason)
         self.assertIn("could not verify required package com.google.android.gms", reason)
 
-    def test_screenshot_uses_tcg_safe_read_timeout(self):
+    def test_screenshot_uses_bounded_read_timeout(self):
         handler = object.__new__(bridge.Handler)
         handler.path = "/v1/screenshot.png"
         handler._send = Mock()
@@ -833,7 +862,7 @@ class MutationTests(unittest.TestCase):
             self.handler._mutation("/v1/shell", {"command": "id"})
 
     def test_sms_routes_safe_text_to_console_and_rejects_raw_controls(self):
-        text = "你好；Android 17 ✅; still one line"
+        text = "你好；Android ✅; still one line"
         self.handler._mutation(
             "/v1/sms", {"from": "+15551234567", "text": text}
         )

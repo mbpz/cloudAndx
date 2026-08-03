@@ -90,7 +90,7 @@ build、serial、客户端版本、时间戳和原始数据。不得用 ADB 命�
 | noVNC 点击/滑动 | 通过 | 浏览器点击打开 Gallery；连续拖动打开应用抽屉 |
 | noVNC 键盘 | 通过 | 浏览器键盘输入 `settings`，Android 搜索框显示对应文本 |
 | 单最终镜像/单容器 | 通过 | 默认 Compose 仅 `android`，健康状态为 `healthy` |
-| Device Bridge 与安全门禁 | 基线通过 | 进程纳入监督/健康检查，token 持久化；AEMU Console 能力关闭 |
+| Device Bridge 与安全门禁 | 基线通过 | 进程纳入监督/健康检查，token 持久化；Emulator Console 能力关闭 |
 | 浏览器点击可见帧延迟 | 通过 | Chromium canvas 内 30 次：min 9.2 ms、median 43.8 ms、P95 85.2 ms、max 99.5 ms |
 | 30 min 稳定性 | 通过 | 1,878 秒、180 次检查、0 失败、0 重启；覆盖 Android、SurfaceFlinger、首帧、HTTPS noVNC 和 Bridge |
 

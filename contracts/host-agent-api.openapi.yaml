@@ -1,0 +1,528 @@
+openapi: 3.1.0
+info:
+  title: Android Cuttlefish Host Agent API
+  version: 1.0.0
+  description: >-
+    Node-management API used only by the Kubernetes Controller to converge one
+    approved AndroidDevice specification. It does not accept arbitrary commands,
+    flags, mounts, devices, environment variables, or credentials.
+servers:
+  - url: https://host-agent.node.internal:9443
+    description: Node management network; illustrative DNS name only
+security:
+  - mutualTLS: []
+tags:
+  - name: Devices
+paths:
+  /v1/devices:
+    post:
+      tags:
+        - Devices
+      operationId: createDevice
+      summary: Create or idempotently converge an immutable device specification
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDeviceRequest'
+          application/yaml:
+            schema:
+              $ref: '#/components/schemas/CreateDeviceRequest'
+      responses:
+        '202':
+          description: The immutable specification was accepted for convergence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Rejected'
+  /v1/devices/{deviceId}:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    get:
+      tags:
+        - Devices
+      operationId: getDevice
+      summary: Get desired and observed device state
+      responses:
+        '200':
+          description: Current durable device record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags:
+        - Devices
+      operationId: deleteDevice
+      summary: Idempotently converge the device and all owned resources to deleted
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/ExpectedGeneration'
+      responses:
+        '202':
+          description: Deletion was accepted or an existing tombstone was returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/devices/{deviceId}:reconcile:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      tags:
+        - Devices
+      operationId: reconcileDevice
+      summary: Re-observe and converge an already registered immutable device
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconcileRequest'
+      responses:
+        '202':
+          description: Reconciliation was accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Rejected'
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+      description: Controller workload identity authenticated on the node management network
+  parameters:
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      description: Immutable, non-secret platform device identifier
+      schema:
+        $ref: '#/components/schemas/DnsLabel'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Non-secret retry identifier. Reuse with a different normalized request body
+        returns IDEMPOTENCY_CONFLICT.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+    ExpectedGeneration:
+      name: X-Expected-Generation
+      in: header
+      required: true
+      description: Immutable generation the Controller intends to delete
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    Conflict:
+      description: Idempotency, generation, allocation, or immutable-spec conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Rejected:
+      description: Schema-valid request rejected by fixed admission policy
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: No device record or retained tombstone exists
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    DnsLabel:
+      type: string
+      minLength: 3
+      maxLength: 63
+      pattern: '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$'
+    Sha256Digest:
+      type: string
+      pattern: '^sha256:[a-f0-9]{64}$'
+    CreateDeviceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+      properties:
+        apiVersion:
+          type: string
+          const: hostagent.android.internal/v1
+        kind:
+          type: string
+          const: AndroidDevice
+        metadata:
+          $ref: '#/components/schemas/RequestMetadata'
+        spec:
+          $ref: '#/components/schemas/DeviceSpec'
+    RequestMetadata:
+      type: object
+      additionalProperties: false
+      required:
+        - deviceId
+        - tenantId
+        - requestId
+        - controllerResourceUid
+        - generation
+      properties:
+        deviceId:
+          $ref: '#/components/schemas/DnsLabel'
+        tenantId:
+          $ref: '#/components/schemas/DnsLabel'
+        requestId:
+          $ref: '#/components/schemas/DnsLabel'
+        controllerResourceUid:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._:-]+$'
+        generation:
+          type: integer
+          minimum: 1
+        exampleOnly:
+          type: boolean
+          default: false
+          description: >-
+            Documentation safety marker. The Host Agent MUST reject true with
+            EXAMPLE_ONLY_REQUEST and MUST perform no side effect.
+        digestValues:
+          type: string
+          enum:
+            - ILLUSTRATIVE_NOT_DEPLOYABLE
+          description: >-
+            Optional documentation marker. Presence makes the request example-only
+            and causes admission rejection before resource allocation.
+    DeviceSpec:
+      type: object
+      additionalProperties: false
+      required:
+        - desiredState
+        - androidVersion
+        - apiLevel
+        - runtimeClass
+        - trustClass
+        - hostArchitecture
+        - resourceClass
+        - gpuMode
+        - artifacts
+        - network
+        - lifecycle
+      properties:
+        desiredState:
+          type: string
+          const: RUNNING
+        androidVersion:
+          type: string
+          const: '17'
+        apiLevel:
+          type: integer
+          const: 37
+        runtimeClass:
+          type: string
+          enum:
+            - x86-untrusted
+            - x86-trusted-ci
+            - arm64
+        trustClass:
+          type: string
+          enum:
+            - UNTRUSTED
+            - TRUSTED_CI
+        hostArchitecture:
+          type: string
+          enum:
+            - X86_64
+            - ARM64
+        resourceClass:
+          type: string
+          enum:
+            - CI_SMALL_2C_6G
+            - INTERACTIVE_4C_8G
+            - GRAPHICS_8C_16G
+            - ARM64_COMPAT_4C_8G
+        gpuMode:
+          type: string
+          enum:
+            - SWIFTSHADER
+            - DEDICATED
+            - TRUSTED_SHARED
+        artifacts:
+          $ref: '#/components/schemas/ArtifactSet'
+        network:
+          $ref: '#/components/schemas/NetworkPolicySelection'
+        lifecycle:
+          $ref: '#/components/schemas/Lifecycle'
+    ArtifactSet:
+      type: object
+      additionalProperties: false
+      required:
+        - artifactSetId
+        - androidBuildId
+        - target
+        - buildVariant
+        - securityPatch
+        - guestDigest
+        - hostPackageDigest
+        - provenanceManifestDigest
+        - crosvmDigest
+        - ociImage
+        - seccompPolicyDigest
+        - hostAgentPolicyVersion
+      properties:
+        artifactSetId:
+          $ref: '#/components/schemas/DnsLabel'
+        androidBuildId:
+          type: string
+          minLength: 3
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._-]+$'
+        target:
+          type: string
+          enum:
+            - aosp_cf_x86_64_only_phone
+            - aosp_cf_arm64_only_phone
+        buildVariant:
+          type: string
+          enum:
+            - user
+            - userdebug
+        securityPatch:
+          type: string
+          format: date
+        guestDigest:
+          $ref: '#/components/schemas/Sha256Digest'
+        hostPackageDigest:
+          $ref: '#/components/schemas/Sha256Digest'
+        provenanceManifestDigest:
+          $ref: '#/components/schemas/Sha256Digest'
+        crosvmDigest:
+          $ref: '#/components/schemas/Sha256Digest'
+        ociImage:
+          $ref: '#/components/schemas/OciImage'
+        seccompPolicyDigest:
+          $ref: '#/components/schemas/Sha256Digest'
+        hostAgentPolicyVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]+$'
+    OciImage:
+      type: object
+      additionalProperties: false
+      required:
+        - repository
+        - platformManifestDigest
+        - platform
+      properties:
+        repository:
+          type: string
+          const: us-docker.pkg.dev/android-cuttlefish-artifacts/cuttlefish-orchestration/cuttlefish-orchestration
+        indexDigest:
+          $ref: '#/components/schemas/Sha256Digest'
+        platformManifestDigest:
+          $ref: '#/components/schemas/Sha256Digest'
+        platform:
+          $ref: '#/components/schemas/OciPlatform'
+    OciPlatform:
+      type: object
+      additionalProperties: false
+      required:
+        - os
+        - architecture
+      properties:
+        os:
+          type: string
+          const: linux
+        architecture:
+          type: string
+          enum:
+            - amd64
+            - arm64
+        variant:
+          type: string
+          enum:
+            - v8
+    NetworkPolicySelection:
+      type: object
+      additionalProperties: false
+      required:
+        - policyId
+        - egressClass
+        - webRtcEnabled
+        - adbTunnelEnabled
+      properties:
+        policyId:
+          $ref: '#/components/schemas/DnsLabel'
+        egressClass:
+          type: string
+          enum:
+            - DENY_ALL
+            - ANDROID_UPDATE_PROXY
+            - TEST_ALLOWLIST
+        webRtcEnabled:
+          type: boolean
+        adbTunnelEnabled:
+          type: boolean
+    Lifecycle:
+      type: object
+      additionalProperties: false
+      required:
+        - persistence
+        - ttlSeconds
+      properties:
+        persistence:
+          type: string
+          enum:
+            - EPHEMERAL
+            - SESSION_PERSISTENT
+        ttlSeconds:
+          type: integer
+          minimum: 300
+          maximum: 86400
+    ReconcileRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedGeneration
+        - reason
+      properties:
+        expectedGeneration:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          enum:
+            - PERIODIC
+            - NODE_RESTART
+            - CONTROLLER_RETRY
+            - DRIFT_DETECTED
+    Device:
+      type: object
+      additionalProperties: false
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+        - status
+      properties:
+        apiVersion:
+          type: string
+          const: hostagent.android.internal/v1
+        kind:
+          type: string
+          const: AndroidDevice
+        metadata:
+          $ref: '#/components/schemas/RequestMetadata'
+        spec:
+          $ref: '#/components/schemas/DeviceSpec'
+        status:
+          $ref: '#/components/schemas/DeviceStatus'
+    DeviceStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - desiredState
+        - observedState
+        - observedGeneration
+        - specHash
+        - reasonCode
+      properties:
+        desiredState:
+          type: string
+          enum:
+            - RUNNING
+            - DELETED
+        observedState:
+          type: string
+          enum:
+            - ABSENT
+            - ALLOCATING
+            - PREPARING
+            - STARTING
+            - READY
+            - DEGRADED
+            - RECOVERING
+            - FAILED
+            - DELETING
+            - DELETED
+            - QUARANTINED
+        observedGeneration:
+          type: integer
+          minimum: 0
+        specHash:
+          $ref: '#/components/schemas/Sha256Digest'
+        reasonCode:
+          type: string
+          enum:
+            - ACCEPTED
+            - CONVERGING
+            - READY
+            - POLICY_DENIED
+            - EXAMPLE_ONLY_REQUEST
+            - IDEMPOTENCY_CONFLICT
+            - IMMUTABLE_SPEC_CONFLICT
+            - LEASE_EXPIRED
+            - ARTIFACT_NOT_APPROVED
+            - PLATFORM_MANIFEST_MISMATCH
+            - PROVENANCE_MISMATCH
+            - SANDBOX_NOT_ENFORCED
+            - DEVICE_ALLOCATION_CONFLICT
+            - BOOT_TIMEOUT
+            - CLEANUP_INCOMPLETE
+            - ORPHAN_QUARANTINED
+            - DELETED
+        lastTransitionTime:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - requestId
+      properties:
+        code:
+          type: string
+          minLength: 3
+          maxLength: 64
+          pattern: '^[A-Z0-9_]+$'
+        message:
+          type: string
+          minLength: 1
+          maxLength: 512
+        requestId:
+          type: string
+          minLength: 3
+          maxLength: 128

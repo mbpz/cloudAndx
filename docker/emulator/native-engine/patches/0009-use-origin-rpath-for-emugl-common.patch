@@ -1,0 +1,15 @@
+From: CloudAndX <cloudandx@localhost>
+Subject: [PATCH] use a loader-supported RPATH for emugl common
+
+The runtime linker recognizes ORIGIN but not the AEMU build-time COMMON
+placeholder. Resolve emugl_common dependencies relative to the installed
+library so the packaged ARM64 closure never searches a build or working path.
+
+diff --git a/android/android-emugl/shared/emugl/common/CMakeLists.txt b/android/android-emugl/shared/emugl/common/CMakeLists.txt
+--- a/android/android-emugl/shared/emugl/common/CMakeLists.txt
++++ b/android/android-emugl/shared/emugl/common/CMakeLists.txt
+@@ -23,3 +23,3 @@ android_target_properties(
+   emugl_common linux
+-  "LINK_FLAGS<=-Wl,-rpath,'$COMMON'  -Wl,--disable-new-dtags")
++  "LINK_FLAGS<=-Wl,-rpath,'$ORIGIN'  -Wl,--disable-new-dtags")
+ android_install_shared_library(TARGET emugl_common)

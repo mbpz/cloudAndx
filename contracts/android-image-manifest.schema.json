@@ -1,0 +1,2268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudandx:contract:android-image-manifest:1.0.0",
+  "title": "Android image identity and promotion manifest",
+  "description": "Auditable identity, provenance, authorization, and promotion record for an Android guest/host/OCI artifact tuple. Private signing material and other secrets are intentionally not representable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "generated_at",
+    "release_observation",
+    "official_sources",
+    "android_identity",
+    "artifacts",
+    "kernel",
+    "webrtc_assets",
+    "signing_key_identities",
+    "toolchain",
+    "security_patch",
+    "supply_chain",
+    "license_authorization",
+    "promotion"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{7,127}$"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "release_observation": {
+      "$ref": "#/$defs/releaseObservation"
+    },
+    "official_sources": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/officialSource"
+      }
+    },
+    "android_identity": {
+      "$ref": "#/$defs/androidIdentity"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/artifactTuple"
+    },
+    "kernel": {
+      "$ref": "#/$defs/kernel"
+    },
+    "webrtc_assets": {
+      "$ref": "#/$defs/webrtcAssets"
+    },
+    "signing_key_identities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/signingKeyIdentity"
+      }
+    },
+    "toolchain": {
+      "$ref": "#/$defs/toolchain"
+    },
+    "security_patch": {
+      "$ref": "#/$defs/securityPatch"
+    },
+    "supply_chain": {
+      "$ref": "#/$defs/supplyChain"
+    },
+    "license_authorization": {
+      "$ref": "#/$defs/licenseAuthorization"
+    },
+    "promotion": {
+      "$ref": "#/$defs/promotion"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "promotion": {
+            "properties": {
+              "decision": {
+                "const": "approved"
+              }
+            },
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        "required": [
+          "promotion"
+        ]
+      },
+      "then": {
+        "properties": {
+          "release_observation": {
+            "properties": {
+              "resolution_status": {
+                "const": "current_stable"
+              }
+            }
+          },
+          "security_patch": {
+            "properties": {
+              "within_policy": {
+                "const": true
+              }
+            }
+          },
+          "promotion": {
+            "properties": {
+              "gates": {
+                "not": {
+                  "contains": {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "fail",
+                          "blocked",
+                          "not_run"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$"
+    },
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "releaseObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_id",
+        "observed_at",
+        "expires_at",
+        "resolution_status",
+        "release_channel",
+        "android_version",
+        "api_level",
+        "stable_tag",
+        "source_ids",
+        "observer"
+      ],
+      "properties": {
+        "observation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "resolution_status": {
+          "enum": [
+            "current_stable",
+            "stale",
+            "source_disagreement",
+            "source_unavailable"
+          ]
+        },
+        "release_channel": {
+          "const": "stable"
+        },
+        "android_version": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+){0,2}$"
+        },
+        "api_level": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stable_tag": {
+          "type": "string",
+          "pattern": "^android-[0-9]+\\.[0-9]+\\.[0-9]+_r[0-9]+$"
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "newer_preview_observed": {
+          "type": "boolean"
+        },
+        "observer": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "officialSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "publisher",
+        "authority",
+        "purpose",
+        "uri",
+        "retrieved_at",
+        "content_digest"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publisher": {
+          "const": "Google"
+        },
+        "authority": {
+          "enum": [
+            "developer.android.com",
+            "source.android.com",
+            "android.googlesource.com",
+            "dl.google.com",
+            "storage.googleapis.com",
+            "us-docker.pkg.dev",
+            "support.google.com",
+            "private.google.authorization"
+          ]
+        },
+        "purpose": {
+          "enum": [
+            "release_announcement",
+            "build_numbers",
+            "source_manifest",
+            "source_tag",
+            "binary_artifact",
+            "oci_artifact",
+            "security_bulletin",
+            "sdk_repository",
+            "device_build",
+            "license_authorization"
+          ]
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "retrieved_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "http_etag": {
+          "type": "string"
+        }
+      }
+    },
+    "sourceLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "aosp_tag",
+        "manifest_uri",
+        "manifest_branch",
+        "manifest_commit",
+        "manifest_digest"
+      ],
+      "properties": {
+        "aosp_tag": {
+          "type": "string",
+          "pattern": "^android-[0-9]+\\.[0-9]+\\.[0-9]+_r[0-9]+$"
+        },
+        "manifest_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "manifest_branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest_commit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "patch_id",
+        "source_uri",
+        "digest",
+        "reason"
+      ],
+      "properties": {
+        "patch_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "upstream_commit": {
+          "$ref": "#/$defs/gitCommit"
+        }
+      }
+    },
+    "derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builder_id",
+        "build_configuration_digest",
+        "patch_set_digest",
+        "patches"
+      ],
+      "properties": {
+        "builder_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_configuration_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "patch_set_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/patch"
+          }
+        },
+        "source_date_epoch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "googleBinary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publisher",
+        "official_source_uri",
+        "official_artifact_digest",
+        "retrieved_at",
+        "distribution_terms_uri"
+      ],
+      "properties": {
+        "publisher": {
+          "const": "Google"
+        },
+        "official_source_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "official_artifact_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "retrieved_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "distribution_terms_uri": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "androidIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity_class",
+        "android_version",
+        "api_level",
+        "build_id",
+        "build_fingerprint",
+        "build_variant",
+        "target_product",
+        "architecture",
+        "source_lineage"
+      ],
+      "properties": {
+        "identity_class": {
+          "enum": [
+            "google_published_binary",
+            "aosp_unmodified_source_build",
+            "aosp_derived_source_build"
+          ]
+        },
+        "android_version": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+){0,2}$"
+        },
+        "api_level": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_variant": {
+          "enum": [
+            "user",
+            "userdebug",
+            "eng"
+          ]
+        },
+        "target_product": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "enum": [
+            "x86_64",
+            "arm64"
+          ]
+        },
+        "source_lineage": {
+          "$ref": "#/$defs/sourceLineage"
+        },
+        "google_binary": {
+          "$ref": "#/$defs/googleBinary"
+        },
+        "derivation": {
+          "$ref": "#/$defs/derivation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "identity_class": {
+                "const": "google_published_binary"
+              }
+            },
+            "required": [
+              "identity_class"
+            ]
+          },
+          "then": {
+            "required": [
+              "google_binary"
+            ],
+            "not": {
+              "required": [
+                "derivation"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "identity_class": {
+                "const": "aosp_unmodified_source_build"
+              }
+            },
+            "required": [
+              "identity_class"
+            ]
+          },
+          "then": {
+            "required": [
+              "derivation"
+            ],
+            "not": {
+              "required": [
+                "google_binary"
+              ]
+            },
+            "properties": {
+              "derivation": {
+                "properties": {
+                  "patches": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "identity_class": {
+                "const": "aosp_derived_source_build"
+              }
+            },
+            "required": [
+              "identity_class"
+            ]
+          },
+          "then": {
+            "required": [
+              "derivation"
+            ],
+            "not": {
+              "required": [
+                "google_binary"
+              ]
+            },
+            "properties": {
+              "derivation": {
+                "properties": {
+                  "patches": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "signatureVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "key_id",
+        "verified_at",
+        "verification_evidence_uri",
+        "verification_evidence_digest"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "failed",
+            "unsigned"
+          ]
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verified_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "verification_evidence_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "verification_evidence_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "role",
+        "uri",
+        "digest",
+        "media_type",
+        "size_bytes",
+        "build_id",
+        "created_at",
+        "architecture",
+        "signature_verification"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": [
+            "guest_image_bundle",
+            "host_package"
+          ]
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "architecture": {
+          "enum": [
+            "x86_64",
+            "arm64"
+          ]
+        },
+        "signature_verification": {
+          "$ref": "#/$defs/signatureVerification"
+        }
+      }
+    },
+    "runtimeBinary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "cvd",
+            "crosvm",
+            "adb",
+            "webrtc_operator",
+            "other"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/[^\\u0000]+$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "ociArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry",
+        "repository",
+        "resolved_reference",
+        "index_digest",
+        "platform_manifest_digest",
+        "config_digest",
+        "layer_digests",
+        "platform",
+        "pulled_at"
+      ],
+      "properties": {
+        "registry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolved_reference": {
+          "type": "string",
+          "pattern": "^[^@]+@sha256:[a-f0-9]{64}$"
+        },
+        "index_digest": {
+          "$ref": "#/$defs/sha256Digest"
+        },
+        "platform_manifest_digest": {
+          "$ref": "#/$defs/sha256Digest"
+        },
+        "config_digest": {
+          "$ref": "#/$defs/sha256Digest"
+        },
+        "layer_digests": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sha256Digest"
+          }
+        },
+        "platform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "os",
+            "architecture"
+          ],
+          "properties": {
+            "os": {
+              "const": "linux"
+            },
+            "architecture": {
+              "enum": [
+                "amd64",
+                "arm64"
+              ]
+            },
+            "variant": {
+              "type": "string"
+            }
+          }
+        },
+        "pulled_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "signature_verification": {
+          "$ref": "#/$defs/signatureVerification"
+        }
+      }
+    },
+    "artifactTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guest_image",
+        "host_package",
+        "host_runtime_binaries",
+        "platform_oci",
+        "tuple_digest"
+      ],
+      "properties": {
+        "guest_image": {
+          "$ref": "#/$defs/artifact"
+        },
+        "host_package": {
+          "$ref": "#/$defs/artifact"
+        },
+        "host_runtime_binaries": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/runtimeBinary"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "const": "cvd"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "const": "crosvm"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          ]
+        },
+        "platform_oci": {
+          "$ref": "#/$defs/ociArtifact"
+        },
+        "tuple_digest": {
+          "$ref": "#/$defs/digest",
+          "description": "Digest of a canonical encoding containing guest digest, host package digest, runtime binary digests, and selected OCI platform manifest digest."
+        }
+      }
+    },
+    "gki": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "android_release": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kmi_generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kmi_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "abi_definition_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "modules_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "boot_signature_key_fingerprint": {
+          "$ref": "#/$defs/digest"
+        },
+        "non_gki_reason": {
+          "type": "string",
+          "minLength": 10
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "required": [
+              "android_release",
+              "kmi_generation",
+              "kmi_version",
+              "abi_definition_digest",
+              "modules_digest",
+              "boot_signature_key_fingerprint"
+            ],
+            "not": {
+              "required": [
+                "non_gki_reason"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "non_gki_reason"
+            ]
+          }
+        }
+      ]
+    },
+    "kernel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel_release",
+        "source_uri",
+        "source_commit",
+        "configuration_digest",
+        "image_digest",
+        "modules_digest",
+        "gki"
+      ],
+      "properties": {
+        "kernel_release": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "configuration_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "image_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "modules_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "gki": {
+          "$ref": "#/$defs/gki"
+        }
+      }
+    },
+    "webrtcAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "asset_type",
+        "version",
+        "uri",
+        "digest",
+        "media_type",
+        "created_at"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "asset_type": {
+          "enum": [
+            "frontend_bundle",
+            "signaling_server",
+            "webrtc_operator",
+            "turn_configuration_template",
+            "certificate_bundle",
+            "other"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "webrtcAssets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "interface_version",
+        "assets"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "interface_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/webrtcAsset"
+          }
+        },
+        "disabled_reason": {
+          "type": "string",
+          "minLength": 10
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "assets": {
+                "minItems": 1
+              }
+            },
+            "not": {
+              "required": [
+                "disabled_reason"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "disabled_reason"
+            ],
+            "properties": {
+              "assets": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "signingKeyIdentity": {
+      "type": "object",
+      "description": "Public identity metadata only. Private keys, passphrases, tokens, and secret material are forbidden by the closed property set.",
+      "additionalProperties": false,
+      "required": [
+        "key_id",
+        "purpose",
+        "algorithm",
+        "public_key_fingerprint",
+        "owner",
+        "trust_domain",
+        "valid_from",
+        "valid_until",
+        "status"
+      ],
+      "properties": {
+        "key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "enum": [
+            "platform",
+            "avb",
+            "ota",
+            "release",
+            "artifact_attestation",
+            "provenance",
+            "container_signing"
+          ]
+        },
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "public_key_fingerprint": {
+          "$ref": "#/$defs/digest"
+        },
+        "certificate_chain_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "certificate_chain_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trust_domain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valid_from": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "retired",
+            "revoked"
+          ]
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "source_uri",
+        "binary_digest"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "binary_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build_host_os",
+        "build_host_kernel",
+        "builder_image_digest",
+        "build_environment_digest",
+        "build_invocation_digest",
+        "tools"
+      ],
+      "properties": {
+        "build_host_os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_host_kernel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "builder_image_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "build_environment_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "build_invocation_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "tools": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/tool"
+          }
+        }
+      }
+    },
+    "securityBackport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bulletin_id",
+        "cve_ids",
+        "source_commits",
+        "evidence_uri",
+        "evidence_digest"
+      ],
+      "properties": {
+        "bulletin_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cve_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^CVE-[0-9]{4}-[0-9]{4,}$"
+          }
+        },
+        "source_commits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/gitCommit"
+          }
+        },
+        "evidence_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "evidence_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "securityPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "android_security_patch_level",
+        "observed_property",
+        "evaluated_at",
+        "maximum_age_days",
+        "age_days_at_evaluation",
+        "within_policy",
+        "bulletin_source_ids",
+        "backports"
+      ],
+      "properties": {
+        "android_security_patch_level": {
+          "$ref": "#/$defs/date"
+        },
+        "observed_property": {
+          "const": "ro.build.version.security_patch"
+        },
+        "evaluated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "maximum_age_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "age_days_at_evaluation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "within_policy": {
+          "type": "boolean"
+        },
+        "bulletin_source_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "backports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/securityBackport"
+          }
+        },
+        "emergency_cve_policy_status": {
+          "enum": [
+            "clear",
+            "mitigated",
+            "open_blocker"
+          ]
+        }
+      }
+    },
+    "sbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "spec_version",
+        "uri",
+        "digest",
+        "created_at",
+        "subject_digest"
+      ],
+      "properties": {
+        "format": {
+          "enum": [
+            "SPDX",
+            "CycloneDX"
+          ]
+        },
+        "spec_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "subject_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri",
+        "digest"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "uri",
+        "digest",
+        "statement_subject_digest",
+        "builder_id",
+        "build_type",
+        "invocation_digest",
+        "materials",
+        "created_at"
+      ],
+      "properties": {
+        "format": {
+          "enum": [
+            "in-toto",
+            "SLSA-provenance"
+          ]
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "statement_subject_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "builder_id": {
+          "type": "string",
+          "format": "uri"
+        },
+        "build_type": {
+          "type": "string",
+          "format": "uri"
+        },
+        "invocation_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "materials": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/material"
+          }
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "vulnerabilityReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scanner",
+        "database_updated_at",
+        "uri",
+        "digest",
+        "critical_count",
+        "high_count",
+        "unexpired_exception_count"
+      ],
+      "properties": {
+        "scanner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "database_updated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "critical_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unexpired_exception_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "supplyChain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sboms",
+        "provenance",
+        "vulnerability_reports",
+        "reproducibility"
+      ],
+      "properties": {
+        "sboms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sbom"
+          }
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "vulnerability_reports": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/vulnerabilityReport"
+          }
+        },
+        "reproducibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "comparison_digest",
+            "evaluated_at"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "reproducible",
+                "normalized_match",
+                "not_reproducible",
+                "not_evaluated"
+              ]
+            },
+            "comparison_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "evaluated_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "difference_report_uri": {
+              "type": "string",
+              "format": "uri"
+            },
+            "difference_report_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        }
+      }
+    },
+    "licenseRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "spdx_expression",
+        "source_uri",
+        "notice_digest"
+      ],
+      "properties": {
+        "component": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spdx_expression": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "notice_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "gmsPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package_name",
+        "version_code",
+        "version_name",
+        "apk_signing_certificate_sha256",
+        "base_apk_digest",
+        "split_apk_digests",
+        "source_uri"
+      ],
+      "properties": {
+        "package_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+$"
+        },
+        "version_code": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "version_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "apk_signing_certificate_sha256": {
+          "$ref": "#/$defs/sha256Digest"
+        },
+        "base_apk_digest": {
+          "$ref": "#/$defs/sha256Digest"
+        },
+        "split_apk_digests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sha256Digest"
+          }
+        },
+        "source_uri": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "gmsPackageSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "observed_at",
+        "repository_source_id",
+        "packages"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "repository_source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/gmsPackage"
+          }
+        }
+      }
+    },
+    "gmsAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization_id",
+        "status",
+        "grantor",
+        "grantee",
+        "allowed_uses",
+        "audiences",
+        "territories",
+        "redistribution_allowed",
+        "commercial_cloud_service_allowed",
+        "evidence_uri",
+        "evidence_digest"
+      ],
+      "properties": {
+        "authorization_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "authorized",
+            "test_only",
+            "pending",
+            "denied",
+            "expired"
+          ]
+        },
+        "grantor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "grantee": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valid_from": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "allowed_uses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "internal_application_testing",
+              "compatibility_testing",
+              "internal_development",
+              "third_party_distribution",
+              "commercial_cloud_service"
+            ]
+          }
+        },
+        "audiences": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "territories": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 2
+          }
+        },
+        "redistribution_allowed": {
+          "type": "boolean"
+        },
+        "commercial_cloud_service_allowed": {
+          "type": "boolean"
+        },
+        "evidence_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "evidence_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "authorized",
+                  "test_only"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "valid_from",
+              "expires_at"
+            ]
+          }
+        }
+      ]
+    },
+    "gms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included",
+        "authorization_status"
+      ],
+      "properties": {
+        "included": {
+          "type": "boolean"
+        },
+        "authorization_status": {
+          "enum": [
+            "not_required",
+            "authorized",
+            "test_only",
+            "pending",
+            "denied",
+            "expired"
+          ]
+        },
+        "package_set": {
+          "$ref": "#/$defs/gmsPackageSet"
+        },
+        "authorization": {
+          "$ref": "#/$defs/gmsAuthorization"
+        },
+        "absence_evidence_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "absence_evidence_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "included": {
+                "const": true
+              }
+            },
+            "required": [
+              "included"
+            ]
+          },
+          "then": {
+            "required": [
+              "package_set",
+              "authorization"
+            ],
+            "properties": {
+              "authorization_status": {
+                "not": {
+                  "const": "not_required"
+                }
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "absence_evidence_uri"
+                  ]
+                },
+                {
+                  "required": [
+                    "absence_evidence_digest"
+                  ]
+                }
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "absence_evidence_uri",
+              "absence_evidence_digest"
+            ],
+            "properties": {
+              "authorization_status": {
+                "const": "not_required"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "package_set"
+                  ]
+                },
+                {
+                  "required": [
+                    "authorization"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "distributionScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intended_use",
+        "audience",
+        "territories",
+        "redistribution_allowed",
+        "commercial_cloud_service_allowed"
+      ],
+      "properties": {
+        "intended_use": {
+          "enum": [
+            "internal_development",
+            "internal_application_testing",
+            "compatibility_testing",
+            "third_party_product",
+            "commercial_cloud_service"
+          ]
+        },
+        "audience": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "territories": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 2
+          }
+        },
+        "redistribution_allowed": {
+          "type": "boolean"
+        },
+        "commercial_cloud_service_allowed": {
+          "type": "boolean"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "licenseAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "open_source_licenses",
+        "proprietary_components_present",
+        "distribution_scope",
+        "gms",
+        "reviewed_by",
+        "reviewed_at",
+        "review_expires_at"
+      ],
+      "properties": {
+        "open_source_licenses": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/licenseRecord"
+          }
+        },
+        "proprietary_components_present": {
+          "type": "boolean"
+        },
+        "distribution_scope": {
+          "$ref": "#/$defs/distributionScope"
+        },
+        "gms": {
+          "$ref": "#/$defs/gms"
+        },
+        "reviewed_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "review_expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "gateEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri",
+        "digest",
+        "produced_at"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "produced_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "promotionGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_id",
+        "status",
+        "required",
+        "evaluated_at",
+        "expires_at",
+        "procedure_id",
+        "evidence"
+      ],
+      "properties": {
+        "gate_id": {
+          "enum": [
+            "latest_stable_release",
+            "official_source_provenance",
+            "identity_classification",
+            "artifact_digest_tuple",
+            "guest_host_compatibility",
+            "kernel_gki",
+            "webrtc_assets",
+            "signing_identity",
+            "security_patch",
+            "sbom_provenance",
+            "framework_hal",
+            "capability_completeness",
+            "gms_revision_authorization",
+            "pixel_matrix",
+            "security_negative",
+            "reliability_load_dr"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "blocked",
+            "not_run",
+            "not_applicable"
+          ]
+        },
+        "required": {
+          "const": true
+        },
+        "evaluated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "procedure_id": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9-]{2,63}$"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/gateEvidence"
+          }
+        },
+        "not_applicable_justification": {
+          "type": "string",
+          "minLength": 20
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "not_applicable"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "not_applicable_justification"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "not_applicable_justification"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "target_stage",
+        "decision",
+        "evaluated_at",
+        "evaluator",
+        "policy_uri",
+        "policy_digest",
+        "gates"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "image",
+            "pool",
+            "platform_release"
+          ]
+        },
+        "target_stage": {
+          "enum": [
+            "preview",
+            "candidate",
+            "stable"
+          ]
+        },
+        "decision": {
+          "enum": [
+            "pending",
+            "approved",
+            "rejected"
+          ]
+        },
+        "evaluated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "evaluator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "policy_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "gates": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/promotionGate"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "latest_stable_release"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "official_source_provenance"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "identity_classification"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "artifact_digest_tuple"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "guest_host_compatibility"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "kernel_gki"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "webrtc_assets"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "signing_identity"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "security_patch"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "sbom_provenance"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "framework_hal"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "capability_completeness"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "gms_revision_authorization"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "pixel_matrix"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "security_negative"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "gate_id": {
+                    "const": "reliability_load_dr"
+                  }
+                },
+                "required": [
+                  "gate_id"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

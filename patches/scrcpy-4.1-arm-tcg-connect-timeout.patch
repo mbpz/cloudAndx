@@ -1,0 +1,15 @@
+--- a/app/src/server.c
++++ b/app/src/server.c
+@@ -660,7 +660,11 @@ sc_server_connect_to(struct sc_server *server, struct sc_server_info *info) {
+             tunnel_port = tunnel->local_port;
+         }
+ 
+-        unsigned attempts = 100;
++        /*
++         * Android 17 under ARM TCG may need more than the upstream 10-second
++         * window before app_process creates the scrcpy localabstract socket.
++         */
++        unsigned attempts = 1200;
+         sc_tick delay = SC_TICK_FROM_MS(100);
+         sc_socket first_socket = connect_to_server(server, attempts, delay,
+                                                    tunnel_host, tunnel_port);

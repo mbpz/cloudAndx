@@ -1,0 +1,29 @@
+diff --git a/android/third_party/protobuf/CMakeLists.txt b/android/third_party/protobuf/CMakeLists.txt
+--- a/android/third_party/protobuf/CMakeLists.txt
++++ b/android/third_party/protobuf/CMakeLists.txt
+@@ -62,17 +62,22 @@
+   # currently running on.
+   get_filename_component(
+     PROTOC
+-    ${ANDROID_CROSS_BUILD_DIRECTORY}/protobuf_ext_cross/src/protobuf_ext_cross-build/protobuf/protoc
++    ${ANDROID_CROSS_BUILD_DIRECTORY}/protobuf_ext_cross/src/protobuf_ext_cross-build/protoc
+     ABSOLUTE)
+   message(STATUS "Cross compiling protobuf for host ${ANDROID_HOST_TAG}")
+   externalproject_add(
+     protobuf_ext_cross
+     PREFIX ${ANDROID_CROSS_BUILD_DIRECTORY}/protobuf_ext_cross
+     DOWNLOAD_COMMAND ""
+-    SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
++    SOURCE_DIR ${protobuf_SOURCE_DIR}
+     CMAKE_ARGS
+       ${ANDROID_HOST_TOOLCHAIN_CMAKE_ARGS}
+-      "-DIN_CROSS_COMPILE=TRUE"
++      "-DABSL_ROOT_DIR=${ANDROID_QEMU2_TOP_DIR}/../abseil-cpp"
++      "-Dprotobuf_ABSL_PROVIDER=module"
++      "-Dprotobuf_BUILD_TESTS=OFF"
++      "-Dprotobuf_BUILD_SHARED_LIBS=OFF"
++      "-Dprotobuf_INSTALL=OFF"
++      "-Dprotobuf_WITH_ZLIB=OFF"
+     BUILD_BYPRODUCTS ${PROTOC}
+     LOG_OUTPUT_ON_FAILURE TRUE
+     INSTALL_COMMAND "")

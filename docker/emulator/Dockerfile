@@ -3,6 +3,7 @@ ARG RUNTIME_BASE_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42eb
 ARG RUNTIME_PLATFORM=linux/amd64
 ARG NATIVE_ENGINE_IMAGE=cloudandx/aemu-native-engine:37.1.7
 ARG NATIVE_ENGINE_PLATFORM=linux/arm64
+ARG GRPCURL_IMAGE=fullstorydev/grpcurl:v1.9.3@sha256:085e183ca334eb4e81ca81ee12cbb2b2737505d1d77f5e33dabc5d066593d998
 ARG NATIVE_AEMU_REVISION
 ARG NATIVE_AEMU_SOURCE_LOCK_SHA256
 ARG NATIVE_AEMU_PATCH_SET_SHA256
@@ -30,7 +31,7 @@ COPY docker/emulator/avd/ ./avd/
 COPY docker/emulator/tests/ ./tests/
 COPY docker/emulator/native-engine/bin/run-qemu-system-aarch64-headless ./native-engine/bin/run-qemu-system-aarch64-headless
 COPY docker/emulator/native-engine/bin/netsimd ./native-engine/bin/netsimd
-RUN chmod 0555 bin/*.sh tests/*.sh \
+RUN chmod 0555 bin/*.sh bin/*.py tests/*.sh \
       native-engine/bin/run-qemu-system-aarch64-headless native-engine/bin/netsimd \
     && tests/self-test.sh
 
@@ -200,8 +201,6 @@ RUN apt-get update \
       python3 \
       python3-pip \
       socat \
-      x11vnc \
-      xvfb \
       zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 android \
@@ -221,6 +220,8 @@ RUN set -eu; \
     printf '%s\n' "${adb_version}" | grep -q 'Version 37\.0\.0'
 
 FROM --platform=${NATIVE_ENGINE_PLATFORM} ${NATIVE_ENGINE_IMAGE} AS native-engine-bundle
+
+FROM --platform=${RUNTIME_PLATFORM} ${GRPCURL_IMAGE} AS grpcurl-bundle
 
 FROM runtime-base AS runtime
 
@@ -288,8 +289,9 @@ COPY --from=ramdisk-overlay-builder \
   /opt/cloudandx/android-ramdisk/derived-ramdisk.img \
   /opt/android-sdk/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a/ramdisk.img
 COPY --from=native-engine-bundle /opt/cloudandx/native-aemu/ /opt/cloudandx/native-aemu/
+COPY --from=grpcurl-bundle /bin/grpcurl /opt/cloudandx/grpcurl/grpcurl
 COPY docker/emulator/avd/ /opt/android-avd-template/
-COPY docker/emulator/bin/entrypoint.sh docker/emulator/bin/single-container-entrypoint.sh docker/emulator/bin/healthcheck.sh docker/emulator/bin/runtime-lib.sh docker/emulator/bin/runtime-preflight.sh /usr/local/bin/
+COPY docker/emulator/bin/entrypoint.sh docker/emulator/bin/single-container-entrypoint.sh docker/emulator/bin/healthcheck.sh docker/emulator/bin/runtime-lib.sh docker/emulator/bin/runtime-preflight.sh docker/emulator/bin/aemu-rfb-bridge.py /usr/local/bin/
 COPY docker/bootstrap/check-runtime-arch.sh /usr/local/bin/
 COPY services/device-bridge/bridge.py /opt/cloudandx/device-bridge/bridge.py
 COPY services/evidence-gate/requirements.txt /opt/cloudandx/evidence-gate/requirements.txt
@@ -311,6 +313,7 @@ RUN set -eu; \
       /usr/local/bin/healthcheck.sh \
       /usr/local/bin/runtime-lib.sh \
       /usr/local/bin/runtime-preflight.sh \
+      /usr/local/bin/aemu-rfb-bridge.py \
       /usr/local/bin/check-runtime-arch.sh \
       /opt/cloudandx/device-bridge/bridge.py \
     && install -m 0555 /opt/cloudandx/native-aemu/lib64/ld-linux-aarch64.so.1 \
@@ -390,6 +393,8 @@ RUN set -eu; \
     && printf '%s\n' "${scrcpy_version}" \
     && printf '%s\n' "${scrcpy_version}" | grep -Fq "scrcpy ${SCRCPY_VERSION}" \
     && test -s /opt/cloudandx/scrcpy/scrcpy-server \
+    && test -x /opt/cloudandx/grpcurl/grpcurl \
+    && test "$(/opt/cloudandx/grpcurl/grpcurl -version 2>&1)" = "grpcurl v1.9.3" \
     && test -d /opt/android-sdk/emulator/resources \
     && test -d /opt/cloudandx/native-aemu/resources \
     && for resource_dir in macros macroPreviews; do \
@@ -439,6 +444,9 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     NOVNC_ROOT=/opt/cloudandx/novnc \
     NOVNC_PORT=6080 \
     VNC_PORT=5900 \
+    GRPCURL_BIN=/opt/cloudandx/grpcurl/grpcurl \
+    AEMU_RFB_BRIDGE=/usr/local/bin/aemu-rfb-bridge.py \
+    BROWSER_READY_FILE=/data/runtime/aemu-rfb-first-frame.ready \
     SCRCPY_VERSION=${SCRCPY_VERSION} \
     SCRCPY_ROOT=/opt/cloudandx/scrcpy \
     SCRCPY_SERIAL=emulator-5556 \
@@ -456,9 +464,7 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS=${ANDROID_BLUETOOTH_HCI_TIMEOUT_MS} \
     EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS=${ANDROID_BLUETOOTH_HCI_RESTART_TIMEOUT_MS} \
     ADB_MDNS_OPENSCREEN=0 \
-    DISPLAY=:0 \
-    XVFB_SCREEN=0 \
-    XVFB_RESOLUTION=480x1080x24
+    DISPLAY=:0
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

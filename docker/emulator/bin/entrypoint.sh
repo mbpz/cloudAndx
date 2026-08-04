@@ -36,13 +36,9 @@ SOCAT_BIN=${SOCAT_BIN:-socat}
 ADB_PRIVATE_KEY_FILE=${ADB_PRIVATE_KEY_FILE:-/run/secrets/adbkey}
 ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
 BRIDGE_SCRIPT=${BRIDGE_SCRIPT:-/opt/cloudandx/device-bridge/bridge.py}
-DISPLAY=${DISPLAY:-:0}
-XVFB_SCREEN=${XVFB_SCREEN:-0}
-XVFB_RESOLUTION=${XVFB_RESOLUTION:-480x1080x24}
 ANDROID_DISPLAY_WIDTH=${ANDROID_DISPLAY_WIDTH:-480}
 ANDROID_DISPLAY_HEIGHT=${ANDROID_DISPLAY_HEIGHT:-1080}
 ANDROID_DISPLAY_DENSITY=${ANDROID_DISPLAY_DENSITY:-187}
-XVFB_SOCKET_WAIT_SECONDS=${XVFB_SOCKET_WAIT_SECONDS:-30}
 NOVNC_PORT=${NOVNC_PORT:-6080}
 NOVNC_TLS=${NOVNC_TLS:-true}
 NOVNC_TLS_CERT=${NOVNC_TLS_CERT:-/data/runtime/novnc/tls-cert.pem}
@@ -52,11 +48,11 @@ NOVNC_ROOT=${NOVNC_ROOT:-/opt/cloudandx/novnc}
 SCRCPY_ROOT=${SCRCPY_ROOT:-/opt/cloudandx/scrcpy}
 SCRCPY_BIN=${SCRCPY_BIN:-${SCRCPY_ROOT}/scrcpy}
 SCRCPY_SERIAL=${SCRCPY_SERIAL:-emulator-${EMULATOR_CONSOLE_PORT}}
-SCRCPY_RETRY_DELAY_SECONDS=${SCRCPY_RETRY_DELAY_SECONDS:-2}
-SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS=${SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS:-180}
-SCRCPY_READY_FILE=${SCRCPY_READY_FILE:-/tmp/cloudandx-scrcpy-first-frame.ready}
-XVFB_BIN=${XVFB_BIN:-Xvfb}
-X11VNC_BIN=${X11VNC_BIN:-x11vnc}
+ANDROID_READY_RETRY_SECONDS=${ANDROID_READY_RETRY_SECONDS:-2}
+BROWSER_READY_FILE=${BROWSER_READY_FILE:-/data/runtime/aemu-rfb-first-frame.ready}
+GRPCURL_BIN=${GRPCURL_BIN:-/opt/cloudandx/grpcurl/grpcurl}
+AEMU_RFB_BRIDGE=${AEMU_RFB_BRIDGE:-/usr/local/bin/aemu-rfb-bridge.py}
+AEMU_PROTO_DIR=${AEMU_PROTO_DIR:-${ANDROID_SDK_ROOT}/emulator/lib}
 WEBSOCKIFY_BIN=${WEBSOCKIFY_BIN:-websockify}
 PYTHON_BIN=${PYTHON_BIN:-python3}
 
@@ -66,8 +62,8 @@ export EMULATOR_CONSOLE_PORT EMULATOR_CONSOLE_SOCKET EMULATOR_CONSOLE_AUTH_TOKEN
 export EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
 export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE ANDROID_RUNTIME_IMPLEMENTATION NATIVE_AEMU_ROOT NATIVE_AEMU_RUNNER
 export EMULATOR_BIN ADB_BIN SOCAT_BIN
-export DISPLAY XVFB_SCREEN XVFB_RESOLUTION NOVNC_PORT VNC_PORT NOVNC_ROOT
-export SCRCPY_ROOT SCRCPY_BIN SCRCPY_SERIAL SCRCPY_RETRY_DELAY_SECONDS SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS SCRCPY_READY_FILE
+export NOVNC_PORT VNC_PORT NOVNC_ROOT
+export SCRCPY_ROOT SCRCPY_BIN SCRCPY_SERIAL ANDROID_READY_RETRY_SECONDS BROWSER_READY_FILE
 
 initialize_single_container_state() {
   token_dir=${EMULATOR_CONSOLE_AUTH_TOKEN_FILE%/*}
@@ -127,7 +123,7 @@ validate_android_emulator_args "$@"
 validate_uint_range ANDROID_DISPLAY_WIDTH "${ANDROID_DISPLAY_WIDTH}" 320 2160
 validate_uint_range ANDROID_DISPLAY_HEIGHT "${ANDROID_DISPLAY_HEIGHT}" 480 3840
 validate_uint_range ANDROID_DISPLAY_DENSITY "${ANDROID_DISPLAY_DENSITY}" 120 640
-validate_uint_range SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS "${SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS}" 30 900
+validate_uint_range ANDROID_READY_RETRY_SECONDS "${ANDROID_READY_RETRY_SECONDS}" 1 30
 
 set_avd_config_value() {
   config_file=$1
@@ -387,45 +383,6 @@ EOF
   EMULATOR_PID=$!
 }
 
-wait_for_display_socket() {
-  display_number=${DISPLAY#:}
-  socket_path=/tmp/.X11-unix/X${display_number}
-  remaining=${XVFB_SOCKET_WAIT_SECONDS}
-
-  [ "${remaining}" -gt 0 ] || return 0
-
-  while [ "${remaining}" -gt 0 ]; do
-    [ -S "${socket_path}" ] && return 0
-    sleep 1
-    remaining=$((remaining - 1))
-  done
-
-  runtime_die "Xvfb did not expose ${socket_path} for DISPLAY=${DISPLAY}."
-}
-
-start_xvfb() {
-  XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/data/runtime/xdg}
-  export XDG_RUNTIME_DIR
-  install -d -m 0700 "${XDG_RUNTIME_DIR}"
-  "${XVFB_BIN}" "${DISPLAY}" -screen "${XVFB_SCREEN}" "${XVFB_RESOLUTION}" -nolisten tcp -ac &
-  XVFB_PID=$!
-  wait_for_display_socket
-  runtime_log "Xvfb is serving DISPLAY=${DISPLAY} with screen ${XVFB_SCREEN}=${XVFB_RESOLUTION}."
-}
-
-start_x11vnc() {
-  "${X11VNC_BIN}" \
-    -display "${DISPLAY}" \
-    -rfbport "${VNC_PORT}" \
-    -localhost \
-    -shared \
-    -forever \
-    -nopw \
-    -quiet &
-  X11VNC_PID=$!
-  runtime_log "x11vnc is listening on loopback-only port ${VNC_PORT} for DISPLAY=${DISPLAY}."
-}
-
 start_novnc() {
   if [ "${NOVNC_TLS}" = true ]; then
     install -d -m 0700 "$(dirname "${NOVNC_TLS_CERT}")"
@@ -446,7 +403,7 @@ start_novnc() {
   NOVNC_PID=$!
 }
 
-wait_for_scrcpy_target() {
+wait_for_android_target() {
   while :; do
     if [ -n "${EMULATOR_PID-}" ] && ! kill -0 "${EMULATOR_PID}" 2>/dev/null; then
       return 1
@@ -456,77 +413,33 @@ wait_for_scrcpy_target() {
     if [ "${state}" = device ] && [ "${boot_completed}" = 1 ]; then
       return 0
     fi
-    sleep "${SCRCPY_RETRY_DELAY_SECONDS}"
+    sleep "${ANDROID_READY_RETRY_SECONDS}"
   done
 }
 
-start_scrcpy() {
-  rm -f "${SCRCPY_READY_FILE}"
+start_aemu_rfb_bridge() {
+  rm -f "${BROWSER_READY_FILE}"
   (
     set -eu
-    cd "${SCRCPY_ROOT}"
-    while :; do
-      wait_for_scrcpy_target || exit 1
-      runtime_log "Starting scrcpy on ${DISPLAY} for ${SCRCPY_SERIAL}."
-      "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell input keyevent WAKEUP >/dev/null 2>&1 || true
-      "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell wm dismiss-keyguard >/dev/null 2>&1 || true
-      set +e
-      # x11vnc injects core X11 pointer events. SDL's XInput2 path can observe
-      # the cursor while dropping its synthetic button/drag events, leaving a
-      # visible but uncontrollable Android screen. Keep scrcpy on SDL's core
-      # X11 input path so noVNC clicks and drags retain SDK touchscreen
-      # semantics (DOWN/MOVE/UP) on the same device.
-      scrcpy_log=/tmp/cloudandx-scrcpy.$$.log
-      : >"${scrcpy_log}"
-      tail -n +1 -f "${scrcpy_log}" >&2 &
-      scrcpy_log_pid=$!
-      ADB="${ADB_BIN}" DISPLAY="${DISPLAY}" SDL_VIDEODRIVER=x11 \
-        SDL_VIDEO_X11_XINPUT2=0 SDL_MOUSE_FOCUS_CLICKTHROUGH=1 "${SCRCPY_BIN}" \
-        --serial "${SCRCPY_SERIAL}" --no-audio --stay-awake --max-size="${ANDROID_DISPLAY_HEIGHT}" \
-        --max-fps=30 --video-bit-rate=4M --video-buffer=0 \
-        --mouse=sdk --keyboard=sdk \
-        --window-x=0 --window-y=0 --window-width="${ANDROID_DISPLAY_WIDTH}" --window-height="${ANDROID_DISPLAY_HEIGHT}" \
-        --window-borderless >"${scrcpy_log}" 2>&1 &
-      scrcpy_client_pid=$!
-
-      elapsed=0
-      first_frame=0
-      while kill -0 "${scrcpy_client_pid}" 2>/dev/null; do
-        if grep -Fq 'INFO: Texture:' "${scrcpy_log}"; then
-          first_frame=1
-          break
-        fi
-        if [ "${elapsed}" -ge "${SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS}" ]; then
-          runtime_log "scrcpy produced no first frame within ${SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS}s; restarting the video session."
-          kill -TERM "${scrcpy_client_pid}" 2>/dev/null || true
-          break
-        fi
-        sleep 2
-        elapsed=$((elapsed + 2))
-      done
-
-      if [ "${first_frame}" -eq 1 ]; then
-        : >"${SCRCPY_READY_FILE}"
-        runtime_log "scrcpy first frame is ready after ${elapsed}s."
-      fi
-      wait "${scrcpy_client_pid}"
-      scrcpy_status=$?
-      rm -f "${SCRCPY_READY_FILE}"
-      kill -TERM "${scrcpy_log_pid}" 2>/dev/null || true
-      wait "${scrcpy_log_pid}" 2>/dev/null || true
-      rm -f "${scrcpy_log}"
-      set -e
-      runtime_log "scrcpy exited with status ${scrcpy_status}; retrying in ${SCRCPY_RETRY_DELAY_SECONDS}s."
-      sleep "${SCRCPY_RETRY_DELAY_SECONDS}"
-    done
+    wait_for_android_target || exit 1
+    "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell input keyevent WAKEUP >/dev/null 2>&1 || true
+    "${ADB_BIN}" -s "${SCRCPY_SERIAL}" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+    runtime_log "Starting the event-driven AEMU framebuffer/input bridge on loopback RFB port ${VNC_PORT}."
+    exec "${PYTHON_BIN}" "${AEMU_RFB_BRIDGE}" \
+      --grpcurl "${GRPCURL_BIN}" \
+      --proto-dir "${AEMU_PROTO_DIR}" \
+      --endpoint "127.0.0.1:${EMULATOR_GRPC_INTERNAL_PORT}" \
+      --listen-host 127.0.0.1 --listen-port "${VNC_PORT}" \
+      --width "${ANDROID_DISPLAY_WIDTH}" --height "${ANDROID_DISPLAY_HEIGHT}" \
+      --ready-file "${BROWSER_READY_FILE}"
   ) &
-  SCRCPY_PID=$!
+  AEMU_RFB_PID=$!
 }
 
 stop_children() {
   trap - EXIT INT TERM HUP
 
-  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${SCRCPY_PID-}" "${XVFB_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${AEMU_RFB_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -TERM "${child}" 2>/dev/null || true
     fi
@@ -535,7 +448,7 @@ stop_children() {
   remaining=20
   while [ "${remaining}" -gt 0 ]; do
     live=0
-    for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${SCRCPY_PID-}" "${XVFB_PID-}" "${EMULATOR_PID-}"; do
+    for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${AEMU_RFB_PID-}" "${EMULATOR_PID-}"; do
       if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
         live=1
       fi
@@ -545,7 +458,7 @@ stop_children() {
     remaining=$((remaining - 1))
   done
 
-  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${X11VNC_PID-}" "${SCRCPY_PID-}" "${XVFB_PID-}" "${EMULATOR_PID-}"; do
+  for child in "${BRIDGE_PID-}" "${ADB_SOCAT_PID-}" "${CONSOLE_SOCAT_PID-}" "${GRPC_SOCAT_PID-}" "${NOVNC_PID-}" "${AEMU_RFB_PID-}" "${EMULATOR_PID-}"; do
     if [ -n "${child}" ] && kill -0 "${child}" 2>/dev/null; then
       kill -KILL "${child}" 2>/dev/null || true
     fi
@@ -595,10 +508,8 @@ runtime_log "gRPC proxy is listening on container port ${EMULATOR_GRPC_PORT} and
 "${PYTHON_BIN}" "${BRIDGE_SCRIPT}" &
 BRIDGE_PID=$!
 runtime_log "Device bridge is listening on container port ${LISTEN_PORT:-8090}."
-start_xvfb
-start_x11vnc
 start_novnc
-start_scrcpy
+start_aemu_rfb_bridge
 
 status=0
 while :; do
@@ -630,23 +541,13 @@ while :; do
     status=1
     break
   fi
-  if ! kill -0 "${XVFB_PID}" 2>/dev/null; then
-    runtime_log "ERROR: Xvfb exited unexpectedly."
-    status=1
-    break
-  fi
-  if ! kill -0 "${X11VNC_PID}" 2>/dev/null; then
-    runtime_log "ERROR: x11vnc exited unexpectedly."
-    status=1
-    break
-  fi
   if ! kill -0 "${NOVNC_PID}" 2>/dev/null; then
     runtime_log "ERROR: noVNC exited unexpectedly."
     status=1
     break
   fi
-  if ! kill -0 "${SCRCPY_PID}" 2>/dev/null; then
-    runtime_log "ERROR: scrcpy exited unexpectedly."
+  if ! kill -0 "${AEMU_RFB_PID}" 2>/dev/null; then
+    runtime_log "ERROR: AEMU framebuffer/input bridge exited unexpectedly."
     status=1
     break
   fi

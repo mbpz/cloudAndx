@@ -40,7 +40,9 @@ ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与
 默认 Compose 只启动一个 `android` 容器，使用唯一运行镜像
 `cloudandx/android17-play-emulator:37.0-r06`。其 PID 1 依次执行兼容性检查、ADB
 密钥/Console 令牌初始化和证据门禁，再统一监督模拟器、ADB/gRPC/Console 代理、设备桥接
-以及容器内 `scrcpy -> Xvfb -> x11vnc -> websockify/noVNC` 浏览器交互链路。
+以及容器内 `AEMU streamScreenshot/streamInputEvent -> RFB -> websockify/noVNC`
+浏览器交互链路。固定摘要的 grpcurl 1.9.3 只连接容器回环地址上的 AEMU gRPC；
+它不增加外部服务或运行容器。
 `native-engine` 仅是显式 `build` profile 使用的跨架构构建制品，不会作为运行容器启动。
 
 启动后：
@@ -59,9 +61,12 @@ scripts/scrcpy-android17.sh
 
 连接脚本会自动把容器已信任的 ADB 私钥复制到被 Git 忽略的 `.runtime/container-adb/`，因此无需等待 Android 授权弹窗；并默认使用 UHID 鼠标和键盘，让 Android 将输入识别为物理设备。ADB、视频和输入仍只经过 `127.0.0.1`。后续连接直接运行第二条命令即可。
 
-首次访问需要接受项目持久化自签名证书；接受后页面使用 HTTPS/WSS 加密。浏览器中的鼠标点击、拖动和键盘输入由容器内 scrcpy 4.1 注入同一台 Android；noVNC
-1.7.0 和 websockify 0.13.0 只发布到宿主回环地址，raw VNC 5900 不发布。
-远程 X11 桌面与 scrcpy 的 `320x720` 兼容档编码纹理尺寸一致，scrcpy 使用覆盖整个桌面的无边框窗口；noVNC 强制启用 `resize=scale` 并关闭 `view_only`，Android 画面会随浏览器可视区域自适应缩放，且不会被浏览器缓存的“仅查看”设置禁用输入。统一视频纹理、SDL 窗口和 VNC framebuffer 尺寸可避免鼠标坐标被重复放大。浏览器链路显式使用 scrcpy SDK 鼠标与键盘注入：左键点击和按住拖动按 Android 单指触控语义处理，Mac 触控板双指滚动会转换成连续的按下、移动、抬起手指滑动，不再作为桌面鼠标滚轮发送；视频限制为 30 FPS、零缓冲并使用 4 Mbps 码率，优先保证资源受限的 TCG 环境能够完成首帧。
+首次访问需要接受项目持久化自签名证书；接受后页面使用 HTTPS/WSS 加密。
+浏览器画面来自 AEMU 官方的事件驱动帧流，不是截图轮询；RFB 点击、按住拖动和
+释放直接映射为 Android 主屏的触控 pressure 事件，键盘和文本走同一个持久输入流。
+noVNC 1.7.0 和 websockify 0.13.0 只发布到宿主回环地址，raw RFB 5900 不发布。
+noVNC 强制启用 `resize=scale` 并关闭 `view_only`；Mac 触控板滚动仍转换为连续的
+DOWN/MOVE/UP 单指滑动。只有收到第一张真实 AEMU 帧后容器才会通过浏览器健康门禁。
 
 宿主 scrcpy client/server 必须保持同版。ADB 不对局域网或公网发布；跨主机使用时先通过
 SSH/VPN/零信任通道安全转发 6080，不直接把 Compose 端口改为 `0.0.0.0`，也不转发

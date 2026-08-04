@@ -27,17 +27,15 @@ NATIVE_AEMU_INTERPRETER=${NATIVE_AEMU_INTERPRETER:-/lib/ld-linux-aarch64.so.1}
 EMULATOR_BIN=${EMULATOR_BIN:-${NATIVE_AEMU_RUNNER}}
 ADB_BIN=${ADB_BIN:-${ANDROID_SDK_ROOT}/platform-tools/adb}
 SOCAT_BIN=${SOCAT_BIN:-socat}
-DISPLAY=${DISPLAY:-:0}
-XVFB_SCREEN=${XVFB_SCREEN:-0}
-XVFB_RESOLUTION=${XVFB_RESOLUTION:-480x1080x24}
 NOVNC_PORT=${NOVNC_PORT:-6080}
 VNC_PORT=${VNC_PORT:-5900}
 NOVNC_ROOT=${NOVNC_ROOT:-/opt/cloudandx/novnc}
 SCRCPY_ROOT=${SCRCPY_ROOT:-/opt/cloudandx/scrcpy}
 SCRCPY_BIN=${SCRCPY_BIN:-${SCRCPY_ROOT}/scrcpy}
 SCRCPY_SERIAL=${SCRCPY_SERIAL:-emulator-${EMULATOR_CONSOLE_PORT}}
-XVFB_BIN=${XVFB_BIN:-Xvfb}
-X11VNC_BIN=${X11VNC_BIN:-x11vnc}
+GRPCURL_BIN=${GRPCURL_BIN:-/opt/cloudandx/grpcurl/grpcurl}
+AEMU_RFB_BRIDGE=${AEMU_RFB_BRIDGE:-/usr/local/bin/aemu-rfb-bridge.py}
+AEMU_PROTO_DIR=${AEMU_PROTO_DIR:-${ANDROID_SDK_ROOT}/emulator/lib}
 WEBSOCKIFY_BIN=${WEBSOCKIFY_BIN:-websockify}
 SYSTEM_IMAGE_DIR=${SYSTEM_IMAGE_DIR:-${ANDROID_SDK_ROOT}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a}
 ANDROID_RAMDISK_ROOT=${ANDROID_RAMDISK_ROOT:-/opt/cloudandx/android-ramdisk}
@@ -73,8 +71,6 @@ if [ "${SOCAT_BIN}" = "socat" ]; then
 else
   [ -x "${SOCAT_BIN}" ] || runtime_die "socat is missing or not executable: ${SOCAT_BIN}"
 fi
-[ "${DISPLAY#*:}" != "${DISPLAY}" ] || runtime_die "DISPLAY must be in X11 :N form."
-validate_uint_range XVFB_SCREEN "${XVFB_SCREEN}" 0 16
 validate_uint_range NOVNC_PORT "${NOVNC_PORT}" 1024 65535
 validate_uint_range VNC_PORT "${VNC_PORT}" 1024 65535
 [ "${NOVNC_PORT}" -ne "${VNC_PORT}" ] \
@@ -96,9 +92,14 @@ grep -Fq "\"version\": \"${NOVNC_VERSION:-1.7.0}\"" "${NOVNC_ROOT}/package.json"
 [ -s "${SCRCPY_ROOT}/scrcpy-server" ] || runtime_die "scrcpy server is missing from ${SCRCPY_ROOT}."
 [ "${SCRCPY_SERIAL}" = "emulator-${EMULATOR_CONSOLE_PORT}" ] \
   || runtime_die "SCRCPY_SERIAL must match the in-container emulator serial."
-command -v "${XVFB_BIN}" >/dev/null 2>&1 || runtime_die "Xvfb is not installed."
-command -v "${X11VNC_BIN}" >/dev/null 2>&1 || runtime_die "x11vnc is not installed."
 command -v "${WEBSOCKIFY_BIN}" >/dev/null 2>&1 || runtime_die "websockify is not installed."
+[ -x "${GRPCURL_BIN}" ] || runtime_die "grpcurl is missing or not executable: ${GRPCURL_BIN}"
+[ -x "${AEMU_RFB_BRIDGE}" ] || runtime_die "AEMU RFB bridge is missing or not executable: ${AEMU_RFB_BRIDGE}"
+[ -s "${AEMU_PROTO_DIR}/emulator_controller.proto" ] \
+  || runtime_die "AEMU controller proto is missing from ${AEMU_PROTO_DIR}."
+grpcurl_version_output=$("${GRPCURL_BIN}" -version 2>&1 || true)
+[ "${grpcurl_version_output}" = "grpcurl v${GRPCURL_VERSION:-1.9.3}" ] \
+  || runtime_die "grpcurl does not match the locked version."
 scrcpy_version_output=$("${SCRCPY_BIN}" --version 2>&1 || true)
 printf '%s\n' "${scrcpy_version_output}" | grep -Fq "scrcpy ${SCRCPY_VERSION:-4.1}" \
   || runtime_die "scrcpy binary does not match the locked version."

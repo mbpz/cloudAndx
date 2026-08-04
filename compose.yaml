@@ -43,7 +43,6 @@ services:
       EMULATOR_GPU: ${EMULATOR_GPU:-swiftshader}
       ANDROID_DISPLAY_WIDTH: ${ANDROID_DISPLAY_WIDTH:-320}
       ANDROID_DISPLAY_HEIGHT: ${ANDROID_DISPLAY_HEIGHT:-720}
-      XVFB_RESOLUTION: ${XVFB_RESOLUTION:-320x720x24}
       EMULATOR_CONSOLE_SOCKET: /data/runtime/console/console.sock
       EMULATOR_CONSOLE_AUTH_TOKEN_FILE: /data/runtime/secrets/token
       ADB_PRIVATE_KEY_FILE: /data/runtime/adb/adbkey
@@ -69,7 +68,7 @@ services:
       RUNTIME_HEALTH_BUDGET_SECONDS: "180"
       RUNTIME_HEALTH_TTL_SECONDS: "60"
       DISPLAY: ":0"
-      SCRCPY_FIRST_FRAME_TIMEOUT_SECONDS: "900"
+      BROWSER_READY_FILE: /data/runtime/aemu-rfb-first-frame.ready
       NOVNC_PORT: "6080"
       NOVNC_TLS: "true"
       VNC_PORT: "5900"

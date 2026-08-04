@@ -1,9 +1,10 @@
-# 容器 Android 远程交互：现状经验与 ReDroid 16 新方案
+# 容器 Android 远程交互：现状经验与 Docker 兼容方案
 
 ## 决策摘要
 
-项目不再把“在当前 M1 Mac 上重新编译并运行 Android 17 ReDroid”作为解决
-路径。原因不是单一编译错误，而是三个边界同时存在：
+当前 OrbStack Docker 不提供 ReDroid 所需的 binder/ashmem/DMA-BUF 宿主设备，
+因此默认 Compose 使用可在该 Docker Engine 中实际启动的 Android 17 AEMU 兼容档。
+选择边界不是单一编译错误，而是三个条件同时存在：
 
 1. ReDroid 上游公开支持到 Android 16；Android 17 需要移植 device、HAL、
    init、SELinux 和图形适配，不是改一个版本号。
@@ -12,39 +13,36 @@
 3. 完整 AOSP 构建通常需要 x86_64 Linux、大量内存和数百 GB 工作空间；当前
    M1 Mac 的内存、磁盘余量和宿主内核接口都不适合作为 Android 17 构建机。
 
-当前主路线固定为：
+当前可运行路线固定为：
 
 ```text
 Apple silicon or ARM64 Linux host
   -> provider-neutral Docker Linux runtime
-  -> kernel with 4 KiB pages and required Android devices
-  -> ashmem + binderfs + DMA-BUF heaps
-  -> ReDroid 16 ARM64-only（固定 digest）
+  -> ARM64 native AEMU + TCG/SwiftShader
+  -> Android 17 API 37 Play ARM64 16 KiB image（固定摘要）
   -> 同一 Android 实例
        +-- loopback ADB -> 宿主 scrcpy 4.1
-       +-- 容器内实时显示/输入 bridge -> Xvfb/Openbox -> x11vnc -> noVNC 1.7.0
+       +-- AEMU event stream -> loopback RFB -> HTTPS noVNC 1.7.0
        +-- 受限 Device Bridge API
 ```
 
-这条路线已迁入默认 Compose：Android 16、宿主 scrcpy、HTTPS noVNC、浏览器
-点击/滑动/键盘以及带鉴权的 Device Bridge 都在同一个最终 ARM64 镜像中通过
-运行验收。31 分钟稳定性和浏览器 P95 100 ms 延迟基线已经通过；当前仍不能声明
-“完整真机”或“生产就绪”，因为固定 ReDroid digest 的模拟 Bluetooth HAL 存在
-崩溃，且 AOSP 容器不具备 GMS/认证栈和真实硬件能力。问题不再是 Android 17 编译
-或基本远程输入不可用。
+这条路线已迁入默认 Compose。浏览器桥使用 AEMU 官方按产帧推送的
+`streamScreenshot`，不是周期截图；输入使用 `streamInputEvent` 的触控和键盘语义。
+noVNC、websockify、grpcurl 和 Android 制品都固定版本/摘要，并由同一 fail-closed
+入口监督。ARM TCG 兼容档不满足 realtime 性能门槛，因此不得声明“真机级”或
+“生产就绪”。ReDroid 16 仍是满足宿主内核设备后的长期运行路线，不在当前宿主伪降级。
 
-## 旧方案：Android 17 AEMU 的实测经验
+## Android 17 AEMU 的实测经验
 
 ### 能做到什么
 
 - 一个容器内可以启动 Google Android 17 API 37.0 Play r06。
-- noVNC 1.7.0、websockify 0.13.0、Xvfb、x11vnc 和容器内 scrcpy 可以组成
-  实时画面链路，而不是周期截图。
-- 统一 Android、scrcpy 窗口和 VNC framebuffer 的纵向坐标后，可以排除
-  重复缩放造成的点击偏移。
-- `view_only=false`、SDL core X11 输入和 `--mouse=sdk` 可以让 RFB 的
-  DOWN/MOVE/UP 事件到达 Android。
-- 首帧 ready marker 和 scrcpy 重启循环可以避免“容器健康但浏览器黑屏”。
+- AEMU 的 `streamScreenshot` 在设备产帧时推送 RGB framebuffer，可直接驱动 RFB，
+  不依赖 guest MediaCodec 或截图轮询。
+- `streamInputEvent` 可把 RFB 的 DOWN/MOVE/UP 与键盘事件送到同一主显示。
+- 第一张正确尺寸的 AEMU 帧到达后再创建 ready marker，可避免“容器健康但黑屏”。
+- x11vnc 的内建 WebSocket 探测会与外层 websockify 的 raw TCP 后端握手互相等待，
+  因此默认链路已删除 x11vnc/Xvfb，而不是继续调参掩盖死锁。
 
 ### 为什么仍然不可用
 

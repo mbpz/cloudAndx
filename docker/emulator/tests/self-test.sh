@@ -127,6 +127,7 @@ pass
 
 mkdir -p \
   "${sdk}/emulator" \
+  "${sdk}/emulator/lib" \
   "${sdk}/platform-tools" \
   "${sdk}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a" \
   "${native_aemu}/bin" \
@@ -155,6 +156,7 @@ printf '%s\n' \
   '  start-server|kill-server) ;;' \
   'esac' >"${sdk}/platform-tools/adb"
 chmod 0755 "${sdk}/emulator/emulator" "${sdk}/platform-tools/adb"
+printf '%s\n' 'syntax = "proto3";' >"${sdk}/emulator/lib/emulator_controller.proto"
 cp "${ROOT}/native-engine/bin/run-qemu-system-aarch64-headless" \
   "${native_aemu}/bin/run-qemu-system-aarch64-headless"
 printf '%s\n' \
@@ -391,19 +393,19 @@ printf '%s\n' '#!/bin/sh' 'case ${1-} in --version) echo "scrcpy 4.1" ;; *) exec
   >"${scrcpy_root}/scrcpy"
 printf '%s\n' server >"${scrcpy_root}/scrcpy-server"
 chmod 0755 "${scrcpy_root}/scrcpy"
-for remote_ui_tool in Xvfb x11vnc websockify; do
-  tool_path=${tmp}/${remote_ui_tool}
-  if [ "${remote_ui_tool}" = websockify ]; then
-    printf '%s\n' '#!/bin/sh' 'case ${1-} in --version) echo "websockify 0.13.0" ;; *) exec sleep 30 ;; esac' >"${tool_path}"
-  else
-    printf '%s\n' '#!/bin/sh' 'exec sleep 30' >"${tool_path}"
-  fi
-  chmod 0755 "${tool_path}"
-done
+websockify_stub=${tmp}/websockify
+printf '%s\n' '#!/bin/sh' 'case ${1-} in --version) echo "websockify 0.13.0" ;; *) exec sleep 30 ;; esac' >"${websockify_stub}"
+chmod 0755 "${websockify_stub}"
+grpcurl_stub=${tmp}/grpcurl
+printf '%s\n' '#!/bin/sh' 'case ${1-} in -version) echo "grpcurl v1.9.3" ;; *) exec sleep 30 ;; esac' >"${grpcurl_stub}"
+chmod 0755 "${grpcurl_stub}"
+aemu_rfb_stub=${tmp}/aemu-rfb-bridge.py
+printf '%s\n' '#!/bin/sh' 'exec sleep 30' >"${aemu_rfb_stub}"
+chmod 0755 "${aemu_rfb_stub}"
 python_stub=${tmp}/python3
 printf '%s\n' '#!/bin/sh' 'exec sleep 30' >"${python_stub}"
 chmod 0755 "${python_stub}"
-common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home XDG_RUNTIME_DIR=${data}/runtime/xdg AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} EMULATOR_CONSOLE_SOCKET=${console_socket} EMULATOR_CONSOLE_AUTH_TOKEN_FILE=${console_auth_token_source} ADB_PRIVATE_KEY_FILE=${data}/adb/adbkey ADB_PUBLIC_KEY_FILE=${data}/adb/adbkey.pub KVM_DEVICE=/missing-kvm ANDROID_RAMDISK_ROOT=${ramdisk_root} ANDROID_RAMDISK_ORIGINAL_SHA256=${ramdisk_original_sha256} ANDROID_RAMDISK_CPIO_SHA256=${ramdisk_cpio_sha256} ANDROID_RAMDISK_DERIVED_SHA256=${ramdisk_derived_sha256} NOVNC_ROOT=${novnc_root} NOVNC_TLS=false SCRCPY_ROOT=${scrcpy_root} SCRCPY_BIN=${scrcpy_root}/scrcpy XVFB_BIN=${tmp}/Xvfb X11VNC_BIN=${tmp}/x11vnc WEBSOCKIFY_BIN=${tmp}/websockify PYTHON_BIN=${python_stub} XVFB_SOCKET_WAIT_SECONDS=0"
+common_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${native_aemu} NATIVE_AEMU_INTERPRETER=${fake_interpreter} ANDROID_SDK_ROOT=${sdk} ANDROID_AVD_HOME=${data}/avd ANDROID_EMULATOR_HOME=${data}/emulator-home ANDROID_PREFS_ROOT=${data}/prefs HOME=${data}/home XDG_RUNTIME_DIR=${data}/runtime/xdg AVD_TEMPLATE_DIR=${template} SOCAT_BIN=${socat_stub} EMULATOR_CONSOLE_SOCKET=${console_socket} EMULATOR_CONSOLE_AUTH_TOKEN_FILE=${console_auth_token_source} ADB_PRIVATE_KEY_FILE=${data}/adb/adbkey ADB_PUBLIC_KEY_FILE=${data}/adb/adbkey.pub KVM_DEVICE=/missing-kvm ANDROID_RAMDISK_ROOT=${ramdisk_root} ANDROID_RAMDISK_ORIGINAL_SHA256=${ramdisk_original_sha256} ANDROID_RAMDISK_CPIO_SHA256=${ramdisk_cpio_sha256} ANDROID_RAMDISK_DERIVED_SHA256=${ramdisk_derived_sha256} NOVNC_ROOT=${novnc_root} NOVNC_TLS=false SCRCPY_ROOT=${scrcpy_root} SCRCPY_BIN=${scrcpy_root}/scrcpy WEBSOCKIFY_BIN=${websockify_stub} GRPCURL_BIN=${grpcurl_stub} AEMU_RFB_BRIDGE=${aemu_rfb_stub} PYTHON_BIN=${python_stub}"
 
 preflight_output=$(env ${common_env} EMULATOR_ACCEL=auto "${ROOT}/bin/runtime-preflight.sh" 2>&1)
 assert_contains "${preflight_output}" 'android.release=17' 'preflight reports Android release'
@@ -670,16 +672,16 @@ if tr '\000' '\n' < "/proc/${real_engine_pid}/environ" \
   exit 1
 fi
 pass
-scrcpy_ready_file=${tmp}/scrcpy-first-frame.ready
-: >"${scrcpy_ready_file}"
+browser_ready_file=${tmp}/aemu-rfb-first-frame.ready
+: >"${browser_ready_file}"
 env DOCKER_ENGINE_ARCHITECTURE=arm64 \
   ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 \
   NATIVE_AEMU_ROOT="${real_native_aemu}" \
   ADB_BIN="${fake_adb}" FAKE_ADB_LOG="${fake_adb_log}" SOCAT_BIN="${tcp_probe}" \
-  SCRCPY_READY_FILE="${scrcpy_ready_file}" \
+  BROWSER_READY_FILE="${browser_ready_file}" \
   "${ROOT}/bin/healthcheck.sh"
 pass
-health_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${real_native_aemu} ADB_BIN=${fake_adb} FAKE_ADB_LOG=${fake_adb_log} SOCAT_BIN=${tcp_probe} SCRCPY_READY_FILE=${scrcpy_ready_file}"
+health_env="DOCKER_ENGINE_ARCHITECTURE=arm64 ANDROID_RUNTIME_IMPLEMENTATION=hybrid-aemu-arm64 NATIVE_AEMU_ROOT=${real_native_aemu} ADB_BIN=${fake_adb} FAKE_ADB_LOG=${fake_adb_log} SOCAT_BIN=${tcp_probe} BROWSER_READY_FILE=${browser_ready_file}"
 : >"${fake_adb_log}"
 env ${health_env} "${ROOT}/bin/healthcheck.sh"
 pass
@@ -705,7 +707,7 @@ assert_fails 'healthcheck requires the selected child process' \
     NATIVE_AEMU_ROOT="${tmp}/not-running" ADB_BIN="${fake_adb}" SOCAT_BIN="${tcp_probe}" \
     "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires a browser video first frame' \
-  env ${health_env} SCRCPY_READY_FILE="${tmp}/missing-scrcpy-ready" "${ROOT}/bin/healthcheck.sh"
+  env ${health_env} BROWSER_READY_FILE="${tmp}/missing-browser-ready" "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires gRPC proxy' env ${health_env} FAKE_GRPC=0 "${ROOT}/bin/healthcheck.sh"
 assert_fails 'healthcheck requires the internal ADB connect to succeed' \
   env ${health_env} FAKE_CONNECT=0 "${ROOT}/bin/healthcheck.sh"

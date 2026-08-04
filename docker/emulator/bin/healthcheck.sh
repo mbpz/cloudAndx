@@ -13,7 +13,7 @@ SOCAT_BIN=${SOCAT_BIN:-socat}
 TIMEOUT_BIN=${TIMEOUT_BIN:-timeout}
 NOVNC_PORT=${NOVNC_PORT:-6080}
 NOVNC_TLS=${NOVNC_TLS:-true}
-SCRCPY_READY_FILE=${SCRCPY_READY_FILE:-/tmp/cloudandx-scrcpy-first-frame.ready}
+BROWSER_READY_FILE=${BROWSER_READY_FILE:-/data/runtime/aemu-rfb-first-frame.ready}
 DOCKER_ENGINE_ARCHITECTURE=${DOCKER_ENGINE_ARCHITECTURE:-}
 ANDROID_RUNTIME_IMPLEMENTATION=${ANDROID_RUNTIME_IMPLEMENTATION:-hybrid-aemu-arm64}
 EXPECTED_ANDROID_ABI=${EXPECTED_ANDROID_ABI:-arm64-v8a}
@@ -45,7 +45,7 @@ validate_uint_range ADB_HEALTH_COMMAND_TIMEOUT_SECONDS "${ADB_HEALTH_COMMAND_TIM
 validate_uint_range NOVNC_PORT "${NOVNC_PORT}" 1024 65535
 expected_engine=$(expected_engine_executable "${DOCKER_ENGINE_ARCHITECTURE}")
 engine_process_matches_expected "${expected_engine}"
-[ -f "${SCRCPY_READY_FILE}" ]
+[ -f "${BROWSER_READY_FILE}" ]
 "${SOCAT_BIN}" -T2 -u OPEN:/dev/null "TCP4:127.0.0.1:${EMULATOR_GRPC_PORT},connect-timeout=2" >/dev/null 2>&1
 "${TIMEOUT_BIN}" 5s "${ADB_BIN}" connect "${adb_endpoint}" >/dev/null 2>&1
 [ "$(adb_command -s "${serial}" get-state 2>/dev/null)" = device ]

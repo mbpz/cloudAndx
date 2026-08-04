@@ -94,23 +94,22 @@ grep -Fq 'rfb._sendMouse(pointer.x, pointer.y, 1)' docker/emulator/novnc/cloudan
 grep -Fq 'rfb._sendMouse(pointer.x, pointer.y, 0)' docker/emulator/novnc/cloudandx-touch.js
 grep -Fq 'WEBSOCKIFY_VERSION=0.13.0' "${dockerfile}"
 grep -Fq 'SCRCPY_VERSION=4.1' "${dockerfile}"
-grep -Fq 'Xvfb' "${entrypoint}"
-grep -Fq 'x11vnc' "${entrypoint}"
 grep -Fq 'websockify' "${entrypoint}"
 grep -Fq -- '--ssl-only' "${entrypoint}"
-grep -Fq 'XVFB_RESOLUTION=${XVFB_RESOLUTION:-480x1080x24}' "${entrypoint}"
-grep -Fq 'XVFB_RESOLUTION=${XVFB_RESOLUTION:-480x1080x24}' "${preflight}"
-grep -Fq 'XVFB_RESOLUTION=480x1080x24' "${dockerfile}"
-grep -Fq -- '--window-x=0 --window-y=0 --window-width="${ANDROID_DISPLAY_WIDTH}" --window-height="${ANDROID_DISPLAY_HEIGHT}"' "${entrypoint}"
+grep -Fq 'GRPCURL_IMAGE=fullstorydev/grpcurl:v1.9.3@sha256:085e183ca334eb4e81ca81ee12cbb2b2737505d1d77f5e33dabc5d066593d998' "${dockerfile}"
+grep -Fq 'aemu-rfb-bridge.py' "${entrypoint}"
+grep -Fq -- '--listen-host 127.0.0.1' "${entrypoint}"
+grep -Fq -- '--endpoint "127.0.0.1:${EMULATOR_GRPC_INTERNAL_PORT}"' "${entrypoint}"
+grep -Fq 'streamScreenshot' docker/emulator/bin/aemu-rfb-bridge.py
+grep -Fq 'streamInputEvent' docker/emulator/bin/aemu-rfb-bridge.py
+grep -Fq 'BROWSER_READY_FILE: /data/runtime/aemu-rfb-first-frame.ready' "${compose_file}"
 grep -Fq 'ANDROID_DISPLAY_WIDTH: ${ANDROID_DISPLAY_WIDTH:-320}' "${compose_file}"
 grep -Fq 'ANDROID_DISPLAY_HEIGHT: ${ANDROID_DISPLAY_HEIGHT:-720}' "${compose_file}"
-grep -Fq 'XVFB_RESOLUTION: ${XVFB_RESOLUTION:-320x720x24}' "${compose_file}"
-grep -Fq -- '--max-fps=30 --video-bit-rate=4M --video-buffer=0' "${entrypoint}"
-grep -Fq -- '--mouse=sdk --keyboard=sdk' "${entrypoint}"
-grep -Fq 'SDL_VIDEO_X11_XINPUT2=0' "${entrypoint}"
-grep -Fq 'SDL_MOUSE_FOCUS_CLICKTHROUGH=1' "${entrypoint}"
-grep -Fq 'scrcpy' "${entrypoint}"
 grep -Fq 'noVNC exited unexpectedly' "${entrypoint}"
+if grep -Eq 'Xvfb|x11vnc|SDL_VIDEO_X11|--video-bit-rate' "${entrypoint}"; then
+  printf '%s\n' 'FAIL: legacy desktop/scrcpy browser bridge remains in the entrypoint.' >&2
+  exit 1
+fi
 
 # Container remains least-privileged with one persistent project volume.
 grep -Fq 'read_only: true' "${compose_file}"

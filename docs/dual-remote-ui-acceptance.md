@@ -1,37 +1,25 @@
-# ReDroid 16 双远程入口验收
+# Android 17 AEMU 双远程入口验收
 
 ## 目标拓扑
 
 默认运行时只有一个最终镜像、一个 Android 容器和一个持久化数据卷。noVNC
-与宿主 scrcpy 必须控制同一个 ReDroid serial：
+与宿主 scrcpy 必须控制同一个 AEMU serial：
 
 ```text
-ReDroid 16 / one serial
-  +-- container-local ADB -> scrcpy 4.1 ARM64 -> Xvfb/Openbox -> x11vnc
-  |                                               -> noVNC 1.7.0 / HTTPS
-  +-- host-loopback ADB ----------------------------> host scrcpy 4.1
-  +-- container-local ADB --------------------------> authenticated Device Bridge
+AEMU Android 17 / emulator-5556
+  +-- loopback gRPC -> event-driven frame/input -> RFB -> noVNC 1.7.0 / HTTPS
+  +-- host-loopback ADB -------------------------------> host scrcpy 4.1
+  +-- container-local ADB -----------------------------> authenticated Device Bridge
 ```
 
-容器内 scrcpy 只是 noVNC 的实时显示/输入 bridge；用户不需要在宿主启动
-scrcpy，noVNC 也必须独立可用。宿主 scrcpy 退出或断线不能关闭 Android 或
-浏览器入口。
+noVNC 不依赖宿主 scrcpy，也不依赖截图轮询。宿主 scrcpy 退出或断线不能关闭
+Android 或浏览器入口；浏览器断线也不能结束 Android 或阻止 scrcpy 重连。
 
 ## 前置宿主门禁
 
-进入 Android 启动前必须全部满足：
-
-- ARM64 Linux Docker runtime；
-- provider 已通过 `scripts/check-redroid-host.sh`；
-- page size 为 4096；
-- `CONFIG_IPV6=y`；
-- `CONFIG_DMABUF_HEAPS=y`；
-- `CONFIG_ASHMEM=m` 且 `/dev/ashmem` 可用；
-- `CONFIG_ANDROID_BINDERFS=m`，三个 binderfs 节点可用；
-- 所有条件在 provider 重启后仍成立。
-
-缺失 ashmem、binderfs、DMA-BUF 或用伪造 binder device inode 的环境必须
-fail closed，不允许以降级图形模式继续启动并产生黑屏。
+当前兼容档要求 ARM64 Docker Engine，并固定使用 ARM64 原生 AEMU 主程序、
+ARM64 Android 17 Play system image 与软件 TCG/SwiftShader；项目脚本不得调用或
+切换 provider CLI。运行时、制品身份和首帧任一门禁失败都必须 fail closed。
 
 ## 功能矩阵
 

@@ -1,6 +1,9 @@
 import UI from './ui.js';
+import { consumeMotion, wheelPixels } from './cloudandx-motion.js';
 
-const GESTURE_END_DELAY_MS = 90;
+const GESTURE_END_DELAY_MS = 110;
+const WHEEL_SENSITIVITY = 0.65;
+const MAX_WHEEL_STEP_PX = 18;
 
 function installTouchGestures() {
     if (!UI.rfb || !UI.rfb._canvas) {
@@ -19,6 +22,11 @@ function installTouchGestures() {
     let touching = false;
     let mouseMask = 0;
     let endTimer;
+    let mouseFrame;
+    let pendingMouseEvent;
+    let wheelFrame;
+    let pendingWheel = { x: 0, y: 0 };
+    let wheelEnding = false;
 
     rfb.__cloudAndxTouchInstalled = true;
 
@@ -44,6 +52,68 @@ function installTouchGestures() {
         }
         updatePointer(event);
         rfb._sendMouse(pointer.x, pointer.y, mask);
+    };
+
+    const flushMouseMove = () => {
+        mouseFrame = undefined;
+        if (!pendingMouseEvent || !mouseMask || !UI.rfb || UI.rfb.viewOnly) {
+            pendingMouseEvent = undefined;
+            return;
+        }
+        const event = pendingMouseEvent;
+        pendingMouseEvent = undefined;
+        sendMouse(event, mouseMask);
+    };
+
+    const queueMouseMove = (event) => {
+        pendingMouseEvent = event;
+        if (mouseFrame === undefined) {
+            mouseFrame = window.requestAnimationFrame(flushMouseMove);
+        }
+    };
+
+    const finishWheelGesture = () => {
+        if (touching) {
+            rfb._sendMouse(pointer.x, pointer.y, 0);
+            touching = false;
+        }
+        wheelEnding = false;
+    };
+
+    const sendWheelFrame = () => {
+        wheelFrame = undefined;
+        if (!UI.rfb || UI.rfb.viewOnly) {
+            pendingWheel = { x: 0, y: 0 };
+            finishWheelGesture();
+            return;
+        }
+
+        const xMotion = consumeMotion(pendingWheel.x, MAX_WHEEL_STEP_PX);
+        const yMotion = consumeMotion(pendingWheel.y, MAX_WHEEL_STEP_PX);
+        pendingWheel = { x: xMotion.remaining, y: yMotion.remaining };
+
+        if (xMotion.step !== 0 || yMotion.step !== 0) {
+            if (!touching) {
+                touching = true;
+                rfb._sendMouse(pointer.x, pointer.y, 1);
+            }
+            const bounds = canvas.getBoundingClientRect();
+            pointer.x = Math.max(0, Math.min(bounds.width - 1, pointer.x - xMotion.step));
+            pointer.y = Math.max(0, Math.min(bounds.height - 1, pointer.y - yMotion.step));
+            rfb._sendMouse(pointer.x, pointer.y, 1);
+        }
+
+        if (pendingWheel.x !== 0 || pendingWheel.y !== 0) {
+            wheelFrame = window.requestAnimationFrame(sendWheelFrame);
+        } else if (wheelEnding) {
+            finishWheelGesture();
+        }
+    };
+
+    const queueWheelFrame = () => {
+        if (wheelFrame === undefined) {
+            wheelFrame = window.requestAnimationFrame(sendWheelFrame);
+        }
     };
 
     // noVNC's generic handlers rely on a browser-generated compatibility
@@ -95,7 +165,7 @@ function installTouchGestures() {
         if (mouseMask) {
             event.preventDefault();
             event.stopImmediatePropagation();
-            rfb._sendMouse(pointer.x, pointer.y, mouseMask);
+            queueMouseMove(event);
         }
     }, true);
 
@@ -106,6 +176,10 @@ function installTouchGestures() {
         }
         event.preventDefault();
         event.stopImmediatePropagation();
+        if (mouseFrame !== undefined) {
+            window.cancelAnimationFrame(mouseFrame);
+            flushMouseMove();
+        }
         mouseMask &= ~buttonMask;
         sendMouse(event, mouseMask);
     }, true);
@@ -122,20 +196,21 @@ function installTouchGestures() {
         event.preventDefault();
         event.stopImmediatePropagation();
 
-        if (!touching) {
-            touching = true;
-            rfb._sendMouse(pointer.x, pointer.y, 1);
-        }
-
         const bounds = canvas.getBoundingClientRect();
-        pointer.x = Math.max(0, Math.min(bounds.width - 1, pointer.x - event.deltaX));
-        pointer.y = Math.max(0, Math.min(bounds.height - 1, pointer.y - event.deltaY));
-        rfb._sendMouse(pointer.x, pointer.y, 1);
+        const delta = wheelPixels(event, Math.max(bounds.width, bounds.height));
+        pendingWheel.x += delta.x * WHEEL_SENSITIVITY;
+        pendingWheel.y += delta.y * WHEEL_SENSITIVITY;
+        pendingWheel.x = Math.max(-bounds.width, Math.min(bounds.width, pendingWheel.x));
+        pendingWheel.y = Math.max(-bounds.height, Math.min(bounds.height, pendingWheel.y));
+        wheelEnding = false;
+        queueWheelFrame();
 
         window.clearTimeout(endTimer);
         endTimer = window.setTimeout(() => {
-            rfb._sendMouse(pointer.x, pointer.y, 0);
-            touching = false;
+            wheelEnding = true;
+            if (wheelFrame === undefined) {
+                finishWheelGesture();
+            }
         }, GESTURE_END_DELAY_MS);
     }, { capture: true, passive: false });
 

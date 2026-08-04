@@ -374,7 +374,7 @@ printf '%s\n' \
   '#!/bin/sh' \
   'if [ -n "${FAKE_SOCAT_PID_DIR-}" ]; then printf "%s\\n" "$*" >"${FAKE_SOCAT_PID_DIR}/$$"; fi' \
   '[ "${FAKE_SOCAT_FAIL:-0}" = 0 ] || exit 71' \
-  'case "${1-}" in "${FAKE_SOCAT_FAIL_PREFIX-}"*) [ -z "${FAKE_SOCAT_FAIL_PREFIX-}" ] || exit 71 ;; esac' \
+  'case "${1-}" in "${FAKE_SOCAT_FAIL_PREFIX-}"*) if [ -n "${FAKE_SOCAT_FAIL_PREFIX-}" ]; then sleep "${FAKE_SOCAT_FAIL_DELAY_SECONDS:-0}"; exit 71; fi ;; esac' \
   'exec sleep 30' >"${socat_stub}"
 chmod 0755 "${socat_stub}"
 console_socket_dir=${tmp}/emulator-console
@@ -570,6 +570,7 @@ mkdir -p "${failed_proxy_pid_dir}"
 assert_fails 'entrypoint fails when the authenticated Console proxy exits' \
   env ${common_env} EMULATOR_ACCEL=off FAKE_EMULATOR_SLEEP=30 \
     FAKE_SOCAT_FAIL_PREFIX=UNIX-LISTEN: FAKE_SOCAT_PID_DIR="${failed_proxy_pid_dir}" \
+    FAKE_SOCAT_FAIL_DELAY_SECONDS=0.1 \
     FAKE_EMULATOR_PID_FILE="${emulator_pid_file}" "${ROOT}/bin/entrypoint.sh"
 [ -s "${emulator_pid_file}" ]
 failed_emulator_pid=$(cat "${emulator_pid_file}")

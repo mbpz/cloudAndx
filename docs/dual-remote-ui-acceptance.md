@@ -64,7 +64,18 @@ ARM64 Android 17 Play system image 与软件 TCG/SwiftShader；项目脚本不�
 build、serial、客户端版本、时间戳和原始数据。不得用 ADB 命令完成时间替代
 浏览器输入到可见帧时间。
 
-## 当前证据状态
+## 当前 AEMU 浏览器输入证据（2026-08-04）
+
+- Chrome 通过 HTTPS/WSS 连接 noVNC 后执行 31 点连续上滑；Android
+  `/dev/input/event1` 观察到完整 DOWN、29 个坐标单调变化的 MOVE 和压力归零/Tracking ID
+  释放，稳定段 MOVE 间隔约 16–18 ms。
+- 浏览器页面重载后，RFB 日志记录旧连接断开和新连接建立，Android 容器及输入流未重启。
+- AEMU 37.1.7 的实际 RGB888 输出为 top-down；桥接器保持行顺序，使画面与触摸均以
+  左上角为原点。proto 中历史性的 bottom-up 描述不能替代当前固定运行时的实测。
+- 当前 ARM TCG 冷启动约 401 秒，尚未证明本页上方 `realtime` 性能门限，不得据此声称
+  整个运行时达到真机级帧率或生产就绪。
+
+## 历史 ReDroid 证据（非当前默认 AEMU）
 
 | 项目 | 状态 | 当前证据 |
 | --- | --- | --- |

@@ -92,6 +92,9 @@ grep -Fq 'cursor: pointer !important' docker/emulator/novnc/cloudandx.css
 grep -Fq "addEventListener('wheel'" docker/emulator/novnc/cloudandx-touch.js
 grep -Fq 'rfb._sendMouse(pointer.x, pointer.y, 1)' docker/emulator/novnc/cloudandx-touch.js
 grep -Fq 'rfb._sendMouse(pointer.x, pointer.y, 0)' docker/emulator/novnc/cloudandx-touch.js
+grep -Fq 'window.requestAnimationFrame(flushMouseMove)' docker/emulator/novnc/cloudandx-touch.js
+grep -Fq 'consumeMotion(pendingWheel.x, MAX_WHEEL_STEP_PX)' docker/emulator/novnc/cloudandx-touch.js
+grep -Fq 'window.cancelAnimationFrame(mouseFrame)' docker/emulator/novnc/cloudandx-touch.js
 grep -Fq 'WEBSOCKIFY_VERSION=0.13.0' "${dockerfile}"
 grep -Fq 'SCRCPY_VERSION=4.1' "${dockerfile}"
 grep -Fq 'websockify' "${entrypoint}"

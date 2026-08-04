@@ -57,23 +57,20 @@ def read_exact(stream: BinaryIO | socket.socket, length: int) -> bytes:
     return bytes(chunks)
 
 
-def rgb_bottom_up_to_bgrx(rgb: bytes, width: int, height: int) -> bytes:
+def rgb_to_bgrx(rgb: bytes, width: int, height: int) -> bytes:
     expected = width * height * 3
     if len(rgb) != expected:
         raise ValueError(f"RGB frame has {len(rgb)} bytes; expected {expected}")
     result = bytearray(width * height * 4)
-    source_stride = width * 3
-    target_stride = width * 4
-    opaque = b"\x00" * width
-    for target_row in range(height):
-        source_start = (height - target_row - 1) * source_stride
-        source = rgb[source_start : source_start + source_stride]
-        target_start = target_row * target_stride
-        target = memoryview(result)[target_start : target_start + target_stride]
-        target[0::4] = source[2::3]
-        target[1::4] = source[1::3]
-        target[2::4] = source[0::3]
-        target[3::4] = opaque
+    target = memoryview(result)
+    # AEMU 37.1.7's RGB888 stream is delivered top-down even though the
+    # generic Image proto still describes the historical bottom-up layout.
+    # Preserve row order so the displayed frame and touchscreen coordinates
+    # share the same origin.
+    target[0::4] = rgb[2::3]
+    target[1::4] = rgb[1::3]
+    target[2::4] = rgb[0::3]
+    target[3::4] = b"\x00" * (width * height)
     return bytes(result)
 
 
@@ -312,7 +309,7 @@ def stream_frames(grpcurl: Grpcurl, frames: FrameStore, ready_file: Path) -> Non
     first = True
     for frame in decode_json_stream(process.stdout):
         rgb = base64.b64decode(frame.get("image", ""), validate=True)
-        pixels = rgb_bottom_up_to_bgrx(rgb, frames.width, frames.height)
+        pixels = rgb_to_bgrx(rgb, frames.width, frames.height)
         frames.publish(pixels, int(frame.get("seq", frames.sequence + 1)))
         if first:
             ready_file.parent.mkdir(parents=True, exist_ok=True)

@@ -66,7 +66,9 @@ scripts/scrcpy-android17.sh
 释放直接映射为 Android 主屏的触控 pressure 事件，键盘和文本走同一个持久输入流。
 noVNC 1.7.0 和 websockify 0.13.0 只发布到宿主回环地址，raw RFB 5900 不发布。
 noVNC 强制启用 `resize=scale` 并关闭 `view_only`；Mac 触控板滚动仍转换为连续的
-DOWN/MOVE/UP 单指滑动。只有收到第一张真实 AEMU 帧后容器才会通过浏览器健康门禁。
+DOWN/MOVE/UP 单指滑动。鼠标拖动按浏览器动画帧合并采样，触控板位移按小步连续消费，
+松手前会先刷新最后一个坐标，避免高频事件积压造成跳动或丢失 UP。AEMU RGB 帧和
+触摸坐标统一使用左上角原点；只有收到第一张真实 AEMU 帧后容器才会通过浏览器健康门禁。
 
 宿主 scrcpy client/server 必须保持同版。ADB 不对局域网或公网发布；跨主机使用时先通过
 SSH/VPN/零信任通道安全转发 6080，不直接把 Compose 端口改为 `0.0.0.0`，也不转发

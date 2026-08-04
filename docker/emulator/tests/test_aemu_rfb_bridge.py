@@ -18,17 +18,17 @@ class BridgeTests(unittest.TestCase):
         stream = io.BytesIO(b'{"seq":1}\n{\n"seq": 3\n}\n')
         self.assertEqual([1, 3], [item["seq"] for item in MODULE.decode_json_stream(stream)])
 
-    def test_converts_bottom_up_rgb_to_rfb_bgrx(self):
-        # Bottom source row is blue; top source row is red.
+    def test_preserves_aemu_top_down_rows_when_converting_to_rfb_bgrx(self):
+        # Top source row is blue; bottom source row is red.
         rgb = bytes([0, 0, 255, 255, 0, 0])
         self.assertEqual(
-            bytes([0, 0, 255, 0, 255, 0, 0, 0]),
-            MODULE.rgb_bottom_up_to_bgrx(rgb, 1, 2),
+            bytes([255, 0, 0, 0, 0, 0, 255, 0]),
+            MODULE.rgb_to_bgrx(rgb, 1, 2),
         )
 
     def test_rejects_wrong_frame_size(self):
         with self.assertRaisesRegex(ValueError, "expected 12"):
-            MODULE.rgb_bottom_up_to_bgrx(b"short", 2, 2)
+            MODULE.rgb_to_bgrx(b"short", 2, 2)
 
     def test_grpcurl_command_is_plaintext_and_proto_locked(self):
         command = MODULE.Grpcurl("/grpcurl", "/proto", "127.0.0.1:8556").command(

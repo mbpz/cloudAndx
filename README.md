@@ -1,4 +1,45 @@
-# Google Android 17：纯 Docker 运行方案
+# Google Android 17：macOS 原生加速与 Docker 兼容方案
+
+## Apple Silicon 本机默认方案
+
+需要接近真机的本机交互时，默认使用 macOS 原生 Android Emulator。Google 官方明确
+说明 VM 加速 Emulator 必须直接运行在宿主机，不能在 Docker 或另一层 VM 内使用；
+Apple Silicon 原生路径使用 Hypervisor.Framework，并通过 `-gpu host` 使用宿主图形
+加速。OrbStack 内的旧 ARM TCG/SwiftShader 路径保留为可重建兼容方案，但不再承担
+低延迟本机交互目标。
+
+本机运行时固定为 Emulator 37.1.11、Platform Tools 37.0.1、Android 17/API 37.0
+Google Play PS16K ARM64 r06 和 scrcpy 4.1。AVD、日志和 PID 均保存在 Git 忽略的
+`.runtime/native-android17/`，由 macOS `launchd` 托管；启动前会停止旧 `android`
+TCG 容器但保留其命名卷，确保只有一个 Android 实例。ADB 与 Emulator gRPC 仅使用
+宿主回环端口 5557 和 8556，不修改 OrbStack、VPN、DNS、路由或防火墙。
+
+首次安装和创建隔离 AVD：
+
+```sh
+ACCEPT_ANDROID_SDK_LICENSES=yes scripts/native-android17.sh setup
+```
+
+启动、查看状态和停止：
+
+```sh
+scripts/native-android17.sh start
+scripts/native-android17.sh status
+scripts/native-android17.sh stop
+```
+
+启动后可直接使用 Emulator 原生窗口，或用同一实例的 scrcpy 4.1：
+
+```sh
+scripts/native-android17.sh scrcpy
+```
+
+本机实测 Android 17 冷启动 18.2 秒；Settings“语言与地区”5 次冷启动为
+564–1113 ms，滑动录屏约 32.6 FPS，而旧 OrbStack TCG 路径超过 60 秒且约 2 FPS。
+详细选型依据、边界和回滚方式见
+[macOS 原生运行时决策](docs/native-macos-android-runtime.md)。
+
+## Docker 兼容方案
 
 这套实现只需要 Docker/Compose。它不会安装本机 Android SDK，不会调用或修改
 OrbStack，不会改 macOS 的网络、DNS、路由、防火墙、虚拟化设置或其他系统环境。

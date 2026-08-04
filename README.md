@@ -54,8 +54,10 @@ Play PS16K arm64-v8a r06，包含 Google Play Store 和 Google Play services。G
 [2026-06-16 正式发布 Android 17](https://developer.android.com/blog/posts/android-17-is-here)。
 Android 17 QPR1 仍为 Beta，因此不在当前 pin 中。产品发布状态与 SDK repository
 `channel-0`（文本值 `stable`）是两项独立证据，不能由其中一项推断另一项。Google
-Linux Emulator SDK 资源包固定为 36.6.11，实际执行的 native AEMU 源码 revision 固定为
-37.1.7，Platform Tools 固定为 37.0.0；下载文件均校验 Google 仓库公布的 SHA-1。
+Linux Emulator SDK 资源包固定为 37.1.11，Platform Tools 固定为 37.0.1，与本机
+Pixel 9 AVD 一致；下载文件均校验 Google 仓库公布的 SHA-1。Docker 内实际执行的
+native ARM64 AEMU 源码 revision 仍固定为 37.1.7，因为 Google 公开仓库未提供可审计的
+37.1.11 发布包到 ARM64 源码 revision 映射；项目不会将 37.1.7 伪标为 37.1.11。
 
 当前默认且已进入本机验收范围的是 **ARM64 Docker Engine**。在 ARM64（包括 Apple
 Silicon 上的 OrbStack Docker Engine）上，amd64 容器用户态只提供固定的 SDK、ADB

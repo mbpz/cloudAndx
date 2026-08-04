@@ -100,8 +100,10 @@ class Grpcurl:
         self.proto_dir = proto_dir
         self.endpoint = endpoint
 
-    def command(self, payload: str, method: str) -> list[str]:
-        return [
+    def command(
+        self, payload: str, method: str, *, max_response_bytes: int | None = None
+    ) -> list[str]:
+        command = [
             self.binary,
             "-plaintext",
             "-import-path",
@@ -110,9 +112,11 @@ class Grpcurl:
             "emulator_controller.proto",
             "-d",
             payload,
-            self.endpoint,
-            f"{CONTROLLER}/{method}",
         ]
+        if max_response_bytes is not None:
+            command.extend(["-max-msg-sz", str(max_response_bytes)])
+        command.extend([self.endpoint, f"{CONTROLLER}/{method}"])
+        return command
 
 
 class InputStream:
@@ -301,7 +305,11 @@ class RfbServer:
 def stream_frames(grpcurl: Grpcurl, frames: FrameStore, ready_file: Path) -> None:
     request = json.dumps({"format": "RGB888", "width": frames.width, "height": frames.height})
     process = subprocess.Popen(
-        grpcurl.command(request, "streamScreenshot"),
+        grpcurl.command(
+            request,
+            "streamScreenshot",
+            max_response_bytes=frames.width * frames.height * 3 + 1024 * 1024,
+        ),
         stdout=subprocess.PIPE,
         stderr=sys.stderr,
     )

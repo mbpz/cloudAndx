@@ -8,7 +8,7 @@ ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/opt/android-sdk}
 ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-/data/avd}
 AVD_NAME=${AVD_NAME:-Pixel_9_Android_17_Play_ARM64}
 EMULATOR_ACCEL=${EMULATOR_ACCEL:-auto}
-EMULATOR_CORES=${EMULATOR_CORES:-8}
+EMULATOR_CORES=${EMULATOR_CORES:-4}
 EMULATOR_MEMORY_MB=${EMULATOR_MEMORY_MB:-4096}
 EMULATOR_GPU=${EMULATOR_GPU:-swiftshader}
 EMULATOR_CONSOLE_PORT=${EMULATOR_CONSOLE_PORT:-5556}
@@ -197,7 +197,7 @@ printf '%s\n' \
   "android.bluetooth-hci-timeout-ms=${EXPECTED_BLUETOOTH_HCI_TIMEOUT_MS}" \
   "android.bluetooth-hci-restart-timeout-ms=${EXPECTED_BLUETOOTH_HCI_RESTART_TIMEOUT_MS}" \
   "android.release-policy=base-final-stable-qpr1-beta-excluded" \
-  "sdk.emulator-package.version=36.6.11" \
+  "sdk.emulator-package.version=37.1.11" \
   "kvm.device=${KVM_DEVICE}" \
   "kvm.usable=$(if kvm_is_usable "${KVM_DEVICE}"; then printf yes; else printf no; fi)" \
   "accel.requested=${EMULATOR_ACCEL}" \

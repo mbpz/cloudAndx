@@ -41,6 +41,14 @@ class BridgeTests(unittest.TestCase):
             "android.emulation.control.EmulatorController/streamScreenshot", command[-1]
         )
 
+    def test_grpcurl_command_accepts_pixel_9_frame(self):
+        command = MODULE.Grpcurl("/grpcurl", "/proto", "127.0.0.1:8556").command(
+            "{}", "streamScreenshot", max_response_bytes=1080 * 2424 * 3 + 1024 * 1024
+        )
+        option = command.index("-max-msg-sz")
+        self.assertEqual("8902336", command[option + 1])
+        self.assertLess(option, command.index("127.0.0.1:8556"))
+
 
 if __name__ == "__main__":
     unittest.main()

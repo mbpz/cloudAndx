@@ -14,7 +14,7 @@ HOME=${HOME:-/data/home}
 AVD_TEMPLATE_DIR=${AVD_TEMPLATE_DIR:-/opt/android-avd-template}
 AVD_NAME=${AVD_NAME:-Pixel_9_Android_17_Play_ARM64}
 EMULATOR_ACCEL=${EMULATOR_ACCEL:-auto}
-EMULATOR_CORES=${EMULATOR_CORES:-8}
+EMULATOR_CORES=${EMULATOR_CORES:-4}
 EMULATOR_MEMORY_MB=${EMULATOR_MEMORY_MB:-4096}
 EMULATOR_GPU=${EMULATOR_GPU:-swiftshader}
 EMULATOR_CONSOLE_PORT=${EMULATOR_CONSOLE_PORT:-5556}
@@ -36,9 +36,10 @@ SOCAT_BIN=${SOCAT_BIN:-socat}
 ADB_PRIVATE_KEY_FILE=${ADB_PRIVATE_KEY_FILE:-/run/secrets/adbkey}
 ADB_PUBLIC_KEY_FILE=${ADB_PUBLIC_KEY_FILE:-/run/secrets/adbkey.pub}
 BRIDGE_SCRIPT=${BRIDGE_SCRIPT:-/opt/cloudandx/device-bridge/bridge.py}
-ANDROID_DISPLAY_WIDTH=${ANDROID_DISPLAY_WIDTH:-480}
-ANDROID_DISPLAY_HEIGHT=${ANDROID_DISPLAY_HEIGHT:-1080}
-ANDROID_DISPLAY_DENSITY=${ANDROID_DISPLAY_DENSITY:-187}
+ANDROID_DISPLAY_WIDTH=${ANDROID_DISPLAY_WIDTH:-1080}
+ANDROID_DISPLAY_HEIGHT=${ANDROID_DISPLAY_HEIGHT:-2424}
+ANDROID_DISPLAY_DENSITY=${ANDROID_DISPLAY_DENSITY:-420}
+ANDROID_DISPLAY_DEPTH=${ANDROID_DISPLAY_DEPTH:-32}
 NOVNC_PORT=${NOVNC_PORT:-6080}
 NOVNC_TLS=${NOVNC_TLS:-true}
 NOVNC_TLS_CERT=${NOVNC_TLS_CERT:-/data/runtime/novnc/tls-cert.pem}
@@ -62,6 +63,7 @@ export EMULATOR_CONSOLE_PORT EMULATOR_CONSOLE_SOCKET EMULATOR_CONSOLE_AUTH_TOKEN
 export EMULATOR_ADB_PORT ADB_PROXY_PORT EMULATOR_GRPC_INTERNAL_PORT EMULATOR_GRPC_PORT EMULATOR_WIPE_DATA
 export KVM_DEVICE DOCKER_ENGINE_ARCHITECTURE ANDROID_RUNTIME_IMPLEMENTATION NATIVE_AEMU_ROOT NATIVE_AEMU_RUNNER
 export EMULATOR_BIN ADB_BIN SOCAT_BIN
+export ANDROID_DISPLAY_WIDTH ANDROID_DISPLAY_HEIGHT ANDROID_DISPLAY_DENSITY ANDROID_DISPLAY_DEPTH
 export NOVNC_PORT VNC_PORT NOVNC_ROOT
 export SCRCPY_ROOT SCRCPY_BIN SCRCPY_SERIAL ANDROID_READY_RETRY_SECONDS BROWSER_READY_FILE
 
@@ -123,6 +125,7 @@ validate_android_emulator_args "$@"
 validate_uint_range ANDROID_DISPLAY_WIDTH "${ANDROID_DISPLAY_WIDTH}" 320 2160
 validate_uint_range ANDROID_DISPLAY_HEIGHT "${ANDROID_DISPLAY_HEIGHT}" 480 3840
 validate_uint_range ANDROID_DISPLAY_DENSITY "${ANDROID_DISPLAY_DENSITY}" 120 640
+validate_uint_range ANDROID_DISPLAY_DEPTH "${ANDROID_DISPLAY_DEPTH}" 16 32
 validate_uint_range ANDROID_READY_RETRY_SECONDS "${ANDROID_READY_RETRY_SECONDS}" 1 30
 
 set_avd_config_value() {
@@ -162,11 +165,17 @@ seed_avd() {
   cmp -s "${template_version_file}" "${avd_dir}/template-version" \
     || runtime_die "Persisted AVD belongs to a different image revision; use a fresh Docker volume."
 
-  # Display geometry is operational rather than user data. Reconcile it on
-  # every start so existing volumes receive rendering fixes without a wipe.
+  # Hardware identity is operational rather than user data. Reconcile it on
+  # every start so existing volumes receive Pixel 9 parity fixes without a wipe.
+  set_avd_config_value "${avd_dir}/config.ini" hw.cpu.ncore "${EMULATOR_CORES}"
+  set_avd_config_value "${avd_dir}/config.ini" hw.camera.front none
+  set_avd_config_value "${avd_dir}/config.ini" hw.keyboard no
+  set_avd_config_value "${avd_dir}/config.ini" hw.keyboard.lid no
+  set_avd_config_value "${avd_dir}/config.ini" hw.sdCard no
   set_avd_config_value "${avd_dir}/config.ini" hw.lcd.width "${ANDROID_DISPLAY_WIDTH}"
   set_avd_config_value "${avd_dir}/config.ini" hw.lcd.height "${ANDROID_DISPLAY_HEIGHT}"
   set_avd_config_value "${avd_dir}/config.ini" hw.lcd.density "${ANDROID_DISPLAY_DENSITY}"
+  set_avd_config_value "${avd_dir}/config.ini" hw.lcd.depth "${ANDROID_DISPLAY_DEPTH}"
   set_avd_config_value "${avd_dir}/config.ini" skin.name "${ANDROID_DISPLAY_WIDTH}x${ANDROID_DISPLAY_HEIGHT}"
   set_avd_config_value "${avd_dir}/config.ini" skin.path "${ANDROID_DISPLAY_WIDTH}x${ANDROID_DISPLAY_HEIGHT}"
 

@@ -52,6 +52,18 @@ assert_not_contains() {
   esac
 }
 
+assert_file_line() {
+  file=$1
+  expected_line=$2
+  label=$3
+  if ! grep -Fxq "${expected_line}" "${file}"; then
+    printf 'FAIL: %s: file %s did not contain exact line <%s>\n' \
+      "${label}" "${file}" "${expected_line}" >&2
+    exit 1
+  fi
+  pass
+}
+
 assert_fails() {
   label=$1
   shift
@@ -424,7 +436,7 @@ assert_contains "${preflight_output}" 'android.finalizer-timeout-ms=500000' 'pre
 assert_contains "${preflight_output}" 'android.bluetooth-hci-timeout-ms=100000' 'preflight reports the Bluetooth HCI command timeout'
 assert_contains "${preflight_output}" 'android.bluetooth-hci-restart-timeout-ms=250000' 'preflight reports the Bluetooth HCI restart timeout'
 assert_contains "${preflight_output}" 'android.release-policy=base-final-stable-qpr1-beta-excluded' 'preflight reports release policy'
-assert_contains "${preflight_output}" 'sdk.emulator-package.version=36.6.11' 'preflight distinguishes the SDK artifact from the native engine revision'
+assert_contains "${preflight_output}" 'sdk.emulator-package.version=37.1.11' 'preflight distinguishes the SDK artifact from the native engine revision'
 assert_contains "${preflight_output}" 'console.internal-port=5556' 'preflight reports the loopback Console port'
 assert_contains "${preflight_output}" "console.socket=${console_socket}" 'preflight reports the shared Console Unix socket'
 assert_not_contains "${preflight_output}" 'emulator.version=' 'preflight does not mislabel the SDK package as the selected native engine version'
@@ -438,7 +450,7 @@ assert_contains "${command_output}" '=-accel' 'entrypoint includes acceleration 
 assert_contains "${command_output}" '=off' 'entrypoint uses software acceleration without KVM'
 cores_value=$(printf '%s\n' "${command_output}" | grep -A1 '=-cores$' | tail -n 1 \
   | sed 's/^argv\[[0-9][0-9]*\]=//')
-assert_eq 8 "${cores_value}" 'entrypoint defaults ARM TCG to all eight available guest vCPUs'
+assert_eq 4 "${cores_value}" 'entrypoint defaults to the native Pixel 9 four-core topology'
 assert_contains "${command_output}" '=test.value=a b' 'entrypoint preserves one argument containing spaces'
 assert_contains "${command_output}" '=-grpc' 'entrypoint enables gRPC'
 assert_contains "${command_output}" '=8556' 'entrypoint uses isolated internal gRPC port'
@@ -471,6 +483,83 @@ if [ "${user_argument_line}" -ge "${qemu_sentinel_line}" ]; then
   exit 1
 fi
 pass
+persisted_avd_config=${data}/avd/Pixel_9_Android_17_Play_ARM64.avd/config.ini
+assert_file_line "${persisted_avd_config}" 'hw.lcd.width=1080' \
+  'entrypoint seeds persisted AVD width to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.lcd.height=2424' \
+  'entrypoint seeds persisted AVD height to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.lcd.density=420' \
+  'entrypoint seeds persisted AVD density to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.lcd.depth=32' \
+  'entrypoint seeds persisted AVD depth to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'skin.name=1080x2424' \
+  'entrypoint seeds persisted AVD skin name to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'skin.path=1080x2424' \
+  'entrypoint seeds persisted AVD skin path to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.cpu.ncore=4' \
+  'entrypoint seeds persisted AVD cores to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.camera.front=none' \
+  'entrypoint seeds persisted AVD front camera to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.keyboard=no' \
+  'entrypoint seeds persisted AVD keyboard to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.keyboard.lid=no' \
+  'entrypoint seeds persisted AVD keyboard lid to the Pixel 9 baseline'
+assert_file_line "${persisted_avd_config}" 'hw.sdCard=no' \
+  'entrypoint seeds persisted AVD SD card to the Pixel 9 baseline'
+
+entrypoint_reconcile_config_value() {
+  config_file=$1
+  key=$2
+  value=$3
+  config_tmp=${config_file}.tmp.reconcile.$$
+
+  awk -F= -v key="${key}" -v value="${value}" '
+    BEGIN { replaced = 0 }
+    $1 == key { if (!replaced) print key "=" value; replaced = 1; next }
+    { print }
+    END { if (!replaced) print key "=" value }
+  ' "${config_file}" >"${config_tmp}"
+  mv "${config_tmp}" "${config_file}"
+}
+
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.lcd.width 480
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.lcd.height 1080
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.lcd.density 187
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.lcd.depth 16
+entrypoint_reconcile_config_value "${persisted_avd_config}" skin.name 480x1080
+entrypoint_reconcile_config_value "${persisted_avd_config}" skin.path 480x1080
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.cpu.ncore 8
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.camera.front emulated
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.keyboard yes
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.keyboard.lid yes
+entrypoint_reconcile_config_value "${persisted_avd_config}" hw.sdCard yes
+reconcile_output=$(env ${common_env} EMULATOR_ACCEL=auto \
+  "${ROOT}/bin/entrypoint.sh" print-command 2>&1)
+assert_contains "${reconcile_output}" '=-accel' \
+  'entrypoint still prints a runnable command while reconciling stale persisted geometry'
+assert_file_line "${persisted_avd_config}" 'hw.lcd.width=1080' \
+  'entrypoint reconciles persisted AVD width on every start'
+assert_file_line "${persisted_avd_config}" 'hw.lcd.height=2424' \
+  'entrypoint reconciles persisted AVD height on every start'
+assert_file_line "${persisted_avd_config}" 'hw.lcd.density=420' \
+  'entrypoint reconciles persisted AVD density on every start'
+assert_file_line "${persisted_avd_config}" 'hw.lcd.depth=32' \
+  'entrypoint reconciles persisted AVD depth on every start'
+assert_file_line "${persisted_avd_config}" 'skin.name=1080x2424' \
+  'entrypoint reconciles persisted AVD skin name on every start'
+assert_file_line "${persisted_avd_config}" 'skin.path=1080x2424' \
+  'entrypoint reconciles persisted AVD skin path on every start'
+assert_file_line "${persisted_avd_config}" 'hw.cpu.ncore=4' \
+  'entrypoint reconciles persisted AVD cores on every start'
+assert_file_line "${persisted_avd_config}" 'hw.camera.front=none' \
+  'entrypoint reconciles persisted AVD front camera on every start'
+assert_file_line "${persisted_avd_config}" 'hw.keyboard=no' \
+  'entrypoint reconciles persisted AVD keyboard on every start'
+assert_file_line "${persisted_avd_config}" 'hw.keyboard.lid=no' \
+  'entrypoint reconciles persisted AVD keyboard lid on every start'
+assert_file_line "${persisted_avd_config}" 'hw.sdCard=no' \
+  'entrypoint reconciles persisted AVD SD card on every start'
+
 assert_fails 'entrypoint rejects a user-supplied raw QEMU sentinel' \
   env ${common_env} EMULATOR_ACCEL=auto \
     "${ROOT}/bin/entrypoint.sh" print-command -qemu -machine gic-version=host

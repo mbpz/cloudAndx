@@ -53,10 +53,10 @@ RUN apt-get update \
 
 FROM artifact-download-base AS tool-fetcher
 
-ARG EMULATOR_URL=https://dl.google.com/android/repository/emulator-linux_x64-15507667.zip
-ARG EMULATOR_SHA1=f8d8b83cf21a04966326eb1378bacda255f63b93
-ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r37.0.0-linux.zip
-ARG PLATFORM_TOOLS_SHA1=bcf323933980a59dccc3f14c339aed5fb2171163
+ARG EMULATOR_URL=https://dl.google.com/android/repository/emulator-linux_x64-15917651.zip
+ARG EMULATOR_SHA1=1b1f78891abf8ec268264356e1365c25519e8379
+ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip
+ARG PLATFORM_TOOLS_SHA1=477254aa5f903c15cf51001717bdf347fb6b53e0
 
 RUN set -eu; \
     mkdir -p /opt/android-sdk; \
@@ -110,7 +110,6 @@ RUN set -eu; \
     tar -xzf /tmp/novnc.tar.gz -C /opt/cloudandx/ui; \
     mv "/opt/cloudandx/ui/noVNC-${NOVNC_VERSION}" /opt/cloudandx/novnc; \
     test -f /opt/cloudandx/novnc/vnc.html; \
-    ln -s vnc.html /opt/cloudandx/novnc/index.html; \
     rm -f /tmp/novnc.tar.gz; \
     curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 \
       --output /tmp/websockify.tar.gz \
@@ -214,10 +213,10 @@ FROM runtime-tools AS runtime-tools-smoke
 RUN set -eu; \
     emulator_version=$(/opt/android-sdk/emulator/emulator -version 2>&1); \
     printf '%s\n' "${emulator_version}"; \
-    printf '%s\n' "${emulator_version}" | grep -q '36\.6\.11'; \
+    printf '%s\n' "${emulator_version}" | grep -q '37\.1\.11'; \
     adb_version=$(/opt/android-sdk/platform-tools/adb version 2>&1); \
     printf '%s\n' "${adb_version}"; \
-    printf '%s\n' "${adb_version}" | grep -q 'Version 37\.0\.0'
+    printf '%s\n' "${adb_version}" | grep -q 'Version 37\.0\.1'
 
 FROM --platform=${NATIVE_ENGINE_PLATFORM} ${NATIVE_ENGINE_IMAGE} AS native-engine-bundle
 
@@ -225,10 +224,10 @@ FROM --platform=${RUNTIME_PLATFORM} ${GRPCURL_IMAGE} AS grpcurl-bundle
 
 FROM runtime-base AS runtime
 
-ARG EMULATOR_URL=https://dl.google.com/android/repository/emulator-linux_x64-15507667.zip
-ARG EMULATOR_SHA1=f8d8b83cf21a04966326eb1378bacda255f63b93
-ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r37.0.0-linux.zip
-ARG PLATFORM_TOOLS_SHA1=bcf323933980a59dccc3f14c339aed5fb2171163
+ARG EMULATOR_URL=https://dl.google.com/android/repository/emulator-linux_x64-15917651.zip
+ARG EMULATOR_SHA1=1b1f78891abf8ec268264356e1365c25519e8379
+ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip
+ARG PLATFORM_TOOLS_SHA1=477254aa5f903c15cf51001717bdf347fb6b53e0
 ARG SYSTEM_IMAGE_URL=https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-playstore-ps16k-37.0_r06.zip
 ARG SYSTEM_IMAGE_SHA1=ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4
 ARG NATIVE_AEMU_REVISION
@@ -251,8 +250,8 @@ ARG SCRCPY_VERSION
 ARG SCRCPY_SHA256
 
 LABEL org.opencontainers.image.title="Android 17 Google Play Emulator (Docker-only)" \
-      org.opencontainers.image.description="Google Android 17 API 37.0 Play arm64-v8a 16 KB r06 with native AEMU 37.1.7 and SDK resources from Emulator 36.6.11" \
-      org.opencontainers.image.version="android-17-api-37.0-play-r06-native-aemu-37.1.7-sdk-emulator-36.6.11" \
+      org.opencontainers.image.description="Google Android 17 API 37.0 Play arm64-v8a 16 KB r06 with native AEMU 37.1.7 and SDK resources from Emulator 37.1.11" \
+      org.opencontainers.image.version="android-17-api-37.0-play-r06-native-aemu-37.1.7-sdk-emulator-37.1.11" \
       org.opencontainers.image.vendor="cloudAndx" \
       io.cloudandx.android.release="Android 17 base release (API 37.0); Android 17 QPR1 remains excluded until its public stable release" \
       io.cloudandx.android.emulator.url="${EMULATOR_URL}" \
@@ -280,6 +279,7 @@ COPY docker/emulator/novnc/mandatory.json /opt/cloudandx/novnc/mandatory.json
 COPY docker/emulator/novnc/cloudandx.css /opt/cloudandx/novnc/app/styles/cloudandx.css
 COPY docker/emulator/novnc/cloudandx-touch.js /opt/cloudandx/novnc/app/cloudandx-touch.js
 COPY docker/emulator/novnc/cloudandx-motion.js /opt/cloudandx/novnc/app/cloudandx-motion.js
+COPY docker/emulator/novnc/index.html /opt/cloudandx/novnc/index.html
 RUN sed -i '/app\/styles\/base.css/a\    <link rel="stylesheet" href="app/styles/cloudandx.css">' \
       /opt/cloudandx/novnc/vnc.html \
     && sed -i '/<\/body>/i\    <script type="module" src="app/cloudandx-touch.js"><\/script>' \
@@ -385,6 +385,7 @@ RUN set -eu; \
       /opt/cloudandx/native-aemu/lib64/vulkan/vk_swiftshader_icd.json \
     && test -x /opt/cloudandx/native-aemu/vulkan-smoke \
     && test -f /opt/cloudandx/novnc/vnc.html \
+    && grep -Fq 'autoconnect=true&amp;resize=scale' /opt/cloudandx/novnc/index.html \
     && novnc_version=$(python3 -c 'import json; print(json.load(open("/opt/cloudandx/novnc/package.json"))["version"])') \
     && test "${novnc_version}" = "${NOVNC_VERSION}" \
     && websockify_version=$(python3 -c 'import importlib.metadata; print(importlib.metadata.version("websockify"))') \

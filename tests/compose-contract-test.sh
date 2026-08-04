@@ -104,10 +104,26 @@ grep -Fq 'aemu-rfb-bridge.py' "${entrypoint}"
 grep -Fq -- '--listen-host 127.0.0.1' "${entrypoint}"
 grep -Fq -- '--endpoint "127.0.0.1:${EMULATOR_GRPC_INTERNAL_PORT}"' "${entrypoint}"
 grep -Fq 'streamScreenshot' docker/emulator/bin/aemu-rfb-bridge.py
+grep -Fq 'max_response_bytes=frames.width * frames.height * 3 + 1024 * 1024' docker/emulator/bin/aemu-rfb-bridge.py
+grep -Fq 'autoconnect=true&amp;resize=scale' docker/emulator/novnc/index.html
 grep -Fq 'streamInputEvent' docker/emulator/bin/aemu-rfb-bridge.py
 grep -Fq 'BROWSER_READY_FILE: /data/runtime/aemu-rfb-first-frame.ready' "${compose_file}"
-grep -Fq 'ANDROID_DISPLAY_WIDTH: ${ANDROID_DISPLAY_WIDTH:-320}' "${compose_file}"
-grep -Fq 'ANDROID_DISPLAY_HEIGHT: ${ANDROID_DISPLAY_HEIGHT:-720}' "${compose_file}"
+grep -Fq 'ANDROID_DISPLAY_WIDTH: ${ANDROID_DISPLAY_WIDTH:-1080}' "${compose_file}"
+grep -Fq 'ANDROID_DISPLAY_HEIGHT: ${ANDROID_DISPLAY_HEIGHT:-2424}' "${compose_file}"
+grep -Fq 'ANDROID_DISPLAY_DENSITY: ${ANDROID_DISPLAY_DENSITY:-420}' "${compose_file}"
+grep -Fq 'ANDROID_DISPLAY_DEPTH: ${ANDROID_DISPLAY_DEPTH:-32}' "${compose_file}"
+grep -Fq 'EMULATOR_CORES: ${EMULATOR_CORES:-4}' "${compose_file}"
+grep -Fxq 'hw.lcd.width=1080' "${avd_config}"
+grep -Fxq 'hw.lcd.height=2424' "${avd_config}"
+grep -Fxq 'hw.lcd.density=420' "${avd_config}"
+grep -Fxq 'hw.lcd.depth=32' "${avd_config}"
+grep -Fxq 'skin.name=1080x2424' "${avd_config}"
+grep -Fxq 'skin.path=1080x2424' "${avd_config}"
+grep -Fxq 'hw.camera.front=none' "${avd_config}"
+grep -Fxq 'hw.keyboard=no' "${avd_config}"
+grep -Fxq 'hw.sdCard=no' "${avd_config}"
+grep -Fq 'EMULATOR_CORES=${EMULATOR_CORES:-4}' docker/emulator/bin/entrypoint.sh
+grep -Fq 'EMULATOR_CORES=${EMULATOR_CORES:-4}' docker/emulator/bin/runtime-preflight.sh
 grep -Fq 'noVNC exited unexpectedly' "${entrypoint}"
 if grep -Eq 'Xvfb|x11vnc|SDL_VIDEO_X11|--video-bit-rate' "${entrypoint}"; then
   printf '%s\n' 'FAIL: legacy desktop/scrcpy browser bridge remains in the entrypoint.' >&2

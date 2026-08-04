@@ -4,9 +4,9 @@ This directory builds one `linux/amd64` container userland from pinned Google-pu
 
 | Component | Pinned release | Integrity |
 |---|---|---|
-| Google Linux Emulator SDK resources/tools | 36.6.11 (`15507667`) | SHA-1 `f8d8b83cf21a04966326eb1378bacda255f63b93` |
+| Google Linux Emulator SDK resources/tools | 37.1.11 (`15917651`) | SHA-1 `1b1f78891abf8ec268264356e1365c25519e8379` |
 | Executed native AEMU engine | source revision 37.1.7 | source-lock and ordered patch-set SHA-256 identities |
-| Platform Tools | 37.0.0 | SHA-1 `bcf323933980a59dccc3f14c339aed5fb2171163` |
+| Platform Tools | 37.0.1 | SHA-1 `477254aa5f903c15cf51001717bdf347fb6b53e0` |
 | Android system image | Android 17 API 37.0, Google Play, arm64-v8a, 16 KB, r06 | SHA-1 `ef7d53e7b2fba3cf00917364f6d3e4f6dbebe7b4` |
 
 The API 37.0 r06 image is pinned from the Android 17 base final/stable release announced by
@@ -189,7 +189,7 @@ The mode-`0600` Unix socket `/run/emulator-console/console.sock` is a supervised
 
 Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control and display stream on internal port `8556`. This avoids depending on which interface a particular Emulator build binds. gRPC is not itself a browser UI; a compatible gRPC/WebRTC client is required. The emulator's `-grpc` mode is unauthenticated, so keep the host publish address at `127.0.0.1`.
 
-Port `6080` serves the encrypted HTTPS/WSS browser interaction path from the same runtime container. The bridge consumes AEMU's event-driven `streamScreenshot` RGB stream and exposes raw RFB only on `127.0.0.1:5900`; pinned websockify/noVNC scales it to the browser viewport. RFB pointer DOWN/MOVE/UP events become AEMU touchscreen pressure events, while keyboard and clipboard text use the same persistent `streamInputEvent` connection. The locked grpcurl 1.9.3 binary is copied from an image pinned by digest and communicates only with AEMU's internal loopback gRPC endpoint. A local noVNC adapter converts macOS trackpad wheel bursts into one touchscreen gesture. The first-frame marker is created only after a correctly sized live AEMU frame is decoded. Compose publishes only HTTPS noVNC on host loopback. Raw RFB, ADB internals and emulator gRPC are never browser-facing, and closing or reconnecting the browser does not create another Android instance.
+Port `6080` serves the encrypted HTTPS/WSS browser interaction path from the same runtime container. The root page immediately opens noVNC with automatic connection and local scaling, so the Pixel 9 display appears without a separate connection step. The bridge consumes AEMU's event-driven `streamScreenshot` RGB stream and exposes raw RFB only on `127.0.0.1:5900`; pinned websockify/noVNC scales it to the browser viewport. RFB pointer DOWN/MOVE/UP events become AEMU touchscreen pressure events, while keyboard and clipboard text use the same persistent `streamInputEvent` connection. The locked grpcurl 1.9.3 binary is copied from an image pinned by digest and communicates only with AEMU's internal loopback gRPC endpoint. Its screenshot response ceiling is derived from the configured RGB frame size plus bounded protocol overhead, allowing the 1080x2424 Pixel 9 frame without widening the input path. A local noVNC adapter converts macOS trackpad wheel bursts into one touchscreen gesture. The first-frame marker is created only after a correctly sized live AEMU frame is decoded. Compose publishes only HTTPS noVNC on host loopback. Raw RFB, ADB internals and emulator gRPC are never browser-facing, and closing or reconnecting the browser does not create another Android instance.
 
 ## Runtime controls
 
@@ -199,8 +199,10 @@ Port `6080` serves the encrypted HTTPS/WSS browser interaction path from the sam
 | `ANDROID_RUNTIME_IMPLEMENTATION` | `hybrid-aemu-arm64` | Exactly `hybrid-aemu-arm64` for the current Docker build path. |
 | `EMULATOR_ACCEL` | `auto` (default), `off` | Both resolve to software execution on ARM64. `kvm` and every x86_64 path fail closed. |
 | `EMULATOR_GPU` | `swiftshader` | The ARM64 runtime requires the packaged SwiftShader GLES/Vulkan stack; every other value fails closed. |
-| `EMULATOR_CORES` | `8` | Validated in the range 1–32. Eight vCPUs are the ARM TCG default; lower values materially increase first-boot watchdog pressure. |
+| `EMULATOR_CORES` | `4` | Validated in the range 1–32 and aligned with the native Pixel 9 AVD. |
 | `EMULATOR_MEMORY_MB` | `4096` | Validated in the emulator-supported range 1536–8192. |
+| `ANDROID_DISPLAY_WIDTH` / `ANDROID_DISPLAY_HEIGHT` | `1080` / `2424` | Pixel 9 effective display geometry; reconciled into persisted AVD configuration on every start. |
+| `ANDROID_DISPLAY_DENSITY` / `ANDROID_DISPLAY_DEPTH` | `420` / `32` | Pixel 9 effective density and color depth; validated before startup. |
 | `EMULATOR_CONSOLE_SOCKET` | `/run/emulator-console/console.sock` | Mode-`0600` Unix socket shared only with the device bridge; no Console TCP port is exposed. |
 | `EMULATOR_CONSOLE_AUTH_TOKEN_FILE` | `/run/bridge-secrets/token` | Read-only shared token source copied to AEMU's required home-directory path before startup. |
 | `EMULATOR_WIPE_DATA` | `0` | Set to `1` for one destructive guest-data reset. |

@@ -20,6 +20,9 @@ TCG 容器但保留其命名卷，确保只有一个 Android 实例。ADB 与 Em
 ACCEPT_ANDROID_SDK_LICENSES=yes scripts/native-android17.sh setup
 ```
 
+`setup` 会先读取 Google stable repository，确认它提供的版本仍与上述 pin 完全一致，
+再执行安装；上游版本发生漂移时会在改动本机 SDK 前失败关闭。
+
 启动、查看状态和停止：
 
 ```sh

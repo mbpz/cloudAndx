@@ -22,7 +22,8 @@ Google 的[硬件加速说明](https://developer.android.com/studio/run/emulator
 ## 运行边界
 
 - 运行版本固定为 Emulator 37.1.11、Platform Tools 37.0.1、Android 17 Google Play
-  PS16K ARM64 r06；版本不符时启动失败关闭。
+  PS16K ARM64 r06；`setup` 在安装前校验 stable repository 版本，仓库或已安装版本不符时
+  失败关闭。
 - AVD 和运行状态只写入 `.runtime/native-android17/`。
 - `launchd` label `dev.cloudandx.android17`负责进程生命周期，调用终端退出不会杀死设备。
 - 启动前停止 Compose 的旧 `android`容器，但不删除 `cloudandx-android_emulator-data`

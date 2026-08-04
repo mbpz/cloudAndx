@@ -36,6 +36,8 @@ PID_FILE=${RUNTIME_ROOT}/emulator.pid
 LOG_FILE=${RUNTIME_ROOT}/emulator.log
 LAUNCH_LABEL=dev.cloudandx.android17
 SCRCPY=${CLOUDANDX_SCRCPY_BIN:-/opt/homebrew/bin/scrcpy}
+BOOT_TIMEOUT_SECONDS=${CLOUDANDX_NATIVE_BOOT_TIMEOUT_SECONDS:-120}
+LSOF_BIN=${CLOUDANDX_LSOF_BIN:-lsof}
 
 export JAVA_HOME ANDROID_SDK_ROOT=${SDK_ROOT} ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT
 
@@ -54,6 +56,35 @@ require_host() {
   [ -x "${SDKMANAGER}" ] || die "sdkmanager is missing: ${SDKMANAGER}"
   [ -x "${AVDMANAGER}" ] || die "avdmanager is missing: ${AVDMANAGER}"
   [ -x "${JAVA_HOME}/bin/java" ] || die "JDK 17+ is missing: ${JAVA_HOME}"
+  case ${BOOT_TIMEOUT_SECONDS} in *[!0-9]*|'') die 'boot timeout must be a positive integer' ;; esac
+  [ "${BOOT_TIMEOUT_SECONDS}" -gt 0 ] || die 'boot timeout must be a positive integer'
+}
+
+available_package_version() {
+  package=$1
+  awk -F'|' -v package="${package}" '
+    {
+      path = $1
+      version = $2
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", path)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", version)
+      if (path == package) found = version
+    }
+    END { print found }
+  '
+}
+
+verify_repository_versions() {
+  repository_packages=$("${SDKMANAGER}" --list)
+  emulator_available=$(printf '%s\n' "${repository_packages}" | available_package_version emulator)
+  platform_tools_available=$(printf '%s\n' "${repository_packages}" | available_package_version platform-tools)
+  system_image_available=$(printf '%s\n' "${repository_packages}" | available_package_version "${SYSTEM_IMAGE}")
+  [ "${emulator_available}" = "${EXPECTED_EMULATOR_VERSION}" ] \
+    || die "Google repository offers Emulator ${emulator_available:-unknown}; expected ${EXPECTED_EMULATOR_VERSION}"
+  [ "${platform_tools_available}" = "${EXPECTED_PLATFORM_TOOLS_VERSION}" ] \
+    || die "Google repository offers Platform Tools ${platform_tools_available:-unknown}; expected ${EXPECTED_PLATFORM_TOOLS_VERSION}"
+  [ "${system_image_available}" = "${EXPECTED_SYSTEM_IMAGE_REVISION}" ] \
+    || die "Google repository offers Android image r${system_image_available:-unknown}; expected r${EXPECTED_SYSTEM_IMAGE_REVISION}"
 }
 
 validate_packages() {
@@ -106,6 +137,7 @@ setup() {
   [ "${ACCEPT_ANDROID_SDK_LICENSES:-no}" = yes ] \
     || die 'review https://developer.android.com/studio/terms then set ACCEPT_ANDROID_SDK_LICENSES=yes'
   install -d -m 0700 "${RUNTIME_ROOT}"
+  verify_repository_versions
   "${SDKMANAGER}" "emulator" "platform-tools" "${SYSTEM_IMAGE}"
   validate_packages
   ensure_avd
@@ -122,26 +154,75 @@ managed_pid() {
     | sed -n 's/^[[:space:]]*pid = //p' | head -n 1
 }
 
+remove_launch_job() {
+  managed=$(managed_pid)
+  launchctl remove "${LAUNCH_LABEL}" >/dev/null 2>&1 || true
+  elapsed=0
+  while [ -n "${managed}" ] && kill -0 "${managed}" 2>/dev/null && [ "${elapsed}" -lt 10 ]; do
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  if [ -n "${managed}" ] && kill -0 "${managed}" 2>/dev/null; then
+    kill -TERM "${managed}" 2>/dev/null || true
+    sleep 1
+    kill -0 "${managed}" 2>/dev/null \
+      && die "launchd removed ${LAUNCH_LABEL} but emulator pid ${managed} survived"
+  fi
+  rm -f "${PID_FILE}"
+}
+
+stop_docker_android() {
+  command -v docker >/dev/null 2>&1 || return 0
+  docker info >/dev/null 2>&1 \
+    || die 'Docker is installed but unavailable; cannot prove the TCG Android is stopped'
+  docker compose -f "${ROOT}/compose.yaml" stop android >/dev/null \
+    || die 'failed to stop the Docker TCG Android'
+  running=$(docker compose -f "${ROOT}/compose.yaml" ps -q --status running android)
+  [ -z "${running}" ] || die "Docker TCG Android is still running: ${running}"
+}
+
+verify_loopback_listener() {
+  pid=$1
+  port=$2
+  listeners=$("${LSOF_BIN}" -nP -a -p "${pid}" -iTCP:"${port}" -sTCP:LISTEN -Fn 2>/dev/null) \
+    || return 1
+  found=0
+  while IFS= read -r entry; do
+    case ${entry} in
+      n127.0.0.1:"${port}"|n\[::1\]:"${port}") found=1 ;;
+      n*) return 1 ;;
+    esac
+  done <<EOF
+${listeners}
+EOF
+  [ "${found}" -eq 1 ]
+}
+
 start() {
   require_host
   validate_packages
   ensure_avd
+  stop_docker_android
   if is_running; then
-    log "already running as pid $(managed_pid)"
+    pid=$(managed_pid)
+    if ! verify_loopback_listener "${pid}" "${ADB_PORT}" \
+      || ! verify_loopback_listener "${pid}" "${GRPC_PORT}"; then
+      remove_launch_job
+      die 'running ADB or gRPC listener is not exclusively bound to host loopback'
+    fi
+    log "already running as pid ${pid}"
     return 0
   fi
 
   # The accelerated host emulator is the only Android instance. The old TCG
   # container is stopped without deleting its volume so rollback stays clean.
-  docker compose -f "${ROOT}/compose.yaml" stop android >/dev/null 2>&1 || true
-
   accel_output=$("${EMULATOR}" -accel-check 2>&1) || die "hardware acceleration unavailable: ${accel_output}"
   printf '%s\n' "${accel_output}" | grep -Fq 'Hypervisor.Framework' \
     || die "Hypervisor.Framework was not selected: ${accel_output}"
 
   : >"${LOG_FILE}"
   log "starting ${AVD_NAME} with Hypervisor.Framework and host GPU"
-  launchctl remove "${LAUNCH_LABEL}" >/dev/null 2>&1 || true
+  remove_launch_job
   launchctl submit -l "${LAUNCH_LABEL}" -o "${LOG_FILE}" -e "${LOG_FILE}" -- \
     /usr/bin/env \
     "ANDROID_SDK_ROOT=${SDK_ROOT}" \
@@ -155,42 +236,50 @@ start() {
     -memory 4096 -cores 4 -netdelay none -netspeed full \
     >/dev/null
   pid=$(managed_pid)
-  [ -n "${pid}" ] || die 'launchd did not publish an emulator pid'
+  if [ -z "${pid}" ]; then
+    remove_launch_job
+    die 'launchd did not publish an emulator pid'
+  fi
   printf '%s\n' "${pid}" >"${PID_FILE}"
 
   elapsed=0
-  while [ "${elapsed}" -lt 120 ]; do
+  while [ "${elapsed}" -lt "${BOOT_TIMEOUT_SECONDS}" ]; do
     if ! kill -0 "${pid}" 2>/dev/null; then
       tail -n 80 "${LOG_FILE}" >&2 || true
+      remove_launch_job
       die 'emulator exited before Android became ready'
     fi
     if [ "$("${ADB}" -s "${ADB_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then
+      if ! verify_loopback_listener "${pid}" "${ADB_PORT}" \
+        || ! verify_loopback_listener "${pid}" "${GRPC_PORT}"; then
+        remove_launch_job
+        die 'ADB or gRPC is not exclusively bound to host loopback'
+      fi
       log "ready: serial=${ADB_SERIAL}, adb=127.0.0.1:${ADB_PORT}, grpc=127.0.0.1:${GRPC_PORT}"
       return 0
     fi
     sleep 2
     elapsed=$((elapsed + 2))
   done
-  die "Android did not boot within 120 seconds; see ${LOG_FILE}"
+  remove_launch_job
+  die "Android did not boot within ${BOOT_TIMEOUT_SECONDS} seconds; see ${LOG_FILE}"
 }
 
 stop() {
   if ! is_running; then
-    launchctl remove "${LAUNCH_LABEL}" >/dev/null 2>&1 || true
-    rm -f "${PID_FILE}"
+    remove_launch_job
     log 'not running'
     return 0
   fi
-  pid=$(cat "${PID_FILE}")
+  pid=$(managed_pid)
   "${ADB}" -s "${ADB_SERIAL}" emu kill >/dev/null 2>&1 || true
-  launchctl remove "${LAUNCH_LABEL}" >/dev/null 2>&1 || true
+  remove_launch_job
   elapsed=0
   while kill -0 "${pid}" 2>/dev/null && [ "${elapsed}" -lt 30 ]; do
     sleep 1
     elapsed=$((elapsed + 1))
   done
   kill -0 "${pid}" 2>/dev/null && die "emulator pid ${pid} did not stop"
-  rm -f "${PID_FILE}"
   log 'stopped'
 }
 
@@ -206,7 +295,11 @@ status() {
 }
 
 scrcpy_runtime() {
-  is_running || start
+  if is_running; then
+    stop_docker_android
+  else
+    start
+  fi
   [ -x "${SCRCPY}" ] || die "scrcpy ${EXPECTED_SCRCPY_VERSION} is missing: ${SCRCPY}"
   scrcpy_version=$("${SCRCPY}" --version | sed -n '1s/^scrcpy \([^ ]*\).*/\1/p')
   [ "${scrcpy_version}" = "${EXPECTED_SCRCPY_VERSION}" ] \

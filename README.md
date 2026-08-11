@@ -204,6 +204,7 @@ Emulator/AVD 仍是一台虚拟设备，不是 Pixel 真机。
 
 ## 设计与机器可读契约
 
+- [项目总结、知识图谱与决策记录](docs/project-summary-and-knowledge-map.md)（当前实现、探索结论与演进总览）
 - [总体架构与功能边界](docs/android-17-container-architecture.md)（扩展部署参考，不是当前 OrbStack 运行说明）
 - [生产运行时契约](docs/android-17-production-runtime-contract.md)（扩展部署参考）
 - [验收与证据契约](docs/android-17-acceptance-contract.md)

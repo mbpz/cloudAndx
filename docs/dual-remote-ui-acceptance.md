@@ -1,8 +1,12 @@
-# Android 17 AEMU 双远程入口验收
+# Android 17 AEMU 双远程入口验收（Docker 兼容路径历史验收）
 
-## 目标拓扑
+> **说明（2026-08-11）**：此验收描述 Docker 兼容路径的单容器安全和交互目标；它不等同于
+> 当前 M1 OrbStack 的原生级性能承诺。默认本机路径和边界以
+> [稳定运行架构](stable-runtime-architecture.md) 为准。
 
-默认运行时只有一个最终镜像、一个 Android 容器和一个持久化数据卷。noVNC
+## 历史验收目标拓扑
+
+当时的默认运行时只有一个最终镜像、一个 Android 容器和一个持久化数据卷。noVNC
 与宿主 scrcpy 必须控制同一个 AEMU serial：
 
 ```text
@@ -79,7 +83,7 @@ build、serial、客户端版本、时间戳和原始数据。不得用 ADB 命�
 
 | 项目 | 状态 | 当前证据 |
 | --- | --- | --- |
-| 宿主设备门禁与重启恢复 | 通过 | `setup-redroid-host.sh` + provider 重启实跑 |
+| 宿主设备门禁与重启恢复 | 通过 | 当时的 ReDroid host preflight + provider 重启实跑（脚本已归档删除） |
 | Android 16 启动 | 通过 | `sys.boot_completed=1`，约 11–22 秒 |
 | Framework/图形 | 通过 | system_server、SurfaceFlinger、1080×1920 screencap |
 | 宿主 scrcpy 4.1 | 通过 | 状态 `device`、Metal、`Texture: 1080x1920` |
@@ -88,12 +92,12 @@ build、serial、客户端版本、时间戳和原始数据。不得用 ADB 命�
 | noVNC ReDroid 实时画面 | 通过 | HTTPS noVNC 自动化截图显示同一 ReDroid 桌面 |
 | noVNC 点击/滑动 | 通过 | 浏览器点击打开 Gallery；连续拖动打开应用抽屉 |
 | noVNC 键盘 | 通过 | 浏览器键盘输入 `settings`，Android 搜索框显示对应文本 |
-| 单最终镜像/单容器 | 通过 | 默认 Compose 仅 `android`，健康状态为 `healthy` |
+| 单最终镜像/单容器 | 通过 | 历史环境的默认 Compose 仅 `android`，健康状态为 `healthy` |
 | Device Bridge 与安全门禁 | 基线通过 | 进程纳入监督/健康检查，token 持久化；AEMU Console 能力关闭 |
 | 浏览器点击可见帧延迟 | 通过 | Chromium canvas 内 30 次：min 9.2 ms、median 43.8 ms、P95 85.2 ms、max 99.5 ms |
 | 30 min 稳定性 | 通过 | 1,878 秒、180 次检查、0 失败、0 重启；覆盖 Android、SurfaceFlinger、首帧、HTTPS noVNC 和 Bridge |
 
-当前结论是 `RUNTIME_PROVEN / SCRCPY_PROVEN / BROWSER_INPUT_PROVEN / LATENCY_PROVEN`。
+历史环境的结论为 `RUNTIME_PROVEN / SCRCPY_PROVEN / BROWSER_INPUT_PROVEN / LATENCY_PROVEN`。
 浏览器输入功能、P95 100 ms 延迟门限和 30 分钟稳定性已经成立。该结论只覆盖
 已验收的远程交互链路；Bluetooth HAL 缺陷、GMS/认证栈和真实硬件能力仍阻止把
 整个 Android 实例标记为“完整真机”或“生产就绪”。

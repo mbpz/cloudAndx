@@ -10,7 +10,8 @@ Docker VM 内继续争取 ARM 硬件虚拟化。旧 Docker TCG 镜像仍可从�
 
 | 方案 | CPU / GPU 路径 | 本机可落地性 | 结论 |
 | --- | --- | --- | --- |
-| OrbStack 内 AEMU | ARM TCG + SwiftShader | 已运行，但语言页超过 60 秒、产帧约 2 FPS | 淘汰为低延迟方案 |
+| OrbStack 内 AEMU | ARM TCG + SwiftShader | 已运行，但语言页超过 60 秒、产帧约 2 FPS | 仅兼容/证据 profile |
+| OrbStack 内 ReDroid | ARM64 guest + 软件渲染 | Android 12 因缺少 compat mmap sysctl 退出；14/15/16 均无可用稳定图形/编码路径 | 不采用 |
 | OrbStack 内嵌套 KVM | 需要 VM 内暴露完整硬件虚拟化 | Google 官方不支持在 Docker/另一 VM 内运行 VM 加速 Emulator；本机也无 `/dev/kvm` | 不采用 |
 | macOS 原生 AEMU | Hypervisor.Framework + gfxstream host GPU | Apple Silicon 官方支持，本机验证通过 | 采用 |
 
@@ -44,8 +45,11 @@ Google 的[硬件加速说明](https://developer.android.com/studio/run/emulator
 - Settings 语言页 5 次冷启动：564、595、716、982、1113 ms。
 - 滑动录屏：102 帧 / 3.123 秒，约 32.6 FPS。
 - 旧 ARM TCG 对照：语言页超过 60 秒仍未完成。
+- 2026-08-11 ReDroid 复测：当前 OrbStack 缺少 GPU/DMA-BUF、ashmem 与 binderfs；即使
+  补齐 device-mapper 和 ext4，Android 16 guest SurfaceFlinger 仍因输出缓冲不可 GPU 写入
+  而退出。完整矩阵见 [OrbStack ReDroid 可行性证据](orbstack-redroid-feasibility-2026-08-11.md)。
 
 ## 回滚
 
-执行 `scripts/native-android17.sh stop`，再按 README 的 Docker 兼容方案重新构建并启动。
+执行 `scripts/native-android17.sh stop`，再按 README 的 `docker-compat` 兼容方案重新构建并启动。
 旧命名卷未删除，因此容器内 Android 数据仍可恢复；已删除的旧 TCG 镜像需要重新构建。

@@ -1,4 +1,8 @@
-# Android 17 Google Play Emulator — Docker-only runtime
+# Android 17 Google Play Emulator — Docker compatibility runtime
+
+> This is an explicit `docker-compat` evidence path for the single-container Docker
+> topology. On this M1 OrbStack host it is ARM TCG/SwiftShader, not native-parity or
+> the default local interaction path; use `scripts/native-android17.sh` for that.
 
 This directory builds one `linux/amd64` container userland from pinned Google-published artifacts:
 
@@ -48,12 +52,13 @@ Review the Android SDK license first, then explicitly acknowledge it:
 
 ```sh
 cd ../..
-ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine emulator
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine
 ```
 
 Compose supplies the immutable native-engine source-lock and ordered patch-set
-identities, then performs both Docker builds in dependency order.
-The native-engine build and all source fetching remain inside Docker.
+identities. This command only prebuilds `native-engine`; the subsequent
+`docker compose --profile docker-compat up -d --build` builds the main runtime image
+and consumes that bundle. All source fetching remains inside Docker.
 The main image verifies that bundle before merging only the pinned Google SDK
 `macros/` and `macroPreviews/` resource directories. Those additions receive a
 separate sorted SHA-256 manifest that runtime preflight checks again.
@@ -82,10 +87,9 @@ permissions are all gated consistently:
 
 ```sh
 cd ../..
-docker compose config --quiet
-docker compose run --rm evidence-gate
+docker compose --profile docker-compat config --quiet
 ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine
-ACCEPT_ANDROID_SDK_LICENSES=yes docker compose up -d --build
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile docker-compat up -d --build
 ```
 
 The current ARM64 path uses the native AEMU child and never attempts KVM for the official
@@ -170,10 +174,10 @@ virtualization settings.
 Use the bundled `adb` through the root CLI:
 
 ```sh
-docker compose exec -T android adb -s emulator-5556 wait-for-device
-docker compose exec -T android adb -s emulator-5556 shell getprop ro.build.version.release
-docker compose exec -T android adb -s emulator-5556 shell pm path com.android.vending
-docker compose exec -T android adb -s emulator-5556 install /data/app.apk
+docker compose --profile docker-compat exec -T android adb -s emulator-5556 wait-for-device
+docker compose --profile docker-compat exec -T android adb -s emulator-5556 shell getprop ro.build.version.release
+docker compose --profile docker-compat exec -T android adb -s emulator-5556 shell pm path com.android.vending
+docker compose --profile docker-compat exec -T android adb -s emulator-5556 install /data/app.apk
 ```
 
 Container port `5555` is a `socat` proxy to the emulator's loopback ADB port. If an external ADB client is required, mount both members of an existing key pair read-only so the same key is trusted by the guest:
@@ -185,7 +189,7 @@ Container port `5555` is a `socat` proxy to the emulator's loopback ADB port. If
 
 Because the runtime is uid `10001`, both secret files must be readable by that uid (or its group). The entrypoint fails closed when mounted key files exist but are unreadable or only one member of the pair is present.
 
-The mode-`0600` Unix socket `/run/emulator-console/console.sock` is a supervised `socat` proxy to AEMU's loopback-only Console on port `5556`; each connection to that loopback target has a five-second deadline. A dedicated named volume carries the socket: volume initialization fixes its directory to mode `0700` and uid/gid `10001`, the emulator mounts it read-write, and the device bridge mounts it read-only. There is no container-network-facing Console TCP listener, Dockerfile `EXPOSE`, Compose `expose`, or host `ports` mapping. The emulator reuses the generated `bridge-secrets/token`: the volume is mounted read-only at `/run/bridge-secrets`, and the entrypoint accepts only a regular, non-symlink file containing exactly 64 lowercase hexadecimal characters. It atomically installs the unchanged token at `$HOME/.emulator_console_auth_token` with mode `0600` before AEMU starts, without logging its contents. AEMU therefore requires the Console client's initial `auth` command. Invalid or uncopyable token input fails closed, as does any later exit of the supervised Unix-socket proxy.
+The mode-`0600` Unix socket `/data/runtime/console/console.sock` is a supervised `socat` proxy to AEMU's loopback-only Console on port `5556`; each connection to that loopback target has a five-second deadline. It and the generated token `/data/runtime/secrets/token` reside in the `android` container's persistent `/data` volume. Device Bridge and AEMU run under the same fail-closed entrypoint in that one container; there is no sidecar or shared socket volume. There is no container-network-facing Console TCP listener, Dockerfile `EXPOSE`, Compose `expose`, or host `ports` mapping. The entrypoint accepts only a regular, non-symlink token file containing exactly 64 lowercase hexadecimal characters. It atomically installs the unchanged token at `$HOME/.emulator_console_auth_token` with mode `0600` before AEMU starts, without logging its contents. AEMU therefore requires the Console client's initial `auth` command. Invalid or uncopyable token input fails closed, as does any later exit of the supervised Unix-socket proxy.
 
 Port `8554` is a supervised `socat` proxy to the Android Emulator gRPC control and display stream on internal port `8556`. This avoids depending on which interface a particular Emulator build binds. gRPC is not itself a browser UI; a compatible gRPC/WebRTC client is required. The emulator's `-grpc` mode is unauthenticated, so keep the host publish address at `127.0.0.1`.
 
@@ -203,8 +207,8 @@ Port `6080` serves the encrypted HTTPS/WSS browser interaction path from the sam
 | `EMULATOR_MEMORY_MB` | `4096` | Validated in the emulator-supported range 1536–8192. |
 | `ANDROID_DISPLAY_WIDTH` / `ANDROID_DISPLAY_HEIGHT` | `1080` / `2424` | Pixel 9 effective display geometry; reconciled into persisted AVD configuration on every start. |
 | `ANDROID_DISPLAY_DENSITY` / `ANDROID_DISPLAY_DEPTH` | `420` / `32` | Pixel 9 effective density and color depth; validated before startup. |
-| `EMULATOR_CONSOLE_SOCKET` | `/run/emulator-console/console.sock` | Mode-`0600` Unix socket shared only with the device bridge; no Console TCP port is exposed. |
-| `EMULATOR_CONSOLE_AUTH_TOKEN_FILE` | `/run/bridge-secrets/token` | Read-only shared token source copied to AEMU's required home-directory path before startup. |
+| `EMULATOR_CONSOLE_SOCKET` | `/data/runtime/console/console.sock` | Mode-`0600` Unix socket used by Device Bridge in the same `android` container; no Console TCP port is exposed. |
+| `EMULATOR_CONSOLE_AUTH_TOKEN_FILE` | `/data/runtime/secrets/token` | Persistent token source copied to AEMU's required home-directory path before startup. |
 | `EMULATOR_WIPE_DATA` | `0` | Set to `1` for one destructive guest-data reset. |
 
 Additional Docker command arguments are passed as individual emulator arguments without `eval` or string splitting. For example:
@@ -213,7 +217,8 @@ Additional Docker command arguments are passed as individual emulator arguments 
 docker run ... cloudandx/android17-play-emulator:37.0-r06 -camera-back emulated
 ```
 
-`docker compose run --rm evidence-gate` performs the repository gate. The image's `preflight` and
+The root `docker compose --profile docker-compat exec -T android /usr/local/bin/runtime-preflight.sh`
+command performs the runtime gate. The image's `preflight` and
 `print-command` entrypoints also require a supported `DOCKER_ENGINE_ARCHITECTURE`; the root CLI
 supplies this fact from Docker Engine metadata rather than trusting a persisted `.env` value.
 

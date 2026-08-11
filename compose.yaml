@@ -14,6 +14,9 @@ services:
         NATIVE_AEMU_PATCH_SET_SHA256: ${NATIVE_AEMU_PATCH_SET_SHA256:-4b63c09cf28c6897a10c60d59ebbe7c05a628f3f2e11e554fafa5d722de7d2b4}
 
   android:
+    # OrbStack ARM TCG/SwiftShader compatibility evidence only.  The default
+    # local experience is scripts/native-android17.sh on macOS.
+    profiles: ["docker-compat"]
     image: cloudandx/android17-play-emulator:37.0-r06
     platform: linux/amd64
     build:

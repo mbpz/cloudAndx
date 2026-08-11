@@ -1,10 +1,17 @@
-# 容器 Android 远程交互：现状经验与 Docker 兼容方案
+# 容器 Android 远程交互：现状经验与 Docker 兼容方案（历史记录）
+
+> **归档说明（2026-08-11）**：本文记录的是先前具备不同 Linux 内核能力的实验及其
+> 当时结论。当前 M1 OrbStack 不支持本文中的 ReDroid 运行链路；相关实现与测试已移除。
+> 以 [OrbStack ReDroid 可行性复测](orbstack-redroid-feasibility-2026-08-11.md) 和
+> [稳定运行架构](stable-runtime-architecture.md) 为准。
+> 除本归档说明外，下文所有“当前”“默认 Compose”“已完成”和性能数据均是原实验时点的
+> 叙述，不是 2026-08-11 后的部署建议或验收结论。
 
 ## 决策摘要
 
-当前 OrbStack Docker 不提供 ReDroid 所需的 binder/ashmem/DMA-BUF 宿主设备，
-因此默认 Compose 使用可在该 Docker Engine 中实际启动的 Android 17 AEMU 兼容档。
-选择边界不是单一编译错误，而是三个条件同时存在：
+原实验时的 OrbStack Docker 不提供 ReDroid 所需的 binder/ashmem/DMA-BUF 宿主设备，
+因此当时的默认 Compose 使用可在该 Docker Engine 中实际启动的 Android 17 AEMU 兼容档。
+当时的选择边界不是单一编译错误，而是三个条件同时存在：
 
 1. ReDroid 上游公开支持到 Android 16；Android 17 需要移植 device、HAL、
    init、SELinux 和图形适配，不是改一个版本号。
@@ -13,7 +20,7 @@
 3. 完整 AOSP 构建通常需要 x86_64 Linux、大量内存和数百 GB 工作空间；当前
    M1 Mac 的内存、磁盘余量和宿主内核接口都不适合作为 Android 17 构建机。
 
-当前可运行路线固定为：
+当时可运行路线固定为：
 
 ```text
 Apple silicon or ARM64 Linux host
@@ -26,13 +33,14 @@ Apple silicon or ARM64 Linux host
        +-- 受限 Device Bridge API
 ```
 
-这条路线已迁入默认 Compose。浏览器桥使用 AEMU 官方按产帧推送的
+该路线当时已迁入默认 Compose。浏览器桥使用 AEMU 官方按产帧推送的
 `streamScreenshot`，不是周期截图；输入使用 `streamInputEvent` 的触控和键盘语义。
 noVNC、websockify、grpcurl 和 Android 制品都固定版本/摘要，并由同一 fail-closed
 入口监督。ARM TCG 兼容档不满足 realtime 性能门槛，因此不得声明“真机级”或
-“生产就绪”。ReDroid 16 仍是满足宿主内核设备后的长期运行路线，不在当前宿主伪降级。
+“生产就绪”。ReDroid 16 在当时被视为满足宿主内核设备后的长期候选路线；该判断已被
+2026-08-11 当前宿主复测取代。
 
-## Android 17 AEMU 的实测经验
+## Android 17 AEMU 的历史实测经验
 
 ### 能做到什么
 
@@ -46,7 +54,7 @@ noVNC、websockify、grpcurl 和 Android 制品都固定版本/摘要，并由�
 
 ### 为什么仍然不可用
 
-当前 ARM64 Docker runtime 没有为该 AEMU 路径提供 `/dev/kvm` 和可用 GPU render node，最终
+当时的 ARM64 Docker runtime 没有为该 AEMU 路径提供 `/dev/kvm` 和可用 GPU render node，最终
 执行路径是 ARM TCG 加 SwiftShader。实测结果为：
 
 | 指标 | 结果 |
@@ -72,7 +80,7 @@ ADB 本身也慢，证明主要延迟在 TCG Android 执行和软件渲染，不
 - **继续补 AEMU ARM64 native runner**：即使 launcher 能运行，当前宿主仍
   缺少满足目标体验的 CPU/GPU 加速路径。
 
-## 新方案：ReDroid 16 的实测经验
+## 当时的新方案：ReDroid 16 的实测经验
 
 ### 为什么选择 ReDroid
 
@@ -99,7 +107,7 @@ redroid/redroid@sha256:7b1e389bd15f37af3bcd06138f5b2ffa7cfba4332bd5ef54c53e99c2f
 | 在 6.8 编译 redroid ashmem module | 不可行 | `vm_flags`、shrinker 等内核 API 已变化，模块无法直接编译 |
 
 在 6.8 环境中，即使设置 `androidboot.use_memfd=true`、`sys.use_memfd=1` 并
-放宽 DMA heap 权限，当前 ReDroid 16 gralloc 仍尝试打开 `/dev/ashmem`，日志
+放宽 DMA heap 权限，当时的 ReDroid 16 gralloc 仍尝试打开 `/dev/ashmem`，日志
 出现：
 
 ```text
@@ -122,12 +130,12 @@ RenderEngine: output buffer not gpu writeable
 ```
 
 ashmem 和 DMA-BUF system heap 则作为字符设备映射。宿主设备由 provider 自己
-初始化；`scripts/setup-redroid-host.sh` 只在启动 Android 前执行能力预检，provider
-必须另外证明模块加载、binderfs mount 和权限在重启后仍有效。
+初始化；当时的 host preflight 只在启动 Android 前执行能力预检（脚本已归档删除），
+provider 必须另外证明模块加载、binderfs mount 和权限在重启后仍有效。
 
 ### 已取得的运行结果
 
-在已验证的 M1 ARM64 Linux provider、8 CPU、8 GB 配置上已观察到：
+在当时已验证的 M1 ARM64 Linux provider、8 CPU、8 GB 配置上曾观察到：
 
 - ReDroid 返回 `ro.build.version.release=16`；
 - `sys.boot_completed=1`；
@@ -141,17 +149,17 @@ ashmem 和 DMA-BUF system heap 则作为字符设备映射。宿主设备由 pro
   TLS websockify/noVNC 发布；
 - 浏览器点击打开 Gallery、连续拖动打开应用抽屉、键盘输入 `settings` 后
   Android 搜索框显示对应文本；
-- 默认 Compose 只有一个 `android` 服务，ADB/noVNC/Device Bridge 分别只绑定
+- 当时的默认 Compose 只有一个 `android` 服务，ADB/noVNC/Device Bridge 分别只绑定
   `127.0.0.1:5555/6080/8090`；
 - provider 整机重启后容器恢复为 `healthy`，Android 与三个入口重新可用；
 - Device Bridge 未授权写操作返回 401，使用卷内 token 后返回 200。
 
-这些证据证明 Android 16 与双远程入口主路径成立。30 次浏览器点击到首个可见
+这些证据在该历史环境中证明 Android 16 与双远程入口主路径成立。30 次浏览器点击到首个可见
 画面变化的固化配置实测为 min 9.2 ms、median 43.8 ms、P95 85.2 ms、
 max 99.5 ms；较旧 AEMU 的 16.2 秒改善超过两个数量级，并达到原定 P95 100 ms
 门限。关键是直接在 Chromium noVNC canvas 内观察首个可见帧，避免把外部截图
 轮询和 PNG 编码时间混入用户体验指标。Google 服务和全部硬件模拟能力仍不在
-当前 AOSP 镜像内。
+当时 AOSP 镜像内。
 
 ## 现状问题与对应解决方案
 
@@ -169,10 +177,10 @@ max 99.5 ms；较旧 AEMU 的 16.2 秒改善超过两个数量级，并达到原
 
 ## 已完成与剩余工作
 
-已完成固定 ReDroid digest、单 ARM64 最终镜像、单运行容器、scrcpy 4.1、
+当时已完成固定 ReDroid digest、单 ARM64 最终镜像、单运行容器、scrcpy 4.1、
 Xvfb/Openbox/x11vnc、noVNC 1.7.0、websockify 0.13.0、TLS、Device Bridge 鉴权、
-回环端口和 provider 重启恢复。默认 Compose 已切换到 ReDroid 16，不再构建或
-运行 AEMU/native-engine。
+回环端口和 provider 重启恢复。当时的默认 Compose 曾切换到 ReDroid 16；该实现现已删除，
+当前项目则以 macOS 原生 Emulator 为默认，并将 Docker AEMU 限制为 `docker-compat`。
 
 剩余工作只有可量化的交付门禁：
 
@@ -181,8 +189,8 @@ Xvfb/Openbox/x11vnc、noVNC 1.7.0、websockify 0.13.0、TLS、Device Bridge 鉴�
    仍需补充长稳和负载场景；
 3. 若产品需要 Google Play/GMS，必须取得合法且可校验的 Android 16 GMS
    制品来源，不能把当前 AOSP 镜像改名冒充；
-4. 新路线稳定后单独删除旧 `docker/emulator`、native AEMU 和 Android 17
-   历史实现；在删除前保留它们作为旧方案证据，不再接入默认 Compose。
+4. 本条为已过期的历史待办：当前项目保留 `docker/emulator` 作为明确的
+   `docker-compat` 兼容路径，不再将 ReDroid 作为默认 Compose 路线。
 5. Bluetooth 若进入交付范围，必须先通过 HAL 存活、Framework ON、扫描、配对和
    重启恢复门禁；现有 M1 ARM64 Docker 环境不把 Bluetooth 纳入已支持能力。
 

@@ -31,6 +31,16 @@ if grep -Eq '^  (device-bridge|evidence-gate|runtime-compatibility|volume-init|a
 fi
 grep -q '^  native-engine:$' "${compose_file}"
 grep -Fq 'profiles: ["build"]' "${compose_file}"
+grep -Fq 'profiles: ["docker-compat"]' "${compose_file}"
+if docker compose -f "${compose_file}" config --services | grep -qx android; then
+  echo 'FAIL: android compatibility runtime must require docker-compat profile' >&2
+  exit 1
+fi
+runtime_services_with_profile=$(docker compose -f "${compose_file}" --profile docker-compat config --services)
+[ "${runtime_services_with_profile}" = android ] || {
+  printf 'FAIL: expected docker-compat to select only android, got: %s\n' "${runtime_services_with_profile}" >&2
+  exit 1
+}
 
 # One process supervisor must retain every former boundary and fail closed.
 grep -Fq '"${SCRIPT_DIR}/check-runtime-arch.sh"' "${supervisor}"

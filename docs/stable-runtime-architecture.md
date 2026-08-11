@@ -1,59 +1,59 @@
-# CloudAndx Android 16 稳定运行方案
+# CloudAndx 稳定运行架构
 
 ## 定稿结论
 
-长期支持路径是 ARM64-only ReDroid 16 + 单个 `android` 容器。宿主 scrcpy 和浏览器
-noVNC 是两个独立客户端，共享同一个 `127.0.0.1:5555` Android serial；任一客户端
-断开都不能停止 Android 或另一入口。
+Apple Silicon 本机的长期支持和性能默认路径是 **macOS 原生 Android Emulator**。它以
+Hypervisor.Framework 和宿主 `-gpu host` 运行 ARM64 AVD，并由同版 scrcpy 4.1 控制同一
+设备。当前 M1 + OrbStack Docker VM 不具备让容器 Android 达到相同图形和交互性能的
+硬件/内核能力。
 
 ```text
-选定 Docker Linux runtime
-  └─ ARM64 + 4 KiB + IPv6 + ashmem + binderfs + DMA-BUF（启动前 fail closed）
-      └─ cloudandx/android16-redroid:16-r1（固定 ReDroid digest）
-          ├─ 容器 scrcpy 4.1 -> Xvfb/Openbox -> x11vnc -> WSS -> noVNC 1.7.0
-          ├─ loopback ADB 5555 --------------------------> 宿主 scrcpy 4.1
-          └─ Device Bridge 8090（token + allowlist）
+macOS（默认、本机实时交互）
+  └─ native-android17.sh
+      └─ Android Emulator ARM64
+          ├─ Hypervisor.Framework + -gpu host
+          ├─ 127.0.0.1 ADB 5557 / gRPC 8556（token）
+          └─ Emulator 原生窗口或 scrcpy 4.1
+
+Docker（显式兼容/证据，不承诺实时或原生等效）
+  └─ docker compose --profile docker-compat
+      └─ 单个 android 容器、唯一最终镜像
+          ├─ ARM TCG + SwiftShader
+          ├─ loopback ADB / HTTPS noVNC / Device Bridge
+          └─ 同一受监督 Android 实例
 ```
 
-项目只使用 Docker Engine/CLI 与 Docker Compose；不安装、调用或管理 Colima、OrbStack
-或其他 provider CLI，Docker context 由宿主基础设施预先选择。实际 Docker server
-只要通过 `scripts/check-redroid-host.sh` 即可作为实现；缺少 ARM64 Linux、ashmem、
-binderfs 或 DMA-BUF 时必须 fail closed，不能通过项目命令切换到另一个 context 绕过门禁。
+Docker 兼容 topology 仍严格只有一个 `android` 运行容器和一个最终运行镜像；noVNC、
+websockify、AEMU、ADB 代理、Device Bridge 和证据门禁都在该容器内由同一 fail-closed
+入口监督。所有发布端口均绑定 `127.0.0.1`；不发布 raw VNC、Docker socket、Shell、ADB
+server、scrcpy socket、KVM 或 Emulator gRPC 到局域网或公网。
 
-2026-07-30 复核当前 Apple M1 的 OrbStack Docker context 时，修正后的特权探针报告
-`/cloudandx-host-dev/ashmem` 缺失；该 context 同时没有 DMA-BUF system heap 与 binderfs
-三节点，故不属于 ReDroid 16 支持路径。历史运行证据来自通过全部门禁的 ARM64 Linux
-Docker server；不能把 OrbStack 的 Docker API 可用误认为 Android 内核能力满足。
+## 为什么不采用当前 OrbStack ReDroid
 
-## 为什么暂不切换 WebRTC/scrcpy Web
+截至 2026-08-11，本机 OrbStack 7.0.11 缺少 `/dev/kvm`、`/dev/dri`、DMA-BUF system
+heap、ashmem 与 binderfs。ReDroid 12 因缺失 compat mmap sysctl 直接退出；14/15 虽可部分
+启动但出现黑屏或没有编码器；16 在补齐 device-mapper、ext4 与 Binder 权限后仍以
+`output buffer not gpu writeable` 终止 SurfaceFlinger。软件 `guest` GPU 不能弥补这些
+host 能力，也不符合本机原生流畅度目标。
 
-官方 noVNC 1.7.0 + websockify 0.13.0 是版本稳定、协议成熟、可审计且能在单镜像内
-复现的浏览器入口。`ws-scrcpy`、自建 scrcpy-WebSocket 网关和 Cuttlefish WebRTC
-都可以作为后续性能实验，但目前分别存在上游 master 兼容性、协议版本耦合或 KVM/
-crosvm 宿主要求，不能在未经目标 ARM64 runtime 实测时替换稳定路径。
+详细的版本矩阵和复测条件见
+[OrbStack ReDroid 可行性复测](orbstack-redroid-feasibility-2026-08-11.md)。早期在具备
+不同内核能力的 ARM64 Linux Docker server 上获得的 ReDroid 证据仅供历史回溯，不能作为
+当前 M1 OrbStack 的部署或性能结论。
 
-浏览器输入由容器内 scrcpy 的 SDK mouse/keyboard 语义负责；noVNC canvas 额外捕获
-鼠标 DOWN/MOVE/UP、滚轮触控板事件和 pointer capture，确保 Safari/WebKit 缩放后仍
-能把按下、拖动、释放送到同一 RFB framebuffer。Openbox 只负责 Xvfb 窗口焦点，不
-创建第二容器或第二 Android。
+## 发布与验收门禁
 
-## 发布门禁
-
-- `docker compose config --services` 只能返回 `android`，镜像必须包含固定 ReDroid
-  digest、scrcpy 4.1、noVNC 1.7.0 和 websockify 0.13.0。
-- `scripts/setup-redroid-host.sh` 必须通过；它会检查 Docker server ARM64/Linux、
-  4 KiB 页、IPv6、ashmem、binderfs 三节点和 DMA-BUF system heap。
-- 端口只允许回环绑定：ADB 5555、noVNC HTTPS 6080、Device Bridge 8090；raw VNC
-  5900 不发布。
-- noVNC 明文 HTTP 必须拒绝，WSS 使用数据卷中的证书和私钥；token、ADB key、TLS
-  私钥不能进入镜像、URL 或日志。
-- 冷启动、双入口 ready、点击/长按/滑动/键盘、断线重连、容器重启恢复和 30 分钟
-  稳定性必须在目标宿主实测。只有满足既定 P95 ≤100 ms、≥30 FPS、无黑屏/丢输入的
-  `realtime` 证据，才能使用“真机级/丝滑”表述。
+- 默认启动不得隐式运行 Docker：`android` 仅由 `docker-compat` profile 选择。
+- Docker 兼容路径必须保持单容器、loopback 端口、HTTPS/WSS noVNC、固定 noVNC 1.7.0、
+  websockify 0.13.0、scrcpy 4.1 和受限 Device Bridge。
+- 原生路径必须验证 Hypervisor.Framework、`-gpu host`、loopback ADB/gRPC 与 scrcpy 4.1。
+- 任何未来声称 Docker/容器 Android 达到实时或“丝滑”的变更，都必须在目标宿主重新实测：
+  启动、稳定图形、编码、输入、断线重连、重启恢复和 P95 延迟；历史证据与单次 splash
+  画面不构成验收。
 
 ## 能力边界
 
-ReDroid 基础镜像是 AOSP Android 16，不包含 Google Play/GMS 或 Play 认证。真实基带、
-SIM/eSIM、NFC/SE、TEE/StrongBox、Widevine L1、物理摄像头/传感器和 Play Integrity
-physical verdict 仍需要授权制品或认证物理设备池。当前固定镜像的 Bluetooth 模拟
-HAL 仍标记为 `not_supported`，不以跨版本二进制覆盖规避。
+原生 Emulator 和 Docker 兼容路径都不替代已认证物理设备：真实基带、SIM/eSIM、NFC/SE、
+TEE/StrongBox、Widevine L1、物理传感器以及 Play Integrity physical verdict 均不在本项目
+保证范围内。跨主机访问仍必须通过 SSH、VPN 或零信任通道受控转发；不得直接改 Compose
+端口到 `0.0.0.0`。

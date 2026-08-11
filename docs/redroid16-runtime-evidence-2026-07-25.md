@@ -1,4 +1,8 @@
-# ReDroid 16 运行证据（2026-07-25）
+# ReDroid 16 运行证据（2026-07-25，历史环境）
+
+> **归档说明（2026-08-11）**：该证据来自满足 ReDroid 旧内核前置条件的其他 ARM64 Linux
+> Docker server，不适用于当前 M1 OrbStack。当前复测结果见
+> [OrbStack ReDroid 可行性复测](orbstack-redroid-feasibility-2026-08-11.md)。
 
 > 本文运行数据来自通过 ashmem、binderfs 和 DMA-BUF 门禁的 ARM64 Linux Docker
 > server，不代表每个 macOS Docker provider 都支持 ReDroid。2026-07-30 在当前
@@ -66,11 +70,8 @@ P95 100 ms 目标；它只证明远程交互链路，不证明 Bluetooth、GMS �
   liveness 和容器健康检查均通过，0 失败、0 重启；随后容器重启恢复并再次通过
   runtime smoke。
 
-运行时回归入口：
-
-```sh
-sh tests/redroid-runtime-smoke-test.sh
-```
+当时的运行时回归入口随 ReDroid 实现一并归档删除；这里仅保留历史运行结果，不提供
+当前可执行命令。
 
 ## 仍需保留的边界
 

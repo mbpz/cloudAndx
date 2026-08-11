@@ -14,8 +14,8 @@ test -x "${CLIENT}" || {
 if ! test -s "${ADB_KEY}"; then
   install -d -m 0700 "$(dirname "${ADB_KEY}")"
   echo "Exporting the emulator's trusted ADB key into project-local .runtime..."
-  docker compose -f "${ROOT}/compose.yaml" cp \
-    emulator:/data/runtime/adb/adbkey "${ADB_KEY}"
+  docker compose -f "${ROOT}/compose.yaml" --profile docker-compat cp \
+    android:/data/runtime/adb/adbkey "${ADB_KEY}"
   chmod 0600 "${ADB_KEY}"
 fi
 test -s "${SERVER_JAR}" || {

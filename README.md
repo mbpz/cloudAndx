@@ -42,7 +42,7 @@ scripts/native-android17.sh scrcpy
 详细选型依据、边界和回滚方式见
 [macOS 原生运行时决策](docs/native-macos-android-runtime.md)。
 
-## Docker 兼容方案
+## Docker 兼容方案（非实时、非原生等效）
 
 这套实现只需要 Docker/Compose。它不会安装本机 Android SDK，不会调用或修改
 OrbStack，不会改 macOS 的网络、DNS、路由、防火墙、虚拟化设置或其他系统环境。
@@ -59,7 +59,8 @@ Pixel 9 AVD 一致；下载文件均校验 Google 仓库公布的 SHA-1。Docker
 native ARM64 AEMU 源码 revision 仍固定为 37.1.7，因为 Google 公开仓库未提供可审计的
 37.1.11 发布包到 ARM64 源码 revision 映射；项目不会将 37.1.7 伪标为 37.1.11。
 
-当前默认且已进入本机验收范围的是 **ARM64 Docker Engine**。在 ARM64（包括 Apple
+Docker 路径是保留的兼容性与证据路径，不是默认本机交互路径，也不承诺实时或原生等效。
+当前可重建的 **ARM64 Docker Engine** 路径（包括 Apple
 Silicon 上的 OrbStack Docker Engine）上，amd64 容器用户态只提供固定的 SDK、ADB
 和代理工具；entrypoint 绕过会拒绝 ARM64 AVD 的 x86_64 launcher，直接执行从 Android
 Emulator 官方源码固定版本构建的 native AArch64 runner。guest 同样是 Google 官方
@@ -75,7 +76,7 @@ x86_64 host 构建和运行验证当前 deferred；控制面在该架构上失�
 ```sh
 docker compose config --quiet
 ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine
-ACCEPT_ANDROID_SDK_LICENSES=yes docker compose up -d --build
+ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile docker-compat up -d --build
 ```
 
 也可以复制 [.env.example](.env.example) 为工作区内的 `.env`，将
@@ -83,7 +84,7 @@ ACCEPT_ANDROID_SDK_LICENSES=yes docker compose up -d --build
 ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与 `up-kvm` 运行验证
 当前 deferred，待切换到 x86_64 电脑后执行；本机不会尝试编译或运行 x86 AEMU。
 
-默认 Compose 只启动一个 `android` 容器，使用唯一运行镜像
+`docker-compat` profile 只启动一个 `android` 容器，使用唯一运行镜像
 `cloudandx/android17-play-emulator:37.0-r06`。其 PID 1 依次执行兼容性检查、ADB
 密钥/Console 令牌初始化和证据门禁，再统一监督模拟器、ADB/gRPC/Console 代理、设备桥接
 以及容器内 `AEMU streamScreenshot/streamInputEvent -> RFB -> websockify/noVNC`
@@ -98,7 +99,7 @@ ARM64 AEMU，并下载完整的官方 ARM64 系统镜像。x86_64 host 构建与
 - ADB：`127.0.0.1:5555`
 - Emulator gRPC：`127.0.0.1:8554`
 
-本机已安装的 scrcpy 4.1 提供 server；项目为 ARM TCG 的慢启动构建一个延长握手等待、仍保持 4.1 协议的本机 client。首次执行构建脚本，之后直接运行连接脚本：
+本机已安装的 scrcpy 4.1 提供 server；项目为 ARM TCG 的慢启动构建一个延长握手等待、仍保持 4.1 协议的本机 client。该连接仅用于兼容性诊断，不作为流畅交互承诺。首次执行构建脚本，之后直接运行连接脚本：
 
 ```sh
 scripts/build-scrcpy-arm-tcg-client.sh
@@ -123,13 +124,13 @@ ADB、raw VNC 或 Emulator gRPC。
 常用命令：
 
 ```sh
-docker compose ps -a
-docker compose exec -T android adb -s emulator-5556 shell getprop ro.build.version.release
-docker compose exec -T android adb -s emulator-5556 install /data/app.apk
-docker compose exec -T android /usr/local/bin/runtime-preflight.sh
-docker compose logs --follow --tail 200 android
-docker compose down                 # 保留 Android 数据
-docker compose down --volumes       # 删除本项目容器和命名卷
+docker compose --profile docker-compat ps -a
+docker compose --profile docker-compat exec -T android adb -s emulator-5556 shell getprop ro.build.version.release
+docker compose --profile docker-compat exec -T android adb -s emulator-5556 install /data/app.apk
+docker compose --profile docker-compat exec -T android /usr/local/bin/runtime-preflight.sh
+docker compose --profile docker-compat logs --follow --tail 200 android
+docker compose --profile docker-compat down                 # 保留 Android 数据
+docker compose --profile docker-compat down --volumes       # 删除本项目容器和命名卷
 ```
 
 ## ARM64 / OrbStack 执行边界
@@ -167,8 +168,8 @@ headless 启动则锁定后置摄像头为 `emulated`，避开无窗口模式下
 纯 TCG 首次冷启动会进行大量 userdata 初始化和包优化；项目默认使用 8 个 guest vCPU，
 应为 Docker Engine 提供至少 8 个 CPU。在容器仍持续消耗 CPU/块 I/O且没有重启或
 OOM 时，不应中断该过程。
-Compose 默认锁定当前已验收的 ARM64 `hybrid-aemu-arm64` 路径；x86_64 运行仍未进入
-验收范围，不能通过修改架构变量绕过运行时门禁。
+显式 `docker-compat` profile 锁定当前已验收的 ARM64 `hybrid-aemu-arm64` 兼容路径；
+x86_64 运行仍未进入验收范围，不能通过修改架构变量绕过运行时门禁。
 
 Compose 只创建当前项目的 IPv6 Docker bridge，供 AEMU 虚拟 modem 使用；不会修改
 OrbStack 配置，也不会改 macOS 的 DNS、路由、防火墙或其他网络设置。ARM64 上
@@ -185,8 +186,8 @@ OrbStack 配置，也不会改 macOS 的 DNS、路由、防火墙或其他网络
   URL、checksum、架构与 KVM，原子保存证据。
 - `services/device-bridge/`：无任意 shell 的 allowlist API，覆盖截图、APK、应用列表、
   logcat、触控、按键、GPS、短信、来电、网络、电量、旋转和重启。
-- `compose.yaml`：默认 ARM64 guest/AEMU 软件执行路径，以及仅限项目范围的 IPv6
-  bridge；尚未验证的 x86_64/KVM 路径不进入默认部署文件。
+- `compose.yaml`：`docker-compat` profile 中的 ARM64 guest/AEMU 软件执行兼容路径，
+  以及仅限项目范围的 IPv6 bridge；尚未验证的 x86_64/KVM 路径不进入部署文件。
 
 ## “Google 原生体验”的准确含义
 

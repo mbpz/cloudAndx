@@ -8,14 +8,15 @@ line protocol; the bridge never exposes `adb emu` or an arbitrary Console or
 shell command endpoint.
 
 The Console client connects only to the Unix-domain socket named by
-`EMULATOR_CONSOLE_SOCKET` (default
-`/run/emulator-console/console.sock`). Compose mounts that shared socket volume
-read-only in this container; there is no Console TCP connection or host port.
+`EMULATOR_CONSOLE_SOCKET` (Compose path
+`/data/runtime/console/console.sock`). Device Bridge and AEMU are supervised by
+the same fail-closed entrypoint in the single `android` container; there is no
+sidecar, shared socket volume, Console TCP connection, or host port.
 `EMULATOR_CONSOLE_TIMEOUT_SECONDS` defaults to 15 seconds and is one monotonic
 deadline covering connect, banner, authentication, command and response.
 
 Console access reuses the already loaded HTTP bridge `AUTH_TOKEN`, normally
-read from `/run/bridge-secrets/token`. The client requires the exact AEMU
+read from `/data/runtime/secrets/token`. The client requires the exact AEMU
 authentication banner, validates a 64-character lowercase hexadecimal token,
 waits for an exact `OK` after authentication, and only then sends one
 allowlisted command. It accepts exact terminal `OK` and native `KO`/`KO:`

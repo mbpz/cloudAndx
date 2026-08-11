@@ -9,6 +9,7 @@ grep -Fq 'system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a' "${r
 grep -Fq 'EXPECTED_EMULATOR_VERSION=37.1.11' "${runner}"
 grep -Fq 'EXPECTED_PLATFORM_TOOLS_VERSION=37.0.1' "${runner}"
 grep -Fq 'EXPECTED_SCRCPY_VERSION=4.1' "${runner}"
+grep -Fq 'Hypervisor.Framework' "${runner}"
 grep -Fq 'ANDROID_AVD_HOME=${RUNTIME_ROOT}/avd' "${runner}"
 grep -Fq 'stop_docker_android' "${runner}"
 grep -Fq -- '-accel auto' "${runner}"

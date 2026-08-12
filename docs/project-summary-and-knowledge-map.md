@@ -330,9 +330,203 @@ ABI、16 KiB page size、Play Store、GMS、SystemServer、核心 Binder 服务�
 `NOT_FOUND` 不等于 Android guest 已经启动或失败。只有 `docker-compat` 运行并通过首帧门禁后，
 受支持的浏览器入口才是带 `6080` 端口的 noVNC `vnc.html` URL。
 
-## 6. 探索历程与关键决策
+## 6. 商业 Android 模拟器为何能接近真机体验
 
-### 6.1 阶段时间线
+这里的“接近真机”指用户可感知的启动、动画、游戏帧率和输入延迟接近手机，并不表示模拟器
+拥有真实手机的射频、安全芯片、相机 ISP 或设备认证。国内常见桌面模拟器的完整内部实现多为
+闭源；以下内容将厂商公开配置、Android 官方机制与通用虚拟化工程原理分开表述，不把合理推断
+写成某个厂商已经公开确认的实现细节。
+
+### 6.1 核心不是 Docker，而是宿主原生加速栈
+
+高性能桌面模拟器通常直接运行在 Windows 或 macOS 宿主上，CPU、GPU、显示和输入形成一条
+短链路：
+
+```mermaid
+flowchart LR
+    App["Android 应用"]
+    Guest["面向模拟器定制的 Android guest"]
+    Hypervisor["VT-x / AMD-V / Hypervisor.Framework"]
+    VGPU["虚拟 GPU / GLES、Vulkan 命令流"]
+    Translator["DirectX / Vulkan / Metal 转译或转发"]
+    HostGPU["宿主真实 GPU"]
+    Window["宿主原生窗口 / 共享纹理"]
+    Input["键鼠、触控板、手柄和宏"]
+
+    App --> Guest
+    Guest -->|"同 ISA 指令由硬件虚拟化执行"| Hypervisor
+    Guest -->|"图形 API 命令"| VGPU
+    VGPU --> Translator --> HostGPU --> Window
+    Input -->|"直接映射为 Android input event"| Guest
+```
+
+这条链路有两个不可替代的性能支点：
+
+1. **CPU 硬件虚拟化**：guest 与宿主 ISA 匹配时，大部分普通指令直接在物理 CPU 上执行，
+   Hypervisor 只处理特权操作、地址转换和虚拟设备访问。
+2. **GPU 命令转发或转译**：Android 的 GLES/Vulkan 调用被送到宿主 DirectX、Vulkan 或
+   Metal 后端，由真实 GPU 渲染，而不是由 CPU 逐像素计算。
+
+Android 官方把 VM acceleration 和 graphics acceleration 明确定义为两个独立加速面；没有
+Hypervisor 时 Emulator 只能逐块翻译 guest 机器码，`-gpu swiftshader` 也明确属于软件渲染。
+官方同时说明 VM 加速 Emulator 必须直接运行在宿主机，不能嵌套在 Docker 或另一台 VM 中。
+详见 [Android Emulator 硬件加速说明](https://developer.android.com/studio/run/emulator-acceleration)。
+
+夜神公开要求开启 VT，并提供 OpenGL+、DirectX、ASTC、渲染缓存和最高 120 FPS 等设置；
+这些配置能够证明产品依赖 CPU 虚拟化和宿主图形后端，但不能据此推断其未公开的具体 VMM、
+驱动或内部协议。详见[夜神性能设置](https://support.yeshen.com/zh-CN/function/xn)。
+
+### 6.2 CPU 路径：硬件虚拟化与同架构执行
+
+典型 Windows 模拟器使用 Intel VT-x、AMD-V，或与 Windows Hypervisor Platform/自有
+Hypervisor 集成。Apple Silicon 产品则需要直接使用 macOS 虚拟化能力，并让 ARM64 Android
+guest 在 ARM64 CPU 上执行。
+
+```text
+商业本地模拟器 / CloudAndx native：
+Android guest → Hypervisor → 物理 CPU
+
+CloudAndx docker-compat：
+Android guest → AEMU TCG 软件翻译 → OrbStack Linux VM → Hypervisor.Framework → 物理 CPU
+```
+
+第二条链路虽然 guest 和最终物理 CPU 都是 ARM64，中间的 OrbStack VM 没有向 AEMU 提供
+`/dev/kvm`，因此 AEMU 不能直接使用硬件虚拟化，仍必须通过 TCG 解释/翻译。减少分辨率、
+更换 noVNC 或增加 vCPU 都不能消除这一层成本。
+
+BlueStacks Air 的公开系统要求覆盖 Apple Silicon M1–M4；其使用说明声明产品面向 Apple
+Silicon、Retina 显示和 Mac 键盘/触控板进行了适配。这能够确认其产品选择了 Apple Silicon
+原生产品路线，但其底层 Hypervisor 和图形实现仍属于厂商内部细节。参见
+[BlueStacks Air 系统要求](https://support.bluestacks.com/hc/en-us/articles/32272913555597-System-specifications-for-installing-BlueStacks-Air)
+和[使用说明](https://support.bluestacks.com/hc/en-us/articles/32272892398093-How-to-install-and-play-games-with-BlueStacks-Air-on-Mac)。
+
+### 6.3 GPU 路径：传递命令，不传递每个像素的计算
+
+高性能模拟器通常在 guest 中提供虚拟 GPU 驱动，把 GLES/Vulkan 命令、资源和同步操作传给
+宿主 renderer。宿主 renderer 再使用 DirectX、OpenGL、Vulkan 或 Metal 完成实际渲染。
+常见技术家族包括 ANGLE、gfxstream、VirGL/Venus 及厂商自研兼容层；不能在没有公开证据时
+把其中某一种指定给具体商业产品。
+
+```text
+硬件图形路径：
+Android GLES/Vulkan → 虚拟 GPU → 宿主图形 API → 真实 GPU → 共享纹理/窗口
+
+软件图形路径：
+Android GLES/Vulkan → SwiftShader → CPU 计算图形 → framebuffer
+```
+
+硬件路径避免了两类额外成本：CPU 软件光栅化，以及把完整 framebuffer 在多个进程/协议之间
+反复复制。Android 官方将 `-gpu host` 描述为通常具有最高图形质量与性能的模式；Cuttlefish
+的 `gfxstream` 同样把 OpenGL/Vulkan 调用转发到宿主，并要求宿主具备 EGL surfaceless、
+OpenGL ES 和 Vulkan 驱动。参见 [Cuttlefish GPU 加速要求](https://source.android.com/docs/devices/cuttlefish/gpu)。
+
+### 6.4 Android guest、ABI 与应用兼容层
+
+商业模拟器不是简单把一份手机 factory image 原样启动。为了支持虚拟设备、桌面输入、多开和
+热门应用，产品通常需要控制或适配以下层次：
+
+- kernel、虚拟设备驱动、Binder、内存和磁盘布局；
+- gralloc、SurfaceFlinger、音频、摄像头、传感器和媒体 HAL；
+- ART、后台服务、动画、I/O 和内存策略；
+- 设备型号、分辨率、DPI、GPU 能力和应用兼容配置；
+- 快照、增量磁盘、预热数据和应用级黑屏/闪退修复。
+
+这些是通用工程职责，不代表每个厂商都采用相同修改或放宽相同安全策略。
+
+Windows 上常见的 x86/x86_64 Android guest 还需要运行仅包含 ARM native library 的 APK。
+这类场景通常依赖 native bridge 或动态二进制翻译，将 ARM 代码翻译并缓存为 x86 代码；
+具体产品可能使用授权组件或自研实现。Apple Silicon 上使用 ARM64 guest 时，大多数 ARM64
+应用与宿主 ISA 相同，可以省去这层应用 ISA 翻译，但 Android guest 本身仍需要虚拟化。
+Android 官方 ABI 文档确认 APK native library 按 `arm64-v8a`、`x86_64` 等 ABI 分目录，
+系统会按设备支持的 ABI 选择代码；跨 ABI 执行所需的 translation/native bridge 不属于该
+标准打包机制本身。参见 [Android ABI 文档](https://developer.android.com/ndk/guides/abis)。
+
+### 6.5 显示、输入和产品体验优化
+
+本地商业模拟器通常把渲染结果直接交给宿主原生窗口或共享纹理，并将键鼠/手柄直接转换为
+Android input event。产品体验来自整条链路的协同，而不仅是 Android 能否 boot：
+
+- 鼠标锁定、相对移动、按键映射、连招、宏和虚拟手柄；
+- 触控坐标与窗口缩放统一，避免二次缩放和多级事件转译；
+- 60/90/120 FPS 帧调度，ASTC 纹理、shader 和渲染缓存；
+- 音频低延迟、麦克风/摄像头桥接和宿主剪贴板/文件集成；
+- 快照恢复、预热实例、资源档位和热门应用专属兼容配置。
+
+BlueStacks Air 的公开发布记录持续列出 Vulkan、摄像头、鼠标、手柄以及特定游戏图形修复，
+反映的正是“通用虚拟化底座 + 按应用长期适配”的产品模式。参见
+[BlueStacks Air 发布记录](https://support.bluestacks.com/hc/en-us/articles/32646860057357-Release-Notes-BlueStacks-Air)。
+
+### 6.6 本地模拟器与云手机的显示路径不同
+
+本地模拟器可以直接显示共享纹理，通常不需要视频编码和网络传输。浏览器云手机则必须把帧
+转换成媒体流，典型低延迟路径是：
+
+```mermaid
+flowchart LR
+    Android["KVM Android / Cuttlefish / AEMU"]
+    GPU["宿主 GPU renderer"]
+    Encoder["硬件 H.264 / H.265 / AV1 编码"]
+    WebRTC["WebRTC + 拥塞控制 + TURN"]
+    Decoder["浏览器硬件解码"]
+    Canvas["显示"]
+    BrowserInput["浏览器输入"]
+
+    Android --> GPU --> Encoder --> WebRTC --> Decoder --> Canvas
+    BrowserInput -->|"低延迟 data/input channel"| WebRTC --> Android
+```
+
+WebRTC、硬件编码、浏览器硬件解码和就近节点可以显著降低远程显示延迟，但它们不能修复
+上游 TCG 或 SwiftShader。若 Android 自身一帧需要数百毫秒，换掉 noVNC 只能减少传输部分，
+不能得到商业云手机的整体体验。
+
+### 6.7 与 CloudAndx 当前实现的逐层对照
+
+| 能力层 | 商业本地模拟器 | CloudAndx native | CloudAndx docker-compat | 生产目标 |
+| --- | --- | --- | --- | --- |
+| CPU | 宿主 VT-x/AMD-V/Apple 虚拟化 | Hypervisor.Framework | OrbStack 内无 KVM，使用 TCG | Linux 裸机 KVM/crosvm |
+| Guest ISA | 通常与硬件或翻译策略匹配 | ARM64 guest / ARM64 host | ARM64 guest，但 AEMU 无硬件加速 | x86_64 或 ARM64 同架构池 |
+| GPU | 宿主 DirectX/Vulkan/Metal | gfxstream + `-gpu host` | SwiftShader 软件渲染 | gfxstream + 合格 GPU/隔离策略 |
+| 本地显示 | 原生窗口/共享纹理 | Emulator 原生窗口或 scrcpy | 无原生实时承诺 | 不适用或节点诊断入口 |
+| 浏览器显示 | 产品不同；本地通常不需要 | 尚未实现 | AEMU gRPC → RFB → noVNC | 硬件编码 → WebRTC |
+| 输入 | 原生键鼠/手柄映射 | Emulator/scrcpy 直接输入 | 浏览器 → RFB → gRPC input | WebRTC input → 同一 guest |
+| Guest 优化 | 厂商系统和应用兼容层 | Google Play AVD，改动少 | Google Play AVD + 最小确定性 boot ramdisk | Cuttlefish/AVD 分池并由证据晋级 |
+| 用户体验结论 | 目标是游戏/桌面交互 | 当前本机默认，已实测流畅 | 只用于兼容和证据 | 设计完成，尚未部署 |
+
+CloudAndx native 已经拥有商业模拟器最关键的两项底座：CPU 硬件虚拟化和宿主 GPU。
+它与商业产品的主要差距转为产品层能力，例如快照秒开、管理 UI、键位映射、手柄、应用配置
+和浏览器远程入口，而不是 Android 基础执行性能。
+
+CloudAndx docker-compat 同时缺少 AEMU 的 KVM 和宿主 GPU，并增加 RFB/noVNC 显示链。因此
+`https://127.0.0.1:6080/` 与本机 Emulator 的差距是架构决定的，不是再调整容器 CPU、DPI、
+浏览器 CSS 或 noVNC 参数就能消除。
+
+### 6.8 对本项目的实施启示
+
+本机体验继续沿 native 路径建设：
+
+1. 保持 Android 17 ARM64 + Hypervisor.Framework + host GPU 为唯一默认执行底座。
+2. 需要更像商业模拟器时，优先增加快照/预热、宿主管理 UI、键位/手柄映射、剪贴板和应用配置。
+3. 需要浏览器控制 native AVD 时，设计受鉴权的宿主 capture/input 服务，并优先验证
+   VideoToolbox 硬件编码 + WebRTC 的可行性、延迟和安全边界；这两项尚未在项目中实现，
+   不得直接发布 ADB 或无鉴权 Emulator gRPC。
+
+云端或容器化体验沿 Linux 裸机路径建设：
+
+1. 使用可证明的 `/dev/kvm`，禁止 TCG 降级后仍声明实时。
+2. 为交互 profile 提供满足 gfxstream 条件的 GPU；不可信租户在隔离未证明前使用软件 GPU
+   或独占 GPU 节点。
+3. 使用硬件编码和 WebRTC，分别度量 guest 帧时间、GPU render、encode、network、decode
+   与 input round trip，不能只测 HTTP 页面是否返回 200。
+4. Google Play AVD、AOSP Cuttlefish 和物理 Pixel 继续分池，不能用流畅度替代 GMS、HAL、
+   认证或真实硬件能力证据。
+
+结论是：商业模拟器的“真机感”来自 CPU 硬件虚拟化、GPU 命令转发、受控 Android guest、
+短显示/输入链和长期应用适配的组合。CloudAndx native 已解决前两个性能根因；docker-compat
+则有意保留在没有这两个条件的证据/兼容位置。
+
+## 7. 探索历程与关键决策
+
+### 7.1 阶段时间线
 
 | 阶段 | 关键提交 | 做了什么 | 结果/决策 |
 | --- | --- | --- | --- |
@@ -348,7 +542,7 @@ ABI、16 KiB page size、Play Store、GMS、SystemServer、核心 Binder 服务�
 | 原生 macOS 默认 | `569c568`、`2dc77ae` | 加入固定版本原生 AVD、launchd 生命周期、失败清理、loopback listener 验证 | 获得当前唯一的本机硬件加速与手机级响应。 |
 | Pixel 9 对齐与收尾 | `60360da`、`3366652` | Docker 对齐 1080×2424/420、区分 SDK/engine 身份；默认改为 native、Docker 放入 profile、删除 dormant ReDroid | 当前架构定稿，最终 Sol review APPROVE。 |
 
-### 6.2 OrbStack/ReDroid 复测矩阵
+### 7.2 OrbStack/ReDroid 复测矩阵
 
 当前 OrbStack 内核缺少 `/dev/kvm`、`/dev/dri`、`/dev/dma_heap/system`、`/dev/ashmem`
 和 binderfs。静态 Binder 节点、device-mapper 和 ext4 只能让某些版本继续启动，不能提供
@@ -366,7 +560,7 @@ Android 图形缓冲和视频编码所需的完整宿主能力。
 Dockerfile、entrypoint、supervisor、host setup/check 脚本和 smoke/contract tests 已从
 当前树删除；固定 digest 和实验结论保留在证据文档中。
 
-### 6.3 为什么不继续调优 OrbStack AEMU
+### 7.3 为什么不继续调优 OrbStack AEMU
 
 - `/dev/kvm` 不存在，Android guest 指令只能通过 TCG 软件执行。
 - `/dev/dri` 不存在，图形只能通过 SwiftShader 软件渲染。
@@ -379,7 +573,7 @@ Dockerfile、entrypoint、supervisor、host setup/check 脚本和 smoke/contract
 
 因此原生 macOS AEMU 是对根因的修复；继续改浏览器参数只是优化瓶颈之后的链路。
 
-### 6.4 Apple `container` 调研结论
+### 7.4 Apple `container` 调研结论
 
 本机已安装 Apple `container` CLI 1.0.0，但调研阶段没有启动 system service、没有拉取
 Android 镜像、没有构建自定义内核，也没有修改当前项目代码或网络。
@@ -405,7 +599,7 @@ Apple `container` 把 OCI Linux container 运行在轻量 VM 中，可以避开 
 kernel，并以 boot、SurfaceFlinger、非黑截图、Codec2 encoder、scrcpy 首帧和持续 25–30 FPS
 为停止/继续门禁。未通过前不能替换默认 native 路径。
 
-### 6.5 硬件加速的最终方向
+### 7.5 硬件加速的最终方向
 
 如果要求“Android 真正在容器/云节点中运行，并有可预测的 CPU/GPU 加速”，最优方向不是
 继续更换 M1 上的 Docker provider，而是增加专用 Linux 裸机节点：
@@ -440,9 +634,9 @@ OpenGL ES 和 Vulkan 驱动。当前仓库已经写好 Controller → Host Agent
 Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真实 Linux KVM 节点，
 所以状态只能是 `DESIGN_READY`。
 
-## 7. 当前代码与文档地图
+## 8. 当前代码与文档地图
 
-### 7.1 运行入口
+### 8.1 运行入口
 
 | 路径 | 职责 |
 | --- | --- |
@@ -451,7 +645,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | [`scripts/scrcpy-android17.sh`](../scripts/scrcpy-android17.sh) | Docker compatibility scrcpy 客户端；导出同一容器的可信 ADB key。 |
 | [`scripts/build-scrcpy-arm-tcg-client.sh`](../scripts/build-scrcpy-arm-tcg-client.sh) | 构建与 scrcpy 4.1 协议一致、适配 ARM TCG 慢握手的本机 client。 |
 
-### 7.2 Docker runtime
+### 8.2 Docker runtime
 
 | 路径 | 职责 |
 | --- | --- |
@@ -465,7 +659,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | [`docker/emulator/novnc/`](../docker/emulator/novnc/) | noVNC 页面、强制设置、点击/拖动/触控板适配和样式。 |
 | [`docker/emulator/native-engine/`](../docker/emulator/native-engine/) | AArch64 AEMU source lock、补丁、构建、bundle 和 Vulkan smoke。 |
 
-### 7.3 控制与证据
+### 8.3 控制与证据
 
 | 路径 | 职责 |
 | --- | --- |
@@ -475,7 +669,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | [`contracts/android-image-manifest.schema.json`](../contracts/android-image-manifest.schema.json) | Android 镜像身份 Schema。 |
 | [`contracts/android-capability-evidence.schema.json`](../contracts/android-capability-evidence.schema.json) | 能力证据 Schema。 |
 
-### 7.4 契约与测试
+### 8.4 契约与测试
 
 | 路径 | 保护的行为 |
 | --- | --- |
@@ -489,7 +683,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | [`services/device-bridge/tests/test_bridge.py`](../services/device-bridge/tests/test_bridge.py) | 鉴权、白名单、ADB/Console、安全解析与超时。 |
 | [`services/evidence-gate/tests/`](../services/evidence-gate/tests/) | stable/preview、checksum、identity 和 preflight。 |
 
-### 7.5 深入阅读
+### 8.5 深入阅读
 
 | 文档 | 用途 |
 | --- | --- |
@@ -502,7 +696,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | [`android-17-production-runtime-contract.md`](android-17-production-runtime-contract.md) | Host Agent、KVM/crosvm、网络、恢复和清理契约。 |
 | [`android-17-acceptance-contract.md`](android-17-acceptance-contract.md) | 从 `DESIGN_READY` 到各 readiness 状态的证据门禁。 |
 
-## 8. 验证、评审与清理状态
+## 9. 验证、评审与清理状态
 
 最终架构提交 `3366652` 记录的验证包括：
 
@@ -534,9 +728,9 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 - 没有 Linux x86_64 KVM/GPU 节点，因此 Cuttlefish 生产设计没有运行证据。
 - 没有 Apple `container` 自定义 kernel/ReDroid PoC；该路线也没有 GPU 加速承诺。
 
-## 9. 运行与决策速查
+## 10. 运行与决策速查
 
-### 9.1 本机需要流畅 Android
+### 10.1 本机需要流畅 Android
 
 ```sh
 scripts/native-android17.sh start
@@ -545,7 +739,7 @@ scripts/native-android17.sh scrcpy
 
 选择原生窗口或 scrcpy；不要启动 Docker compatibility profile。
 
-### 9.2 需要复现 Docker 兼容链
+### 10.2 需要复现 Docker 兼容链
 
 ```sh
 ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile build build native-engine
@@ -554,21 +748,21 @@ ACCEPT_ANDROID_SDK_LICENSES=yes docker compose --profile docker-compat up -d --b
 
 接受 TCG/SwiftShader 和长启动时间，只用于兼容、证据或低频诊断。
 
-### 9.3 需要浏览器远程入口
+### 10.3 需要浏览器远程入口
 
 - 当前只有 Docker compatibility profile 提供 noVNC。
 - 本机入口为 `https://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale`。
 - 跨主机只能通过受控 HTTPS 反向代理、VPN 或零信任网关发布 noVNC。
 - 不直接发布 ADB、raw RFB、Emulator gRPC 或 Device Bridge 内部控制面。
 
-### 9.4 需要真正容器化硬件加速
+### 10.4 需要真正容器化硬件加速
 
 不要继续更换 M1 上的 Docker provider。准备 x86_64 Linux 裸机 KVM 节点，按
 [`android-17-production-runtime-contract.md`](android-17-production-runtime-contract.md)
 实现和验收 Cuttlefish/crosvm；需要 Google Play 或真实硬件能力时，分别接入合规的
 Google Play AVD 池与物理 Pixel 池。
 
-## 10. 防止重复探索的决策规则
+## 11. 防止重复探索的决策规则
 
 1. 没有新的 `/dev/kvm`、GPU render node、DMA-BUF、Binder/ashmem 和编码器证据，不恢复当前 OrbStack ReDroid。
 2. 没有硬件虚拟化，不把 TCG 调参描述为 CPU 加速方案。
@@ -578,7 +772,7 @@ Google Play AVD 池与物理 Pixel 池。
 6. 没有 Google 授权/认证证据，不把 AOSP Cuttlefish 或 ReDroid 描述为 Google Play 认证设备。
 7. 不通过修改 VPN、DNS、路由、防火墙或 OrbStack 网络寻找性能根因；当前瓶颈已定位在虚拟化和图形栈。
 
-## 11. 下一步优先级
+## 12. 下一步优先级
 
 1. 保持原生 macOS runtime 为本机默认，并在升级 Emulator、Platform Tools、system image 或 scrcpy 时同步更新 pin 和契约测试。
 2. 仅在需要回归兼容链时重建 `docker-compat`，补齐最终提交后的 image rebuild、key export 和 noVNC 长稳证据。

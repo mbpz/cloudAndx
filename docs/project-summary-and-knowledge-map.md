@@ -1,7 +1,7 @@
 # CloudAndx Android 项目总结、知识图谱与决策记录
 
-> 快照日期：2026-08-11<br>
-> 所总结的实现基线：`main` / `3366652`（本文新增于该基线上）<br>
+> 快照日期：2026-08-12<br>
+> 所总结的实现基线：`main` / `d9c8759`（原生客户端工作从该基线继续）<br>
 > 当前主机：Apple M1 MacBook Pro，OrbStack 7.0.11<br>
 > 文档目的：把当前实现、历史探索、实测证据、失败原因和后续演进路线放在同一个事实入口中。
 
@@ -17,6 +17,11 @@ CloudAndx 的目标不是“让任意 Android 进程勉强出现在容器里”�
 | M1 本机低延迟交互 | **已实现，默认路径** | macOS 原生 Android Emulator 通过 Hypervisor.Framework 和宿主 GPU 运行 Android 17 ARM64 AVD；使用 Emulator 原生窗口或 scrcpy 4.1。 |
 | OrbStack Docker 兼容与证据回溯 | **已实现，显式 profile** | 单个 `android` 容器运行 Android 17 ARM64 AEMU，但 CPU 为 TCG、GPU 为 SwiftShader；保留可重建性、远程界面和安全门禁，不承诺实时或原生等效。 |
 | 多用户/生产级 Android 云 | **设计完成，尚未部署** | 目标是 x86_64 Linux 裸机 KVM 节点上的 Cuttlefish/crosvm；需要真实节点、GPU/KVM、安全、授权和长稳证据后才能从 `DESIGN_READY` 升级。 |
+
+2026-08-12 起，默认本机路径进入产品化阶段：新增原生 macOS 客户端，以现有 AEMU/HVF/
+host GPU 为执行内核，逐步实现快照预热、宿主能力融合、输入与应用 profile、性能观测和
+物理 Pixel 能力路由。详细决策与验收指标见
+[原生 macOS Android 客户端方案](native-macos-client-architecture.md)。
 
 以下路线不属于当前可部署方案：
 
@@ -641,6 +646,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | 路径 | 职责 |
 | --- | --- |
 | [`scripts/native-android17.sh`](../scripts/native-android17.sh) | 默认原生运行时的 setup/start/stop/restart/status/scrcpy、版本锁、launchd 和 loopback 门禁。 |
+| [`client/macos/`](../client/macos/) | SwiftUI/AppKit 原生客户端、可测试 Core、隔离 Swift 工具链包装和 `.app` 打包入口。 |
 | [`compose.yaml`](../compose.yaml) | `build` 和 `docker-compat` profile；单 `android` 运行容器、端口、只读根文件系统和数据卷。 |
 | [`scripts/scrcpy-android17.sh`](../scripts/scrcpy-android17.sh) | Docker compatibility scrcpy 客户端；导出同一容器的可信 ADB key。 |
 | [`scripts/build-scrcpy-arm-tcg-client.sh`](../scripts/build-scrcpy-arm-tcg-client.sh) | 构建与 scrcpy 4.1 协议一致、适配 ARM TCG 慢握手的本机 client。 |
@@ -675,6 +681,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | --- | --- |
 | [`tests/native-macos-runtime-contract-test.sh`](../tests/native-macos-runtime-contract-test.sh) | 原生脚本版本、启动参数、唯一实例和 loopback 静态契约。 |
 | [`tests/native-macos-runtime-behavior-test.sh`](../tests/native-macos-runtime-behavior-test.sh) | launchd、Docker stop、失败清理、监听验证等行为。 |
+| [`tests/native-macos-client-contract-test.sh`](../tests/native-macos-client-contract-test.sh) | 客户端固定命令、禁止 shell 拼接、能力边界、工具链和打包契约。 |
 | [`tests/compose-contract-test.sh`](../tests/compose-contract-test.sh) | Compose 单容器、profile、端口、权限和持久卷契约。 |
 | [`tests/runtime-focus-contract-test.sh`](../tests/runtime-focus-contract-test.sh) | native-default、docker-compat、scrcpy key 和单容器文档路径一致性。 |
 | [`docker/emulator/tests/self-test.sh`](../docker/emulator/tests/self-test.sh) | AEMU 镜像与 runtime 静态/行为断言。 |
@@ -688,6 +695,7 @@ Cuttlefish/crosvm 的架构、API、证据 Schema 和验收门禁，但没有真
 | 文档 | 用途 |
 | --- | --- |
 | [`native-macos-android-runtime.md`](native-macos-android-runtime.md) | 当前默认选型、版本和回滚。 |
+| [`native-macos-client-architecture.md`](native-macos-client-architecture.md) | 原生客户端架构、真机体验定义、SLO、Phase 1–4 与物理设备补全。 |
 | [`orbstack-redroid-feasibility-2026-08-11.md`](orbstack-redroid-feasibility-2026-08-11.md) | 当前 OrbStack/ReDroid 复测矩阵。 |
 | [`redroid16-runtime-evidence-2026-07-25.md`](redroid16-runtime-evidence-2026-07-25.md) | 历史不同 Linux host 上的 ReDroid 16 证据。 |
 | [`remote-android-lessons-and-next-steps.md`](remote-android-lessons-and-next-steps.md) | AEMU/noVNC/ReDroid 经验与失败路线。 |

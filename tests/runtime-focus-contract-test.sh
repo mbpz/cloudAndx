@@ -10,6 +10,8 @@ acceptance=${ROOT}/docs/dual-remote-ui-acceptance.md
 feasibility=${ROOT}/docs/orbstack-redroid-feasibility-2026-08-11.md
 scrcpy_script=${ROOT}/scripts/scrcpy-android17.sh
 bridge_readme=${ROOT}/services/device-bridge/README.md
+client_architecture=${ROOT}/docs/native-macos-client-architecture.md
+client_package=${ROOT}/client/macos/Package.swift
 
 grep -Fq 'profiles: ["docker-compat"]' "${compose_file}"
 grep -Fq 'scripts/native-android17.sh start' "${readme}"
@@ -92,5 +94,12 @@ grep -Fq 'Hypervisor.Framework' "${ROOT}/scripts/native-android17.sh"
 grep -Fq -- '-gpu host' "${ROOT}/scripts/native-android17.sh"
 grep -Fq 'EXPECTED_SCRCPY_VERSION=4.1' "${ROOT}/scripts/native-android17.sh"
 grep -Fq '127.0.0.1:${ADB_PORT}' "${ROOT}/scripts/native-android17.sh"
+
+test -f "${client_package}"
+grep -Fq 'client/macos' "${readme}"
+grep -Fq 'Hypervisor.Framework' "${client_architecture}"
+grep -Fq 'Virtualization.framework + AOSP' "${client_architecture}"
+grep -Fq 'Physical Pixel' "${client_architecture}"
+grep -Fq 'P95 ≤ 35 ms' "${client_architecture}"
 
 printf '%s\n' 'PASS: native-default and Docker-compat contracts'

@@ -1,5 +1,24 @@
 # Google Android 17：macOS 原生加速与 Docker 兼容方案
 
+## CloudAndx 原生客户端
+
+项目当前产品方向是构建原生 macOS Android 客户端：Google AEMU ARM64 继续作为经过
+验证的执行内核，直接使用 Hypervisor.Framework 与宿主 GPU；CloudAndx 负责生命周期、
+快照预热、输入、宿主能力融合、自动化和性能观测。不会在 M1 的 Docker/OrbStack 中继续
+争取嵌套加速，也不会从零重写 Android VM。
+
+客户端 MVP 位于 `client/macos/`，可用 Swift 工具链直接构建和运行：
+
+```sh
+client/macos/scripts/swift-toolchain.sh build
+client/macos/scripts/swift-toolchain.sh run CloudAndxClient
+```
+
+MVP 提供启动、停止、重启、状态、日志和打开同一 Android 高性能交互窗口；所有操作只映射
+到固定 runtime 命令，不接受任意 shell。完整模块边界、真机能力限制、体验 SLO、快照/预热、
+Metal 显示研究门禁及物理 Pixel 补全路线见
+[原生 macOS Android 客户端方案](docs/native-macos-client-architecture.md)。
+
 ## Apple Silicon 本机默认方案
 
 需要接近真机的本机交互时，默认使用 macOS 原生 Android Emulator。Google 官方明确
@@ -205,6 +224,7 @@ Emulator/AVD 仍是一台虚拟设备，不是 Pixel 真机。
 ## 设计与机器可读契约
 
 - [项目总结、知识图谱与决策记录](docs/project-summary-and-knowledge-map.md)（当前实现、探索结论与演进总览）
+- [原生 macOS Android 客户端方案](docs/native-macos-client-architecture.md)（客户端架构、体验指标、阶段路线与真机补全）
 - [总体架构与功能边界](docs/android-17-container-architecture.md)（扩展部署参考，不是当前 OrbStack 运行说明）
 - [生产运行时契约](docs/android-17-production-runtime-contract.md)（扩展部署参考）
 - [验收与证据契约](docs/android-17-acceptance-contract.md)

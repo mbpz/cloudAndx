@@ -1,5 +1,6 @@
 .env
 .runtime/
+client/macos/.build/
 .omx/
 __pycache__/
 *.pyc

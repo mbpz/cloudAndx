@@ -14,8 +14,9 @@ client/macos/scripts/swift-toolchain.sh build
 client/macos/scripts/swift-toolchain.sh run CloudAndxClient
 ```
 
-MVP 提供启动、停止、重启、状态、日志和打开同一 Android 高性能交互窗口；所有操作只映射
-到固定 runtime 命令，不接受任意 shell。完整模块边界、真机能力限制、体验 SLO、快照/预热、
+Phase 1 提供启动、停止、重启、状态、日志和打开同一 Android 高性能交互窗口；Phase 2A
+继续加入身份绑定的可信恢复点与受限的 APK/文件/截图动作。所有操作只映射到固定 runtime
+命令或固定 ADB 参数，不接受任意 shell。完整模块边界、真机能力限制、体验 SLO、快照/预热、
 Metal 显示研究门禁及物理 Pixel 补全路线见
 [原生 macOS Android 客户端方案](docs/native-macos-client-architecture.md)。
 

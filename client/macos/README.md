@@ -4,6 +4,15 @@
 `scripts/native-android17.sh` 的固定命令，不接受任意 shell，也不会启动 Docker
 compatibility profile。
 
+Phase 2A 增加固定名可信恢复点，以及 APK 安装、文件投递到 Android `Download` 和 PNG
+截图。快照恢复会覆盖保存点之后的 guest 状态，因此客户端必须显示确认；恢复身份与
+Emulator、Platform Tools、system image、AVD 配置和 GPU 模式不匹配时失败关闭。当前
+Android 17 镜像没有公开 `cmd clipboard` 实现，项目不会用文本输入冒充剪贴板同步。
+
+当前 M1 实测固定恢复点已能被 AEMU 真实加载：核心 load 为 3.618 秒，但从停止态到完整
+framework/loopback 健康门禁为 11.93 秒，仍未达到架构目标 P95 ≤ 4 秒。本阶段完成的是
+可信恢复和桌面融合闭环，不把尚未达标的 warm-resume 性能描述为“秒开完成”。
+
 ## 构建与测试
 
 ```sh

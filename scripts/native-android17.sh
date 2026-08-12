@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 RUNTIME_ROOT=${CLOUDANDX_NATIVE_RUNTIME_ROOT:-${ROOT}/.runtime/native-android17}
@@ -34,6 +35,9 @@ SDKMANAGER=${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager
 AVDMANAGER=${SDK_ROOT}/cmdline-tools/latest/bin/avdmanager
 PID_FILE=${RUNTIME_ROOT}/emulator.pid
 LOG_FILE=${RUNTIME_ROOT}/emulator.log
+SNAPSHOT_NAME=cloudandx-ready
+SNAPSHOT_META_FILE=${RUNTIME_ROOT}/trusted-snapshot.env
+SNAPSHOT_DIRECTORY=${ANDROID_AVD_HOME}/${AVD_NAME}.avd/snapshots/${SNAPSHOT_NAME}
 LAUNCH_LABEL=dev.cloudandx.android17
 SCRCPY=${CLOUDANDX_SCRCPY_BIN:-/opt/homebrew/bin/scrcpy}
 BOOT_TIMEOUT_SECONDS=${CLOUDANDX_NATIVE_BOOT_TIMEOUT_SECONDS:-120}
@@ -48,6 +52,10 @@ property_value() {
   key=$1
   file=$2
   sed -n "s/^${key}[[:space:]]*=[[:space:]]*//p" "${file}" | head -n 1
+}
+
+sha256_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
 }
 
 require_host() {
@@ -132,6 +140,70 @@ configure_avd_value() {
   mv "${temporary}" "${config}"
 }
 
+current_snapshot_identity() {
+  config=${ANDROID_AVD_HOME}/${AVD_NAME}.avd/config.ini
+  printf '%s\n' "snapshot_name=${SNAPSHOT_NAME}"
+  printf '%s\n' "avd_name=${AVD_NAME}"
+  printf '%s\n' "system_image=${SYSTEM_IMAGE}"
+  printf '%s\n' "emulator_version=${EXPECTED_EMULATOR_VERSION}"
+  printf '%s\n' "platform_tools_version=${EXPECTED_PLATFORM_TOOLS_VERSION}"
+  printf '%s\n' "system_image_revision=${EXPECTED_SYSTEM_IMAGE_REVISION}"
+  printf '%s\n' 'gpu_mode=host'
+  printf '%s\n' "config_sha256=$(sha256_file "${config}")"
+}
+
+current_identity_value() {
+  current_snapshot_identity | sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" | head -n 1
+}
+
+write_snapshot_metadata() {
+  temporary=${SNAPSHOT_META_FILE}.tmp.$$
+  current_snapshot_identity >"${temporary}"
+  chmod 0600 "${temporary}"
+  mv "${temporary}" "${SNAPSHOT_META_FILE}"
+}
+
+snapshot_entity_exists() {
+  if is_running; then
+    snapshot_list=$("${ADB}" -s "${ADB_SERIAL}" emu avd snapshot list 2>&1) || return 1
+  else
+    snapshot_list=$("${EMULATOR}" -avd "${AVD_NAME}" -snapshot-list 2>&1) || return 1
+  fi
+  printf '%s\n' "${snapshot_list}" | awk -v name="${SNAPSHOT_NAME}" '
+    {
+      entry = $0
+      sub(/^[[:space:]]+/, "", entry)
+      sub(/[[:space:]]+$/, "", entry)
+      if (entry == name || entry == "Snapshot: " name || ($1 != "ID" && $2 == name)) found = 1
+    }
+    END { exit !found }
+  '
+}
+
+snapshot_identity_state() {
+  if [ ! -f "${SNAPSHOT_META_FILE}" ] || [ -L "${SNAPSHOT_META_FILE}" ]; then
+    printf '%s\n' unavailable
+    return 0
+  fi
+  if [ ! -d "${SNAPSHOT_DIRECTORY}" ] || [ -L "${SNAPSHOT_DIRECTORY}" ]; then
+    printf '%s\n' unavailable
+    return 0
+  fi
+  if ! snapshot_entity_exists; then
+    printf '%s\n' unavailable
+    return 0
+  fi
+  for key in snapshot_name avd_name system_image emulator_version platform_tools_version system_image_revision gpu_mode config_sha256; do
+    current=$(current_identity_value "${key}")
+    saved=$(property_value "${key}" "${SNAPSHOT_META_FILE}")
+    if [ -z "${saved}" ] || [ "${current}" != "${saved}" ]; then
+      printf '%s\n' incompatible
+      return 0
+    fi
+  done
+  printf '%s\n' ready
+}
+
 setup() {
   require_host
   [ "${ACCEPT_ANDROID_SDK_LICENSES:-no}" = yes ] \
@@ -198,7 +270,72 @@ EOF
   [ "${found}" -eq 1 ]
 }
 
+guest_services_ready() {
+  for service in SurfaceFlinger activity package; do
+    service_output=$("${ADB}" -s "${ADB_SERIAL}" shell service check "${service}" 2>/dev/null) \
+      || return 1
+    printf '%s\n' "${service_output}" | grep -Fq ': found' || return 1
+  done
+}
+
+wait_for_ready() {
+  pid=$1
+  elapsed=0
+  while [ "${elapsed}" -lt "${BOOT_TIMEOUT_SECONDS}" ]; do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      tail -n 80 "${LOG_FILE}" >&2 || true
+      remove_launch_job
+      die 'emulator exited before Android became ready'
+    fi
+    boot_completed=$("${ADB}" -s "${ADB_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+    if [ "${boot_completed}" = 1 ] && guest_services_ready; then
+      if ! verify_loopback_listener "${pid}" "${ADB_PORT}" \
+        || ! verify_loopback_listener "${pid}" "${GRPC_PORT}"; then
+        remove_launch_job
+        die 'ADB or gRPC is not exclusively bound to host loopback'
+      fi
+      log "ready: serial=${ADB_SERIAL}, adb=127.0.0.1:${ADB_PORT}, grpc=127.0.0.1:${GRPC_PORT}"
+      return 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  remove_launch_job
+  die "Android did not become healthy within ${BOOT_TIMEOUT_SECONDS} seconds; see ${LOG_FILE}"
+}
+
+verify_trusted_snapshot_load() {
+  grep -Fq "Successfully loaded snapshot '${SNAPSHOT_NAME}'" "${LOG_FILE}" \
+    || {
+      remove_launch_job
+      die 'AEMU did not prove that the trusted snapshot loaded; cold-boot fallback is rejected'
+    }
+  grep -Fq "Failed to load snapshot '${SNAPSHOT_NAME}'" "${LOG_FILE}" \
+    && {
+      remove_launch_job
+      die 'AEMU reported trusted snapshot load failure'
+    }
+  return 0
+}
+
+require_ready_runtime() {
+  is_running || die 'Android is not running'
+  pid=$(managed_pid)
+  [ "$("${ADB}" -s "${ADB_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] \
+    || die 'Android is not ready'
+  guest_services_ready || die 'Android framework services are not ready'
+  verify_loopback_listener "${pid}" "${ADB_PORT}" \
+    && verify_loopback_listener "${pid}" "${GRPC_PORT}" \
+    || die 'ADB or gRPC is not exclusively bound to host loopback'
+}
+
 start() {
+  mode=${1:-default}
+  case ${mode} in
+    default) set -- ;;
+    trusted-snapshot) set -- -snapshot "${SNAPSHOT_NAME}" -no-snapshot-save ;;
+    *) die 'internal launch mode is invalid' ;;
+  esac
   require_host
   validate_packages
   ensure_avd
@@ -234,6 +371,7 @@ start() {
     -grpc "${GRPC_PORT}" -grpc-use-token \
     -accel auto -gpu host -no-boot-anim -no-metrics \
     -memory 4096 -cores 4 -netdelay none -netspeed full \
+    "$@" \
     >/dev/null
   pid=$(managed_pid)
   if [ -z "${pid}" ]; then
@@ -241,28 +379,118 @@ start() {
     die 'launchd did not publish an emulator pid'
   fi
   printf '%s\n' "${pid}" >"${PID_FILE}"
+  wait_for_ready "${pid}"
+}
 
-  elapsed=0
-  while [ "${elapsed}" -lt "${BOOT_TIMEOUT_SECONDS}" ]; do
-    if ! kill -0 "${pid}" 2>/dev/null; then
-      tail -n 80 "${LOG_FILE}" >&2 || true
-      remove_launch_job
-      die 'emulator exited before Android became ready'
-    fi
-    if [ "$("${ADB}" -s "${ADB_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then
-      if ! verify_loopback_listener "${pid}" "${ADB_PORT}" \
-        || ! verify_loopback_listener "${pid}" "${GRPC_PORT}"; then
-        remove_launch_job
-        die 'ADB or gRPC is not exclusively bound to host loopback'
-      fi
-      log "ready: serial=${ADB_SERIAL}, adb=127.0.0.1:${ADB_PORT}, grpc=127.0.0.1:${GRPC_PORT}"
-      return 0
-    fi
-    sleep 2
-    elapsed=$((elapsed + 2))
-  done
-  remove_launch_job
-  die "Android did not boot within ${BOOT_TIMEOUT_SECONDS} seconds; see ${LOG_FILE}"
+snapshot_save() {
+  require_host
+  validate_packages
+  ensure_avd
+  require_ready_runtime
+  "${ADB}" -s "${ADB_SERIAL}" shell sync >/dev/null \
+    || die 'failed to sync Android data before snapshot save'
+  output=$("${ADB}" -s "${ADB_SERIAL}" emu avd snapshot save "${SNAPSHOT_NAME}" 2>&1) \
+    || die "failed to save trusted snapshot: ${output}"
+  [ -d "${SNAPSHOT_DIRECTORY}" ] && [ ! -L "${SNAPSHOT_DIRECTORY}" ] \
+    || die 'emulator reported success but trusted snapshot files are missing'
+  snapshot_entity_exists \
+    || die 'emulator reported success but trusted snapshot entity is not listed'
+  write_snapshot_metadata
+  log "snapshot_ready=1 snapshot_name=${SNAPSHOT_NAME} saved"
+}
+
+snapshot_status() {
+  require_host
+  validate_packages
+  ensure_avd
+  state=$(snapshot_identity_state)
+  case ${state} in
+    ready) log "snapshot_ready=1 snapshot_name=${SNAPSHOT_NAME}" ;;
+    unavailable) log "snapshot_ready=0 snapshot_name=${SNAPSHOT_NAME} reason=no trusted snapshot" ;;
+    incompatible) log "snapshot_incompatible=1 snapshot_name=${SNAPSHOT_NAME} reason=runtime identity changed" ;;
+    *) die 'trusted snapshot state is unknown' ;;
+  esac
+}
+
+snapshot_resume() {
+  require_host
+  validate_packages
+  ensure_avd
+  state=$(snapshot_identity_state)
+  [ "${state}" = ready ] || die "trusted snapshot is not recoverable: ${state}"
+  started_at=$(date +%s)
+  if is_running; then
+    require_ready_runtime
+    output=$("${ADB}" -s "${ADB_SERIAL}" emu avd snapshot load "${SNAPSHOT_NAME}" 2>&1) \
+      || die "failed to load trusted snapshot: ${output}"
+    wait_for_ready "$(managed_pid)"
+  else
+    start trusted-snapshot
+    verify_trusted_snapshot_load
+  fi
+  elapsed=$(( $(date +%s) - started_at ))
+  log "snapshot_ready=1 snapshot_name=${SNAPSHOT_NAME} resumed elapsed_seconds=${elapsed} destructive_guest_restore=1"
+}
+
+require_regular_host_file() {
+  path=$1
+  label=$2
+  [ -n "${path}" ] || die "${label} path is required"
+  [ -f "${path}" ] && [ ! -L "${path}" ] && [ -r "${path}" ] \
+    || die "${label} must be a readable regular file, not a symlink"
+}
+
+install_apk() {
+  require_host
+  validate_packages
+  require_ready_runtime
+  path=${CLOUDANDX_NATIVE_APK_PATH:-}
+  require_regular_host_file "${path}" APK
+  case ${path} in *.apk|*.APK) ;; *) die 'APK path must end in .apk' ;; esac
+  output=$("${ADB}" -s "${ADB_SERIAL}" install -r "${path}" 2>&1) \
+    || die "APK install failed: ${output}"
+  printf '%s\n' "${output}"
+}
+
+push_file() {
+  require_host
+  validate_packages
+  require_ready_runtime
+  path=${CLOUDANDX_NATIVE_HOST_FILE_PATH:-}
+  require_regular_host_file "${path}" 'host file'
+  basename=${path##*/}
+  case ${basename} in ''|.|..|*/*) die 'host file basename is invalid' ;; esac
+  safe_basename=$(printf '%s' "${basename}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | cut -c 1-120)
+  case ${safe_basename} in ''|.|..) die 'sanitized host file basename is invalid' ;; esac
+  target=/sdcard/Download/${safe_basename}
+  output=$("${ADB}" -s "${ADB_SERIAL}" push "${path}" "${target}" 2>&1) \
+    || die "file push failed: ${output}"
+  log "device_target=${target}"
+}
+
+capture_screenshot() {
+  require_host
+  validate_packages
+  require_ready_runtime
+  destination=${CLOUDANDX_NATIVE_SCREENSHOT_PATH:-}
+  [ -n "${destination}" ] || die 'screenshot path is required'
+  case ${destination} in *.png|*.PNG) ;; *) die 'screenshot path must end in .png' ;; esac
+  [ ! -L "${destination}" ] || die 'screenshot path must not be a symlink'
+  parent=${destination%/*}
+  [ "${parent}" != "${destination}" ] || parent=.
+  [ -d "${parent}" ] && [ -w "${parent}" ] && [ ! -L "${parent}" ] \
+    || die 'screenshot parent must be a writable real directory'
+  temporary=$(mktemp "${parent}/.cloudandx-screenshot.XXXXXX") \
+    || die 'failed to create screenshot staging file'
+  trap 'rm -f "${temporary}"' EXIT INT TERM
+  "${ADB}" -s "${ADB_SERIAL}" exec-out screencap -p >"${temporary}" \
+    || die 'Android screenshot capture failed'
+  magic=$(od -An -tx1 -N8 "${temporary}" | tr -d ' \n')
+  [ "${magic}" = 89504e470d0a1a0a ] || die 'Android screenshot output is not PNG'
+  chmod 0600 "${temporary}"
+  mv "${temporary}" "${destination}"
+  trap - EXIT INT TERM
+  log "screenshot_saved=1"
 }
 
 stop() {
@@ -310,10 +538,16 @@ scrcpy_runtime() {
 
 case ${1:-} in
   setup) setup ;;
-  start) start ;;
+  start) [ "$#" -eq 1 ] || die 'start does not accept additional arguments'; start default ;;
   stop) stop ;;
-  restart) stop; start ;;
+  restart) [ "$#" -eq 1 ] || die 'restart does not accept additional arguments'; stop; start default ;;
   status) status ;;
   scrcpy) scrcpy_runtime ;;
-  *) die "usage: $0 {setup|start|stop|restart|status|scrcpy}" ;;
+  snapshot-save) snapshot_save ;;
+  snapshot-resume) snapshot_resume ;;
+  snapshot-status) snapshot_status ;;
+  install-apk) install_apk ;;
+  push-file) push_file ;;
+  capture-screenshot) capture_screenshot ;;
+  *) die "usage: $0 {setup|start|stop|restart|status|scrcpy|snapshot-save|snapshot-resume|snapshot-status|install-apk|push-file|capture-screenshot}" ;;
 esac

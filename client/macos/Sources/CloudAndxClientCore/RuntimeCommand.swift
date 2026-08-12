@@ -6,6 +6,12 @@ public enum RuntimeCommand: String, CaseIterable, Sendable {
     case restart
     case status
     case scrcpy
+    case snapshotSave = "snapshot-save"
+    case snapshotResume = "snapshot-resume"
+    case snapshotStatus = "snapshot-status"
+    case installAPK = "install-apk"
+    case pushFile = "push-file"
+    case captureScreenshot = "capture-screenshot"
 
     public var title: String {
         switch self {
@@ -14,7 +20,55 @@ public enum RuntimeCommand: String, CaseIterable, Sendable {
         case .restart: "重启"
         case .status: "刷新状态"
         case .scrcpy: "打开 Android"
+        case .snapshotSave: "保存恢复点"
+        case .snapshotResume: "恢复到保存点"
+        case .snapshotStatus: "检查恢复点"
+        case .installAPK: "安装 APK"
+        case .pushFile: "投递文件"
+        case .captureScreenshot: "导出截图"
         }
+    }
+}
+
+public enum SnapshotHealth: Equatable, Sendable {
+    case unavailable
+    case ready
+    case incompatible
+    case unknown
+
+    public var title: String {
+        switch self {
+        case .unavailable: "尚未保存"
+        case .ready: "可恢复"
+        case .incompatible: "已失效"
+        case .unknown: "状态未知"
+        }
+    }
+}
+
+public struct SnapshotStatus: Equatable, Sendable {
+    public let health: SnapshotHealth
+    public let rawOutput: String
+
+    public init(health: SnapshotHealth, rawOutput: String) {
+        self.health = health
+        self.rawOutput = rawOutput
+    }
+}
+
+public enum SnapshotStatusParser {
+    public static func parse(_ output: String) -> SnapshotStatus {
+        let normalized = output.lowercased()
+        if normalized.contains("snapshot_ready=1") || normalized.contains("snapshot ready") {
+            return SnapshotStatus(health: .ready, rawOutput: output)
+        }
+        if normalized.contains("snapshot_incompatible=1") || normalized.contains("snapshot incompatible") {
+            return SnapshotStatus(health: .incompatible, rawOutput: output)
+        }
+        if normalized.contains("snapshot_ready=0") || normalized.contains("no trusted snapshot") {
+            return SnapshotStatus(health: .unavailable, rawOutput: output)
+        }
+        return SnapshotStatus(health: .unknown, rawOutput: output)
     }
 }
 

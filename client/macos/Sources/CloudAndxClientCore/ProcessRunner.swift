@@ -17,14 +17,23 @@ public protocol ProcessRunning: Sendable {
         executable: URL,
         arguments: [String],
         currentDirectory: URL,
+        environment: [String: String],
         outputLimit: Int
     ) throws -> ProcessResult
 }
 
 public enum ProcessRunnerError: Error, LocalizedError, Sendable {
     case invalidOutputLimit
+    case unsupportedEnvironmentOverride(String)
 
-    public var errorDescription: String? { "子进程输出上限必须大于零" }
+    public var errorDescription: String? {
+        switch self {
+        case .invalidOutputLimit:
+            "子进程输出上限必须大于零"
+        case let .unsupportedEnvironmentOverride(key):
+            "不允许覆盖子进程环境变量：\(key)"
+        }
+    }
 }
 
 private final class BoundedOutput: @unchecked Sendable {
@@ -57,6 +66,7 @@ public struct FoundationProcessRunner: ProcessRunning, Sendable {
         executable: URL,
         arguments: [String],
         currentDirectory: URL,
+        environment overrides: [String: String] = [:],
         outputLimit: Int = 65_536
     ) throws -> ProcessResult {
         guard outputLimit > 0 else { throw ProcessRunnerError.invalidOutputLimit }
@@ -90,6 +100,17 @@ public struct FoundationProcessRunner: ProcessRunning, Sendable {
         ]
         for key in allowedOverrides {
             if let value = ProcessInfo.processInfo.environment[key] { environment[key] = value }
+        }
+        let allowedActionInputs = [
+            "CLOUDANDX_NATIVE_APK_PATH",
+            "CLOUDANDX_NATIVE_HOST_FILE_PATH",
+            "CLOUDANDX_NATIVE_SCREENSHOT_PATH",
+        ]
+        for (key, value) in overrides {
+            guard allowedActionInputs.contains(key) else {
+                throw ProcessRunnerError.unsupportedEnvironmentOverride(key)
+            }
+            environment[key] = value
         }
         process.environment = environment
         process.standardOutput = pipe

@@ -17,12 +17,42 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     header
                     runtimeCard
+                    snapshotCard
                     logCard
                     boundaryCard
                 }
                 .padding(24)
             }
             .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    private var snapshotCard: some View {
+        GroupBox("可信恢复点") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Label(model.snapshot.health.title, systemImage: snapshotSymbol)
+                        .foregroundStyle(snapshotColor)
+                    Spacer()
+                    Button { model.perform(.snapshotSave) } label: {
+                        Label("保存当前状态", systemImage: "camera.aperture")
+                    }
+                    .disabled(model.isCommandLocked || model.status.health != .ready)
+                    Button { model.perform(.snapshotStatus) } label: {
+                        Label("检查", systemImage: "checklist")
+                    }
+                    .disabled(model.isCommandLocked)
+                    Button { model.confirmAndResumeSnapshot() } label: {
+                        Label("恢复", systemImage: "clock.arrow.circlepath")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isCommandLocked || model.snapshot.health != .ready)
+                }
+                Text("恢复会回到保存时的 Android 系统、应用和用户数据；保存后尚未写入恢复点的 guest 变更会丢失。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(8)
         }
     }
 
@@ -67,6 +97,24 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(model.isCommandLocked)
                 }
+                HStack(spacing: 10) {
+                    Button { model.installAPK() } label: {
+                        Label(RuntimeCommand.installAPK.title, systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isCommandLocked || model.status.health != .ready)
+                    Button { model.pushFile() } label: {
+                        Label(RuntimeCommand.pushFile.title, systemImage: "tray.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isCommandLocked || model.status.health != .ready)
+                    Button { model.captureScreenshot() } label: {
+                        Label(RuntimeCommand.captureScreenshot.title, systemImage: "camera.viewfinder")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isCommandLocked || model.status.health != .ready)
+                    Spacer()
+                }
                 Divider()
                 LabeledContent("设备", value: model.status.serial ?? "—")
                 LabeledContent("进程", value: model.status.pid.map(String.init) ?? "—")
@@ -96,9 +144,9 @@ struct ContentView: View {
     private var boundaryCard: some View {
         GroupBox("真机体验边界") {
             VStack(alignment: .leading, spacing: 10) {
-                capability("本机可优化", "60 FPS、低延迟输入、快照秒开、剪贴板/文件/相机/麦克风/手柄")
+                capability("本机可优化", "60 FPS、低延迟输入、可信快照恢复、APK/文件投递、截图、相机/麦克风/手柄")
                 capability("需要物理 Pixel", "基带/eSIM、TEE/StrongBox、Widevine L1、硬件级 Play Integrity、真实 ISP")
-                Text("客户端不会将虚拟能力冒充真实硬件证明。")
+                Text("客户端不会将虚拟能力冒充真实硬件证明，也不会开放任意 ADB 或 shell。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -145,6 +193,24 @@ struct ContentView: View {
         case .ready: "checkmark.circle.fill"
         case .booting: "clock.fill"
         case .stopped: "stop.circle.fill"
+        case .unknown: "questionmark.circle.fill"
+        }
+    }
+
+    private var snapshotColor: Color {
+        switch model.snapshot.health {
+        case .ready: .green
+        case .unavailable: .secondary
+        case .incompatible: .orange
+        case .unknown: .red
+        }
+    }
+
+    private var snapshotSymbol: String {
+        switch model.snapshot.health {
+        case .ready: "checkmark.seal.fill"
+        case .unavailable: "circle.dashed"
+        case .incompatible: "exclamationmark.triangle.fill"
         case .unknown: "questionmark.circle.fill"
         }
     }

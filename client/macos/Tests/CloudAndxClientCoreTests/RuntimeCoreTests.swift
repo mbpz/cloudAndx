@@ -6,8 +6,11 @@ enum RuntimeCoreTests {
     static func main() throws {
         try testRuntimeCommandsRemainAllowlisted()
         try testParsesReadyAndStoppedStatus()
+        try testParsesSnapshotStatus()
         try testLocatesProjectFromChild()
         try testProcessRunnerCapturesOnlyBoundedOutput()
+        try testProcessRunnerRejectsUnknownEnvironmentOverrides()
+        try testRuntimeServiceCapabilityValidation()
         try testRuntimeLogSanitizer()
         print("PASS: CloudAndxClientCore tests")
     }
@@ -18,7 +21,19 @@ enum RuntimeCoreTests {
 
     static func testRuntimeCommandsRemainAllowlisted() throws {
         try expect(
-            RuntimeCommand.allCases.map(\.rawValue) == ["start", "stop", "restart", "status", "scrcpy"],
+            RuntimeCommand.allCases.map(\.rawValue) == [
+                "start",
+                "stop",
+                "restart",
+                "status",
+                "scrcpy",
+                "snapshot-save",
+                "snapshot-resume",
+                "snapshot-status",
+                "install-apk",
+                "push-file",
+                "capture-screenshot",
+            ],
             "runtime command allowlist changed"
         )
     }
@@ -31,6 +46,21 @@ enum RuntimeCoreTests {
 
         let stopped = RuntimeStatusParser.parse("cloudandx-native: stopped")
         try expect(stopped.health == .stopped, "stopped status not parsed")
+    }
+
+    static func testParsesSnapshotStatus() throws {
+        try expect(
+            SnapshotStatusParser.parse("snapshot_ready=1 snapshot_name=cloudandx-ready").health == .ready,
+            "trusted snapshot readiness not parsed"
+        )
+        try expect(
+            SnapshotStatusParser.parse("snapshot_ready=0 reason=no trusted snapshot").health == .unavailable,
+            "missing snapshot not parsed"
+        )
+        try expect(
+            SnapshotStatusParser.parse("snapshot_incompatible=1 reason=runtime identity changed").health == .incompatible,
+            "incompatible snapshot not parsed"
+        )
     }
 
     static func testLocatesProjectFromChild() throws {
@@ -58,11 +88,55 @@ enum RuntimeCoreTests {
             executable: URL(fileURLWithPath: "/usr/bin/printf"),
             arguments: ["1234567890"],
             currentDirectory: URL(fileURLWithPath: "/"),
+            environment: [:],
             outputLimit: 5
         )
         try expect(result.exitCode == 0, "process failed")
         try expect(result.output == "12345", "process output was not bounded")
         try expect(result.wasTruncated, "truncation was not reported")
+    }
+
+    static func testRuntimeServiceCapabilityValidation() throws {
+        let service = RuntimeService(projectRoot: URL(fileURLWithPath: "/tmp/project"))
+        do {
+            _ = try service.installAPK(at: URL(fileURLWithPath: "/tmp/example.txt"))
+            throw TestFailure(message: "non-apk install should fail")
+        } catch let error as RuntimeCapabilityError {
+            try expect(error == .invalidAPK("example.txt"), "unexpected apk validation error")
+        }
+
+        do {
+            _ = try service.captureScreenshot(to: URL(fileURLWithPath: "/tmp/shot.jpg"))
+            throw TestFailure(message: "non-png screenshot should fail")
+        } catch let error as RuntimeCapabilityError {
+            try expect(error == .invalidScreenshotPath("shot.jpg"), "unexpected screenshot validation error")
+        }
+
+        try expect(
+            RuntimeService.defaultPushedFileTarget(for: URL(fileURLWithPath: "/tmp/demo.apk")) == "/sdcard/Download/demo.apk",
+            "device push target drifted outside the allowlist"
+        )
+        try expect(
+            RuntimeService.defaultPushedFileTarget(for: URL(fileURLWithPath: "/tmp/a b?.txt")) == "/sdcard/Download/a_b_.txt",
+            "unsafe device filename characters were not normalized"
+        )
+    }
+
+    static func testProcessRunnerRejectsUnknownEnvironmentOverrides() throws {
+        do {
+            _ = try FoundationProcessRunner().run(
+                executable: URL(fileURLWithPath: "/usr/bin/true"),
+                arguments: [],
+                currentDirectory: URL(fileURLWithPath: "/"),
+                environment: ["PATH": "/tmp/untrusted"],
+                outputLimit: 16
+            )
+            throw TestFailure(message: "unknown environment override should fail")
+        } catch let error as ProcessRunnerError {
+            guard case .unsupportedEnvironmentOverride("PATH") = error else {
+                throw TestFailure(message: "unexpected environment override error")
+            }
+        }
     }
 
     static func testRuntimeLogSanitizer() throws {

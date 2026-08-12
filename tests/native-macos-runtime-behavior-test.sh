@@ -51,6 +51,13 @@ printf '%s\n' \
   '  echo "Hypervisor.Framework OS X"' \
   '  exit 0' \
   'fi' \
+  'for argument do' \
+  '  if [ "${argument}" = -snapshot-list ]; then' \
+  '    [ ! -f "${FAKE_SNAPSHOT_LIST}" ] || cat "${FAKE_SNAPSHOT_LIST}"' \
+  '    exit 0' \
+  '  fi' \
+  'done' \
+  'for argument do [ "${argument}" = cloudandx-ready ] && echo "Successfully loaded snapshot '\''cloudandx-ready'\''"; done' \
   'exit 0' >"${SDK}/emulator/emulator"
 
 printf '%s\n' \
@@ -69,6 +76,13 @@ printf '%s\n' \
   '    if [ -s "${FAKE_LAUNCH_STATE}" ]; then kill "$(cat "${FAKE_LAUNCH_STATE}")" 2>/dev/null || true; fi' \
   '    rm -f "${FAKE_LAUNCH_STATE}" ;;' \
   '  submit)' \
+  '    log_file=; wants_snapshot=0; next_is_log=0' \
+  '    for argument do' \
+  '      if [ "${next_is_log}" = 1 ]; then log_file=${argument}; next_is_log=0; continue; fi' \
+  '      [ "${argument}" = -o ] && next_is_log=1' \
+  '      [ "${argument}" = cloudandx-ready ] && wants_snapshot=1' \
+  '    done' \
+  '    [ "${wants_snapshot}" = 0 ] || printf "%s\n" "Successfully loaded snapshot '\''cloudandx-ready'\''" >"${log_file}"' \
   '    sleep 60 &' \
   '    echo $! >"${FAKE_LAUNCH_STATE}" ;;' \
   '  print)' \
@@ -81,6 +95,14 @@ printf '%s\n' \
   '#!/bin/sh' \
   'case " $* " in' \
   '  *" getprop sys.boot_completed "*) echo "${ADB_BOOT_COMPLETED:-0}" ;;' \
+  '  *" service check "*) echo "Service: found" ;;' \
+  '  *" emu avd snapshot save "*) [ "${ADB_SNAPSHOT_SAVE_FAIL:-0}" = 1 ] && exit 1; mkdir -p "${CLOUDANDX_NATIVE_RUNTIME_ROOT}/avd/CloudAndx_Android_17_Play.avd/snapshots/cloudandx-ready"; if [ "${ADB_SNAPSHOT_SAVE_OMIT_ENTITY:-0}" = 1 ]; then tag=cloudandx-ready-old; else tag=cloudandx-ready; fi; printf "%s\n" "List of snapshots present on all disks:" "ID        TAG                 VM SIZE   DATE" "--        ${tag} 74M       2026-08-12" "OK" >"${FAKE_SNAPSHOT_LIST}" ;;' \
+  '  *" emu avd snapshot list "*) [ -f "${FAKE_SNAPSHOT_LIST}" ] && cat "${FAKE_SNAPSHOT_LIST}" ;;' \
+  '  *" emu avd snapshot load "*) [ "${ADB_SNAPSHOT_LOAD_FAIL:-0}" = 1 ] && exit 1 ;;' \
+  '  *" shell sync "*) exit 0 ;;' \
+  '  *" install -r "*) echo Success ;;' \
+  '  *" push "*) echo "1 file pushed" ;;' \
+  '  *" exec-out screencap -p "*) printf "\211PNG\r\n\032\ncloudandx" ;;' \
   'esac' \
   'exit 0' >"${SDK}/platform-tools/adb"
 
@@ -140,5 +162,232 @@ env \
   "${RUNNER}" stop >/dev/null
 [ ! -e "${STATE}" ]
 [ ! -e "${RUNTIME}/emulator.pid" ]
+
+run_native ADB_BOOT_COMPLETED=1 >/dev/null
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  ADB_BOOT_COMPLETED=1 \
+  "${RUNNER}" snapshot-save >/dev/null
+[ -f "${RUNTIME}/trusted-snapshot.env" ]
+grep -Fq 'snapshot_name=cloudandx-ready' "${RUNTIME}/trusted-snapshot.env"
+
+if env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  ADB_BOOT_COMPLETED=1 \
+  ADB_SNAPSHOT_SAVE_OMIT_ENTITY=1 \
+  "${RUNNER}" snapshot-save >/dev/null 2>&1; then
+  echo 'FAIL: snapshot save accepted directory without named entity evidence' >&2
+  exit 1
+fi
+
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  ADB_BOOT_COMPLETED=1 \
+  "${RUNNER}" snapshot-save >/dev/null
+
+snapshot_status=$(env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  "${RUNNER}" snapshot-status)
+printf '%s\n' "${snapshot_status}" | grep -Fq 'snapshot_ready=1'
+
+printf '%s\n' \
+  'List of snapshots present on all disks:' \
+  'ID        TAG                 VM SIZE   DATE' \
+  '--        cloudandx-ready-old 74M       2026-08-12' \
+  'OK' >"${TMP}/snapshot.list"
+snapshot_status=$(env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  "${RUNNER}" snapshot-status)
+printf '%s\n' "${snapshot_status}" | grep -Fq 'snapshot_ready=0'
+
+if env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  "${RUNNER}" snapshot-resume >/dev/null 2>&1; then
+  echo 'FAIL: snapshot resume accepted stale named entity evidence' >&2
+  exit 1
+fi
+
+printf '%s\n' \
+  'List of snapshots present on all disks:' \
+  'ID        TAG                 VM SIZE   DATE' \
+  '--        cloudandx-ready 74M       2026-08-12' \
+  'OK' >"${TMP}/snapshot.list"
+
+printf '%s\n' 'snapshot.test.drift=yes' >>"${RUNTIME}/avd/CloudAndx_Android_17_Play.avd/config.ini"
+snapshot_status=$(env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  "${RUNNER}" snapshot-status)
+printf '%s\n' "${snapshot_status}" | grep -Fq 'snapshot_incompatible=1'
+
+printf '%s\n' 'hw.sdCard=no' 'PlayStore.enabled=yes' \
+  >"${RUNTIME}/avd/CloudAndx_Android_17_Play.avd/config.ini"
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  ADB_BOOT_COMPLETED=1 \
+  "${RUNNER}" snapshot-resume >/dev/null
+
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  "${RUNNER}" stop >/dev/null
+
+snapshot_status=$(env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  "${RUNNER}" snapshot-status)
+printf '%s\n' "${snapshot_status}" | grep -Fq 'snapshot_ready=1'
+
+printf '%s\n' \
+  'List of snapshots present on all disks:' \
+  'ID        TAG                 VM SIZE   DATE' \
+  '--        cloudandx-ready-old 74M       2026-08-12' \
+  'OK' >"${TMP}/snapshot.list"
+snapshot_status=$(env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  "${RUNNER}" snapshot-status)
+printf '%s\n' "${snapshot_status}" | grep -Fq 'snapshot_ready=0'
+
+if env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  "${RUNNER}" snapshot-resume >/dev/null 2>&1; then
+  echo 'FAIL: stopped snapshot resume accepted stale named entity evidence' >&2
+  exit 1
+fi
+
+printf '%s\n' \
+  'List of snapshots present on all disks:' \
+  'ID        TAG                 VM SIZE   DATE' \
+  '--        cloudandx-ready 74M       2026-08-12' \
+  'OK' >"${TMP}/snapshot.list"
+
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_SNAPSHOT_LIST="${TMP}/snapshot.list" \
+  ADB_BOOT_COMPLETED=1 \
+  "${RUNNER}" snapshot-resume >/dev/null
+[ -s "${STATE}" ]
+
+printf '%s\n' 'apk' >"${TMP}/sample.apk"
+printf '%s\n' 'document' >"${TMP}/document.txt"
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  ADB_BOOT_COMPLETED=1 \
+  CLOUDANDX_NATIVE_APK_PATH="${TMP}/sample.apk" \
+  "${RUNNER}" install-apk >/dev/null
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  ADB_BOOT_COMPLETED=1 \
+  CLOUDANDX_NATIVE_HOST_FILE_PATH="${TMP}/document.txt" \
+  "${RUNNER}" push-file >/dev/null
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  ADB_BOOT_COMPLETED=1 \
+  CLOUDANDX_NATIVE_SCREENSHOT_PATH="${TMP}/screen.png" \
+  "${RUNNER}" capture-screenshot >/dev/null
+[ "$(od -An -tx1 -N8 "${TMP}/screen.png" | tr -d ' \n')" = 89504e470d0a1a0a ]
+
+ln -s "${TMP}/sample.apk" "${TMP}/linked.apk"
+if env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  ADB_BOOT_COMPLETED=1 \
+  CLOUDANDX_NATIVE_APK_PATH="${TMP}/linked.apk" \
+  "${RUNNER}" install-apk >/dev/null 2>&1; then
+  echo 'FAIL: symlink APK input was accepted' >&2
+  exit 1
+fi
 
 printf '%s\n' 'PASS: native macOS lifecycle and security behavior'

@@ -1,9 +1,12 @@
 import CloudAndxClientCore
+import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 @MainActor
 final class RuntimeViewModel: ObservableObject {
     @Published private(set) var status = RuntimeStatus(health: .unknown, pid: nil, serial: nil, rawOutput: "")
+    @Published private(set) var snapshot = SnapshotStatus(health: .unknown, rawOutput: "")
     @Published private(set) var feedback = "正在定位 CloudAndx runtime…"
     @Published private(set) var log = "尚无运行日志。"
     @Published private(set) var isBusy = false
@@ -40,8 +43,8 @@ final class RuntimeViewModel: ObservableObject {
                 let result = try await Task.detached(priority: .userInitiated) {
                     try service.execute(command)
                 }.value
-                feedback = result.output.isEmpty ? "\(command.title)完成" : result.output
                 await reload(using: service)
+                feedback = result.output.isEmpty ? "\(command.title)完成" : result.output
             } catch {
                 feedback = error.localizedDescription
                 await reloadLog(using: service)
@@ -59,6 +62,58 @@ final class RuntimeViewModel: ObservableObject {
         }
     }
 
+    func confirmAndResumeSnapshot() {
+        guard !isCommandLocked, snapshot.health == .ready else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "恢复到可信恢复点？"
+        alert.informativeText = "该操作会覆盖恢复点保存后产生的 Android guest 状态，宿主文件不会受影响。"
+        alert.addButton(withTitle: "恢复并覆盖当前状态")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        perform(.snapshotResume)
+    }
+
+    func installAPK() {
+        guard let service, !isCommandLocked else { return }
+        let panel = NSOpenPanel()
+        if let apk = UTType(filenameExtension: "apk") {
+            panel.allowedContentTypes = [apk]
+        }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "选择要安装到当前 Android 实例的 APK"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        runForegroundAction(title: RuntimeCommand.installAPK.title) {
+            try service.installAPK(at: url)
+        }
+    }
+
+    func pushFile() {
+        guard let service, !isCommandLocked else { return }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "选择要投递到 /sdcard/Download 的文件"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        runForegroundAction(title: RuntimeCommand.pushFile.title) {
+            try service.pushFile(at: url)
+        }
+    }
+
+    func captureScreenshot() {
+        guard let service, !isCommandLocked else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "cloudandx-\(Self.timestamp()).png"
+        panel.message = "导出当前 Android 画面为 PNG"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        runForegroundAction(title: RuntimeCommand.captureScreenshot.title) {
+            try service.captureScreenshot(to: url)
+        }
+    }
+
     private func reload(using service: RuntimeService) async {
         do {
             status = try await Task.detached(priority: .utility) { try service.status() }.value
@@ -66,6 +121,13 @@ final class RuntimeViewModel: ObservableObject {
         } catch {
             status = RuntimeStatus(health: .unknown, pid: nil, serial: nil, rawOutput: "")
             feedback = error.localizedDescription
+        }
+        do {
+            snapshot = try await Task.detached(priority: .utility) {
+                try service.snapshotStatus()
+            }.value
+        } catch {
+            snapshot = SnapshotStatus(health: .unknown, rawOutput: error.localizedDescription)
         }
         await reloadLog(using: service)
     }
@@ -93,5 +155,33 @@ final class RuntimeViewModel: ObservableObject {
             }
             isOpeningInteraction = false
         }
+    }
+
+    private func runForegroundAction(
+        title: String,
+        action: @escaping @Sendable () throws -> ProcessResult
+    ) {
+        guard let service else { return }
+        isBusy = true
+        feedback = "\(title)中…"
+        Task {
+            do {
+                let result = try await Task.detached(priority: .userInitiated, operation: action).value
+                await reload(using: service)
+                feedback = result.output.isEmpty ? "\(title)完成" : result.output
+            } catch {
+                feedback = error.localizedDescription
+                await reloadLog(using: service)
+            }
+            isBusy = false
+        }
+    }
+
+    private static func timestamp(now: Date = .init()) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: now)
     }
 }

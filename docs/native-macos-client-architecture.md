@@ -2,7 +2,7 @@
 
 > 决策日期：2026-08-12<br>
 > 目标主机：Apple Silicon Mac（当前验证机为 M1 MacBook Pro）<br>
-> 当前状态：架构确定；Phase 1 客户端 MVP 已实现并通过构建/核心测试
+> 当前状态：架构确定；Phase 1 客户端 MVP 已完成；Phase 2A 桌面融合闭环实施中
 
 ## 1. 决策
 
@@ -69,8 +69,9 @@ flowchart LR
 ```
 
 客户端不能拼接 shell 字符串。所有运行操作必须映射到固定枚举：`start`、`stop`、
-`restart`、`status`、`scrcpy`。脚本继续负责版本锁、停止 Docker Android、HVF 检查、
-loopback listener 门禁、launchd 生命周期和失败清理。
+`restart`、`status`、`scrcpy`、`snapshot-save`、`snapshot-resume` 和
+`snapshot-status`。脚本继续负责版本锁、停止 Docker Android、HVF 检查、loopback
+listener 门禁、launchd 生命周期、可信快照身份和失败清理。
 
 ## 4. 为什么核心选择 AEMU，而不是重写 VM
 
@@ -100,10 +101,12 @@ Apple 的 Hypervisor.framework 是低级虚拟化接口，Virtualization.framewo
 | `native-android17.sh` | 实际 runtime 权威入口 | 继续 fail-closed，不被 GUI 绕过 |
 | AEMU/scrcpy window | 当前低延迟画面和输入 | 必须连接同一个 AVD |
 
-### 5.2 Phase 2 本机 Capability Agent
+### 5.2 Phase 2 本机 Capability Bridge
 
-Phase 2 将 Docker Device Bridge 的“鉴权 + allowlist”思想迁移为本机 agent，但不会把
-容器 HTTP 服务原样搬到宿主。建议使用 app-owned XPC service，并给每项能力定义结构化请求：
+Phase 2 将 Docker Device Bridge 的“鉴权 + allowlist”思想迁移到本机，但不会把容器 HTTP
+服务原样搬到宿主。Phase 2A 在 `CloudAndxClientCore` 内先实现进程内、固定二进制和固定参数
+的结构化动作，便于当前未签名 MVP 验证完整体验；没有 code signing requirement 的 XPC
+拆分不能形成可信身份边界。签名发布阶段再迁移为 app-owned XPC service，并保持相同请求模型：
 
 - `installAPK(bookmark)`、`launchApp(package)`、`stopApp(package)`；
 - `pushFile(bookmark, destinationClass)`、`pullFile(allowlistedPath)`；
@@ -112,7 +115,10 @@ Phase 2 将 Docker Device Bridge 的“鉴权 + allowlist”思想迁移为本�
 - `setLocation`、`setBattery`、`setNetworkProfile`；
 - `captureScreenshot`、`startRecording`、`collectDiagnostics`。
 
-XPC service 只执行固定二进制与参数数组，不暴露任意 ADB、shell、gRPC 或 Emulator Console。
+当前 bridge 以及未来 XPC service 都只执行固定二进制与参数数组，不暴露任意 ADB、shell、
+gRPC 或 Emulator Console。Android 17 r06 实测没有公开 `cmd clipboard` 实现，Phase 2A 不以
+`input text` 冒充剪贴板；剪贴板同步在审计 scrcpy control protocol 或引入签名 companion
+后再启用。
 
 ## 6. 显示与输入策略
 
@@ -169,7 +175,7 @@ SystemServer、SurfaceFlinger、GMS、网络、音频和输入，而不只检查
 | 指标 | Phase 1 基线 | Phase 2 目标 |
 | --- | --- | --- |
 | 冷启动到 ready | 已测 18.2 秒 | P95 ≤ 25 秒 |
-| warm snapshot 到可输入 | 尚未实现 | P50 ≤ 2 秒，P95 ≤ 4 秒 |
+| warm snapshot 到可输入 | 已验证：运行中恢复 7.38 秒；停止态 AEMU load 3.618 秒、端到端 ready 11.93 秒 | P50 ≤ 2 秒，P95 ≤ 4 秒（当前未达标） |
 | 本地显示刷新 | 已证实 60 Hz display | 前台稳定 60 FPS；90/120 仅硬件与 guest 支持时开放 |
 | 输入到呈现延迟 | 尚未测量 | P95 ≤ 35 ms，必须用高速相机/事件时间线校准 |
 | Android 语言页启动 | 已测 564–1113 ms | P95 ≤ 1.2 秒 |
@@ -195,7 +201,7 @@ SystemServer、SurfaceFlinger、GMS、网络、音频和输入，而不只检查
 
 - SwiftUI/AppKit 应用和可测试 Core 模块；
 - 启动、停止、重启、状态、日志和打开 Android；
-- 自动定位项目目录，允许显式 `CLOUDANDX_PROJECT_ROOT` 覆盖；
+- 仅从 app 位置向上定位可信项目目录，不接受环境变量重定向；
 - 固定命令、无 shell 拼接、有界输出、忙状态和错误反馈；
 - 构建/单测以及现有 native runtime contract 回归。
 
@@ -204,8 +210,9 @@ SystemServer、SurfaceFlinger、GMS、网络、音频和输入，而不只检查
 
 ### Phase 2：真机级桌面体验
 
-- XPC Capability Agent；
-- APK/文件/剪贴板、通知、摄像头、麦克风、音频设备切换；
+- Phase 2A：可信固定快照、APK 安装、Download 文件投递、PNG 截图；
+- Phase 2B：签名 XPC Capability Agent、可信书签与剪贴板协议；
+- Phase 2C：通知、摄像头、麦克风、音频设备切换；
 - 快照秒开、设备/应用 profile、键鼠/触控板/手柄映射；
 - 帧时间、输入 RTT、ANR、崩溃和音频 underrun HUD；
 - 8 小时长稳与权限恢复测试。

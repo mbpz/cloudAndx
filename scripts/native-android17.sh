@@ -3,47 +3,70 @@ set -eu
 umask 077
 
 ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
-RUNTIME_ROOT=${CLOUDANDX_NATIVE_RUNTIME_ROOT:-${ROOT}/.runtime/native-android17}
-DEFAULT_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
-SDK_ROOT=${CLOUDANDX_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${DEFAULT_SDK_ROOT}}}
-if [ ! -x "${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ] \
-  && [ -z "${CLOUDANDX_ANDROID_SDK_ROOT:-}" ] \
-  && [ -x "${DEFAULT_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
-  SDK_ROOT=${DEFAULT_SDK_ROOT}
-fi
-DEFAULT_JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
-JAVA_HOME=${CLOUDANDX_JAVA_HOME:-${JAVA_HOME:-${DEFAULT_JAVA_HOME}}}
-if [ -x "${DEFAULT_JAVA_HOME}/bin/java" ] && [ -z "${CLOUDANDX_JAVA_HOME:-}" ]; then
-  JAVA_HOME=${DEFAULT_JAVA_HOME}
-fi
-ANDROID_AVD_HOME=${RUNTIME_ROOT}/avd
-ANDROID_EMULATOR_HOME=${RUNTIME_ROOT}/emulator-home
-ANDROID_PREFS_ROOT=${RUNTIME_ROOT}/prefs
-AVD_NAME=${CLOUDANDX_NATIVE_AVD_NAME:-CloudAndx_Android_17_Play}
-SYSTEM_IMAGE='system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a'
-EXPECTED_EMULATOR_VERSION=37.1.11
-EXPECTED_PLATFORM_TOOLS_VERSION=37.0.1
-EXPECTED_SYSTEM_IMAGE_REVISION=6
-EXPECTED_SCRCPY_VERSION=4.1
-CONSOLE_PORT=${CLOUDANDX_NATIVE_CONSOLE_PORT:-5556}
-ADB_PORT=$((CONSOLE_PORT + 1))
-GRPC_PORT=${CLOUDANDX_NATIVE_GRPC_PORT:-8556}
-ADB_SERIAL=emulator-${CONSOLE_PORT}
-EMULATOR=${SDK_ROOT}/emulator/emulator
-ADB=${SDK_ROOT}/platform-tools/adb
-SDKMANAGER=${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager
-AVDMANAGER=${SDK_ROOT}/cmdline-tools/latest/bin/avdmanager
-PID_FILE=${RUNTIME_ROOT}/emulator.pid
-LOG_FILE=${RUNTIME_ROOT}/emulator.log
-SNAPSHOT_NAME=cloudandx-ready
-SNAPSHOT_META_FILE=${RUNTIME_ROOT}/trusted-snapshot.env
-SNAPSHOT_DIRECTORY=${ANDROID_AVD_HOME}/${AVD_NAME}.avd/snapshots/${SNAPSHOT_NAME}
-LAUNCH_LABEL=dev.cloudandx.android17
-SCRCPY=${CLOUDANDX_SCRCPY_BIN:-/opt/homebrew/bin/scrcpy}
-BOOT_TIMEOUT_SECONDS=${CLOUDANDX_NATIVE_BOOT_TIMEOUT_SECONDS:-120}
-LSOF_BIN=${CLOUDANDX_LSOF_BIN:-lsof}
+RUNTIME_MODE=${CLOUDANDX_RUNTIME_MODE:-}
+case ${RUNTIME_MODE} in
+  development-sdk|bundled-release) ;;
+  '') printf '%s\n' 'cloudandx-native: ERROR: CLOUDANDX_RUNTIME_MODE must explicitly be development-sdk or bundled-release' >&2; exit 1 ;;
+  *) printf '%s\n' 'cloudandx-native: ERROR: unsupported CLOUDANDX_RUNTIME_MODE' >&2; exit 1 ;;
+esac
 
-export JAVA_HOME ANDROID_SDK_ROOT=${SDK_ROOT} ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT
+if [ "${RUNTIME_MODE}" = bundled-release ]; then
+  [ -n "${CLOUDANDX_BUNDLED_RUNTIME_ROOT:-}" ] \
+    || { printf '%s\n' 'cloudandx-native: ERROR: bundled-release requires launcher-provided CLOUDANDX_BUNDLED_RUNTIME_ROOT' >&2; exit 1; }
+  case ${CLOUDANDX_BUNDLED_RUNTIME_ROOT} in /*) ;; *) printf '%s\n' 'cloudandx-native: ERROR: bundled runtime root must be absolute' >&2; exit 1 ;; esac
+  for forbidden in ANDROID_SDK_ROOT CLOUDANDX_ANDROID_SDK_ROOT CLOUDANDX_SCRCPY_BIN; do
+    eval "value=\${$forbidden:-}"
+    [ -z "${value}" ] || { printf '%s\n' "cloudandx-native: ERROR: ${forbidden} is forbidden in bundled-release" >&2; exit 1; }
+  done
+  BUNDLED_RUNTIME_ROOT=${CLOUDANDX_BUNDLED_RUNTIME_ROOT}
+  [ -f "${BUNDLED_RUNTIME_ROOT}/manifest.json" ] && [ ! -L "${BUNDLED_RUNTIME_ROOT}/manifest.json" ] \
+    || { printf '%s\n' 'cloudandx-native: ERROR: bundled runtime manifest is missing' >&2; exit 1; }
+  for directory in engine images tools templates licenses provenance; do
+    [ -d "${BUNDLED_RUNTIME_ROOT}/${directory}" ] && [ ! -L "${BUNDLED_RUNTIME_ROOT}/${directory}" ] \
+      || { printf '%s\n' "cloudandx-native: ERROR: bundled runtime layout is incomplete: ${directory}" >&2; exit 1; }
+  done
+  RUNTIME_ID=$(sed -n 's/.*"runtimeID"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${BUNDLED_RUNTIME_ROOT}/manifest.json" | head -n 1)
+  [ -n "${RUNTIME_ID}" ] || { printf '%s\n' 'cloudandx-native: ERROR: bundled manifest runtimeID is missing' >&2; exit 1; }
+  RUNTIME_ROOT=${CLOUDANDX_NATIVE_RUNTIME_ROOT:-${HOME}/Library/Application Support/CloudAndx/Runtime/${RUNTIME_ID}}
+  # The manifest/layout preflight intentionally remains static until the
+  # signed bundle launcher and source-built template stager exist.
+  case ${1:-} in
+    runtime-preflight) log() { printf '%s\n' "cloudandx-native: $*"; }; log "bundled release preflight only runtime_id=${RUNTIME_ID}"; exit 0 ;;
+    *) printf '%s\n' 'cloudandx-native: ERROR: bundled-release lifecycle is unavailable until the signed bundle launcher and source-built template staging are implemented' >&2; exit 1 ;;
+  esac
+else
+  if [ -n "${CLOUDANDX_DEVELOPMENT_PROJECT_ROOT:-}" ]; then
+    case ${CLOUDANDX_DEVELOPMENT_PROJECT_ROOT} in /*) ;; *) printf '%s\n' 'cloudandx-native: ERROR: development project root must be absolute' >&2; exit 1 ;; esac
+    ROOT=${CLOUDANDX_DEVELOPMENT_PROJECT_ROOT}
+    [ -d "${ROOT}" ] && [ ! -L "${ROOT}" ] && [ -x "${ROOT}/scripts/native-android17.sh" ] && [ -f "${ROOT}/compose.yaml" ] \
+      || { printf '%s\n' 'cloudandx-native: ERROR: development project root is invalid' >&2; exit 1; }
+    root_owner=$(stat -f '%u' "${ROOT}")
+    root_mode=$(stat -f '%Lp' "${ROOT}")
+    case ${root_mode} in [0-7][0145][0145]) safe_mode=yes ;; *) safe_mode=no ;; esac
+    [ "${root_owner}" = "$(id -u)" ] && [ "${safe_mode}" = yes ] \
+      || { printf '%s\n' 'cloudandx-native: ERROR: development project root permissions are unsafe' >&2; exit 1; }
+  fi
+  RUNTIME_ROOT=${CLOUDANDX_NATIVE_RUNTIME_ROOT:-${ROOT}/.runtime/native-android17}
+  DEFAULT_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
+  SDK_ROOT=${CLOUDANDX_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${DEFAULT_SDK_ROOT}}}
+  if [ ! -x "${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ] \
+    && [ -z "${CLOUDANDX_ANDROID_SDK_ROOT:-}" ] \
+    && [ -x "${DEFAULT_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
+    SDK_ROOT=${DEFAULT_SDK_ROOT}
+  fi
+  DEFAULT_JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+  JAVA_HOME=${CLOUDANDX_JAVA_HOME:-${JAVA_HOME:-${DEFAULT_JAVA_HOME}}}
+  if [ -x "${DEFAULT_JAVA_HOME}/bin/java" ] && [ -z "${CLOUDANDX_JAVA_HOME:-}" ]; then JAVA_HOME=${DEFAULT_JAVA_HOME}; fi
+  ANDROID_AVD_HOME=${RUNTIME_ROOT}/avd; ANDROID_EMULATOR_HOME=${RUNTIME_ROOT}/emulator-home; ANDROID_PREFS_ROOT=${RUNTIME_ROOT}/prefs
+  AVD_NAME=${CLOUDANDX_NATIVE_AVD_NAME:-CloudAndx_Android_17_Play}; SYSTEM_IMAGE='system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a'
+  EXPECTED_EMULATOR_VERSION=37.1.11; EXPECTED_PLATFORM_TOOLS_VERSION=37.0.1; EXPECTED_SYSTEM_IMAGE_REVISION=6; EXPECTED_SCRCPY_VERSION=4.1
+  CONSOLE_PORT=${CLOUDANDX_NATIVE_CONSOLE_PORT:-5556}; ADB_PORT=$((CONSOLE_PORT + 1)); GRPC_PORT=${CLOUDANDX_NATIVE_GRPC_PORT:-8556}; ADB_SERIAL=emulator-${CONSOLE_PORT}
+  EMULATOR=${SDK_ROOT}/emulator/emulator; ADB=${SDK_ROOT}/platform-tools/adb; SDKMANAGER=${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager; AVDMANAGER=${SDK_ROOT}/cmdline-tools/latest/bin/avdmanager
+  PID_FILE=${RUNTIME_ROOT}/emulator.pid; LOG_FILE=${RUNTIME_ROOT}/emulator.log; SNAPSHOT_NAME=cloudandx-ready; SNAPSHOT_META_FILE=${RUNTIME_ROOT}/trusted-snapshot.env
+  SNAPSHOT_DIRECTORY=${ANDROID_AVD_HOME}/${AVD_NAME}.avd/snapshots/${SNAPSHOT_NAME}; LAUNCH_LABEL=dev.cloudandx.android17; LAUNCH_PLIST=${RUNTIME_ROOT}/${LAUNCH_LABEL}.plist; SCRCPY=${CLOUDANDX_SCRCPY_BIN:-/opt/homebrew/bin/scrcpy}
+  BOOT_TIMEOUT_SECONDS=${CLOUDANDX_NATIVE_BOOT_TIMEOUT_SECONDS:-120}; LSOF_BIN=${CLOUDANDX_LSOF_BIN:-lsof}
+  export JAVA_HOME ANDROID_SDK_ROOT=${SDK_ROOT} ANDROID_AVD_HOME ANDROID_EMULATOR_HOME ANDROID_PREFS_ROOT
+fi
 
 log() { printf '%s\n' "cloudandx-native: $*"; }
 die() { printf '%s\n' "cloudandx-native: ERROR: $*" >&2; exit 1; }
@@ -61,9 +84,15 @@ sha256_file() {
 require_host() {
   [ "$(uname -s)" = Darwin ] || die 'native runtime requires macOS'
   [ "$(uname -m)" = arm64 ] || die 'native runtime requires Apple Silicon'
-  [ -x "${SDKMANAGER}" ] || die "sdkmanager is missing: ${SDKMANAGER}"
-  [ -x "${AVDMANAGER}" ] || die "avdmanager is missing: ${AVDMANAGER}"
-  [ -x "${JAVA_HOME}/bin/java" ] || die "JDK 17+ is missing: ${JAVA_HOME}"
+  if [ "${RUNTIME_MODE}" = development-sdk ]; then
+    [ -x "${JAVA_HOME}/bin/java" ] || die "JDK 17+ is missing: ${JAVA_HOME}"
+    [ -x "${SDKMANAGER}" ] || die "sdkmanager is missing: ${SDKMANAGER}"
+    [ -x "${AVDMANAGER}" ] || die "avdmanager is missing: ${AVDMANAGER}"
+  else
+    [ -x "${EMULATOR}" ] || die "bundled AEMU is missing: ${EMULATOR}"
+    [ -x "${ADB}" ] || die "bundled adb is missing: ${ADB}"
+    [ -x "${SCRCPY}" ] || die "bundled scrcpy is missing: ${SCRCPY}"
+  fi
   case ${BOOT_TIMEOUT_SECONDS} in *[!0-9]*|'') die 'boot timeout must be a positive integer' ;; esac
   [ "${BOOT_TIMEOUT_SECONDS}" -gt 0 ] || die 'boot timeout must be a positive integer'
 }
@@ -83,6 +112,7 @@ available_package_version() {
 }
 
 verify_repository_versions() {
+  [ "${RUNTIME_MODE}" = development-sdk ] || die 'bundled-release forbids SDK repository resolution'
   repository_packages=$("${SDKMANAGER}" --list)
   emulator_available=$(printf '%s\n' "${repository_packages}" | available_package_version emulator)
   platform_tools_available=$(printf '%s\n' "${repository_packages}" | available_package_version platform-tools)
@@ -96,6 +126,11 @@ verify_repository_versions() {
 }
 
 validate_packages() {
+  if [ "${RUNTIME_MODE}" = bundled-release ]; then
+    [ -x "${EMULATOR}" ] || die "bundled AEMU is missing: ${EMULATOR}"
+    [ -x "${ADB}" ] || die "bundled adb is missing: ${ADB}"
+    return 0
+  fi
   [ -x "${EMULATOR}" ] || die "Android Emulator is missing; run $0 setup"
   [ -x "${ADB}" ] || die "Platform Tools are missing; run $0 setup"
   image_dir=${SDK_ROOT}/system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a
@@ -114,12 +149,15 @@ validate_packages() {
 ensure_avd() {
   install -d -m 0700 "${RUNTIME_ROOT}" "${ANDROID_AVD_HOME}" "${ANDROID_EMULATOR_HOME}" "${ANDROID_PREFS_ROOT}"
   if [ ! -d "${ANDROID_AVD_HOME}/${AVD_NAME}.avd" ]; then
+    [ "${RUNTIME_MODE}" = development-sdk ] || die 'bundled-release requires a source-built template staging flow; it must not create an SDK AVD'
     log "creating ${AVD_NAME} from ${SYSTEM_IMAGE}"
     printf 'no\n' | "${AVDMANAGER}" create avd --force --name "${AVD_NAME}" \
       --package "${SYSTEM_IMAGE}" --device pixel_9
   fi
   configure_avd_value hw.sdCard no
-  configure_avd_value PlayStore.enabled yes
+  if [ "${RUNTIME_MODE}" = development-sdk ]; then
+    configure_avd_value PlayStore.enabled yes
+  fi
 }
 
 configure_avd_value() {
@@ -150,6 +188,14 @@ current_snapshot_identity() {
   printf '%s\n' "system_image_revision=${EXPECTED_SYSTEM_IMAGE_REVISION}"
   printf '%s\n' 'gpu_mode=host'
   printf '%s\n' "config_sha256=$(sha256_file "${config}")"
+  printf '%s\n' "runtime_mode=${RUNTIME_MODE}"
+  if [ "${RUNTIME_MODE}" = bundled-release ]; then
+    printf '%s\n' "runtime_manifest_sha256=$(sha256_file "${BUNDLED_RUNTIME_ROOT}/manifest.json")"
+    printf '%s\n' "runtime_template_sha256=$(sed -n 's/.*"defaultTemplateDigest"[[:space:]]*:[[:space:]]*"\([0-9A-Fa-f]*\)".*/\1/p' "${BUNDLED_RUNTIME_ROOT}/manifest.json" | head -n 1)"
+  else
+    printf '%s\n' 'runtime_manifest_sha256=development-sdk-prototype-aemu-37.1.11-platform-tools-37.0.1-api-37.0-r06-scrcpy-4.1'
+    printf '%s\n' 'runtime_template_sha256=development-sdk-prototype-no-bundled-template'
+  fi
 }
 
 current_identity_value() {
@@ -193,7 +239,7 @@ snapshot_identity_state() {
     printf '%s\n' unavailable
     return 0
   fi
-  for key in snapshot_name avd_name system_image emulator_version platform_tools_version system_image_revision gpu_mode config_sha256; do
+  for key in snapshot_name avd_name system_image emulator_version platform_tools_version system_image_revision gpu_mode config_sha256 runtime_mode runtime_manifest_sha256 runtime_template_sha256; do
     current=$(current_identity_value "${key}")
     saved=$(property_value "${key}" "${SNAPSHOT_META_FILE}")
     if [ -z "${saved}" ] || [ "${current}" != "${saved}" ]; then
@@ -205,6 +251,7 @@ snapshot_identity_state() {
 }
 
 setup() {
+  [ "${RUNTIME_MODE}" = development-sdk ] || die 'bundled-release forbids setup, package downloads, sdkmanager, and avdmanager'
   require_host
   [ "${ACCEPT_ANDROID_SDK_LICENSES:-no}" = yes ] \
     || die 'review https://developer.android.com/studio/terms then set ACCEPT_ANDROID_SDK_LICENSES=yes'
@@ -228,7 +275,7 @@ managed_pid() {
 
 remove_launch_job() {
   managed=$(managed_pid)
-  launchctl remove "${LAUNCH_LABEL}" >/dev/null 2>&1 || true
+  launchctl bootout "gui/$(id -u)/${LAUNCH_LABEL}" >/dev/null 2>&1 || true
   elapsed=0
   while [ -n "${managed}" ] && kill -0 "${managed}" 2>/dev/null && [ "${elapsed}" -lt 10 ]; do
     sleep 1
@@ -241,6 +288,44 @@ remove_launch_job() {
       && die "launchd removed ${LAUNCH_LABEL} but emulator pid ${managed} survived"
   fi
   rm -f "${PID_FILE}"
+  rm -f "${LAUNCH_PLIST}"
+}
+
+write_launch_agent() {
+  temporary=${LAUNCH_PLIST}.tmp.$$
+  # KeepAlive=false is explicit: an exited AEMU stays exited until an explicit
+  # start/restart/snapshot-resume invokes kickstart again.
+  # Dynamic plist values are deliberately rejected rather than interpolated
+  # with incomplete XML escaping. Every value here is an internally selected
+  # path or fixed AEMU argument, never caller-provided XML.
+  for plist_value in "${LAUNCH_LABEL}" "${LOG_FILE}" "${SDK_ROOT}" "${ANDROID_AVD_HOME}" "${ANDROID_EMULATOR_HOME}" "${ANDROID_PREFS_ROOT}" "${EMULATOR}" "${AVD_NAME}" "${CONSOLE_PORT}" "${ADB_PORT}" "${GRPC_PORT}" "$@"; do
+    case ${plist_value} in
+      *'&'*|*'<'*|*'>'*|*\"*|*\'*|*[![:print:]]*) die 'LaunchAgent plist value contains unsafe XML characters' ;;
+    esac
+  done
+  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+    '<plist version="1.0"><dict>' \
+    '<key>Label</key><string>'"${LAUNCH_LABEL}"'</string>' \
+    '<key>KeepAlive</key><false/>' \
+    '<key>ProcessType</key><string>Background</string>' \
+    '<key>StandardOutPath</key><string>'"${LOG_FILE}"'</string>' \
+    '<key>StandardErrorPath</key><string>'"${LOG_FILE}"'</string>' \
+    '<key>EnvironmentVariables</key><dict>' \
+    '<key>ANDROID_SDK_ROOT</key><string>'"${SDK_ROOT}"'</string>' \
+    '<key>ANDROID_AVD_HOME</key><string>'"${ANDROID_AVD_HOME}"'</string>' \
+    '<key>ANDROID_EMULATOR_HOME</key><string>'"${ANDROID_EMULATOR_HOME}"'</string>' \
+    '<key>ANDROID_PREFS_ROOT</key><string>'"${ANDROID_PREFS_ROOT}"'</string>' \
+    '</dict><key>ProgramArguments</key><array>' \
+    '<string>'"${EMULATOR}"'</string><string>-avd</string><string>'"${AVD_NAME}"'</string>' \
+    '<string>-ports</string><string>'"${CONSOLE_PORT},${ADB_PORT}"'</string>' \
+    '<string>-grpc</string><string>'"${GRPC_PORT}"'</string><string>-grpc-use-token</string>' \
+    '<string>-accel</string><string>auto</string><string>-gpu</string><string>host</string>' \
+    '<string>-no-boot-anim</string><string>-no-metrics</string><string>-memory</string><string>4096</string><string>-cores</string><string>4</string><string>-netdelay</string><string>none</string><string>-netspeed</string><string>full</string>' >"${temporary}"
+  for argument do printf '%s\n' '<string>'"${argument}"'</string>' >>"${temporary}"; done
+  printf '%s\n' '</array></dict></plist>' >>"${temporary}"
+  chmod 0600 "${temporary}"
+  mv "${temporary}" "${LAUNCH_PLIST}"
 }
 
 stop_docker_android() {
@@ -360,19 +445,9 @@ start() {
   : >"${LOG_FILE}"
   log "starting ${AVD_NAME} with Hypervisor.Framework and host GPU"
   remove_launch_job
-  launchctl submit -l "${LAUNCH_LABEL}" -o "${LOG_FILE}" -e "${LOG_FILE}" -- \
-    /usr/bin/env \
-    "ANDROID_SDK_ROOT=${SDK_ROOT}" \
-    "ANDROID_AVD_HOME=${ANDROID_AVD_HOME}" \
-    "ANDROID_EMULATOR_HOME=${ANDROID_EMULATOR_HOME}" \
-    "ANDROID_PREFS_ROOT=${ANDROID_PREFS_ROOT}" \
-    "${EMULATOR}" -avd "${AVD_NAME}" \
-    -ports "${CONSOLE_PORT},${ADB_PORT}" \
-    -grpc "${GRPC_PORT}" -grpc-use-token \
-    -accel auto -gpu host -no-boot-anim -no-metrics \
-    -memory 4096 -cores 4 -netdelay none -netspeed full \
-    "$@" \
-    >/dev/null
+  write_launch_agent "$@"
+  launchctl bootstrap "gui/$(id -u)" "${LAUNCH_PLIST}" >/dev/null
+  launchctl kickstart "gui/$(id -u)/${LAUNCH_LABEL}" >/dev/null
   pid=$(managed_pid)
   if [ -z "${pid}" ]; then
     remove_launch_job
@@ -523,15 +598,13 @@ status() {
 }
 
 scrcpy_runtime() {
-  if is_running; then
-    stop_docker_android
-  else
-    start
-  fi
+  status | grep -Fq 'boot_completed=1' || die 'scrcpy requires an explicitly started, ready Android runtime'
   [ -x "${SCRCPY}" ] || die "scrcpy ${EXPECTED_SCRCPY_VERSION} is missing: ${SCRCPY}"
-  scrcpy_version=$("${SCRCPY}" --version | sed -n '1s/^scrcpy \([^ ]*\).*/\1/p')
-  [ "${scrcpy_version}" = "${EXPECTED_SCRCPY_VERSION}" ] \
-    || die "scrcpy ${scrcpy_version:-unknown} is installed; expected ${EXPECTED_SCRCPY_VERSION}"
+  if [ "${RUNTIME_MODE}" = development-sdk ]; then
+    scrcpy_version=$("${SCRCPY}" --version | sed -n '1s/^scrcpy \([^ ]*\).*/\1/p')
+    [ "${scrcpy_version}" = "${EXPECTED_SCRCPY_VERSION}" ] \
+      || die "scrcpy ${scrcpy_version:-unknown} is installed; expected ${EXPECTED_SCRCPY_VERSION}"
+  fi
   exec "${SCRCPY}" --serial "${ADB_SERIAL}" --no-audio --stay-awake \
     --video-buffer=0 --audio-buffer=0 --mouse=sdk --keyboard=uhid
 }

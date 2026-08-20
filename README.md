@@ -14,6 +14,8 @@ client/macos/scripts/swift-toolchain.sh build
 client/macos/scripts/swift-toolchain.sh run CloudAndxClient
 ```
 
+当前本机 Android SDK 路径是明确标识的 **development-sdk compatibility**，不是自包含或可发布 runtime。Phase 2B 的 manifest、来源/SBOM/NOTICE、release 签名门禁和可验证 bundle layout 见 [self-contained macOS Android runtime contract](docs/self-contained-macos-android-runtime.md)。
+
 Phase 1 提供启动、停止、重启、状态、日志和打开同一 Android 高性能交互窗口；Phase 2A
 继续加入身份绑定的可信恢复点与受限的 APK/文件/截图动作。所有操作只映射到固定 runtime
 命令或固定 ADB 参数，不接受任意 shell。完整模块边界、真机能力限制、体验 SLO、快照/预热、

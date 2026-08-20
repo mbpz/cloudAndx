@@ -91,7 +91,7 @@ for obsolete in \
 done
 
 grep -Fq 'Hypervisor.Framework' "${ROOT}/scripts/native-android17.sh"
-grep -Fq -- '-gpu host' "${ROOT}/scripts/native-android17.sh"
+grep -Fq '<string>-gpu</string><string>host</string>' "${ROOT}/scripts/native-android17.sh"
 grep -Fq 'EXPECTED_SCRCPY_VERSION=4.1' "${ROOT}/scripts/native-android17.sh"
 grep -Fq '127.0.0.1:${ADB_PORT}' "${ROOT}/scripts/native-android17.sh"
 

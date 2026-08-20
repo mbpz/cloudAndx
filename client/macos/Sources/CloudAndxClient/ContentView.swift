@@ -16,6 +16,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     header
+                    FixtureDisplayPanel()
                     runtimeCard
                     snapshotCard
                     logCard
@@ -38,7 +39,7 @@ struct ContentView: View {
                         Label("保存当前状态", systemImage: "camera.aperture")
                     }
                     .disabled(model.isCommandLocked || model.status.health != .ready)
-                    Button { model.perform(.snapshotStatus) } label: {
+                    Button { model.refreshSnapshotStatus() } label: {
                         Label("检查", systemImage: "checklist")
                     }
                     .disabled(model.isCommandLocked)
@@ -64,6 +65,9 @@ struct ContentView: View {
                 Text("AEMU ARM64 · Hypervisor.Framework · host GPU")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Text(model.runtimeMode.displayName)
+                    .font(.caption)
+                    .foregroundStyle(model.runtimeMode == .developmentSDK ? .orange : (model.runtimeMode == .bundledRelease ? .green : .red))
             }
             Spacer()
             statusBadge

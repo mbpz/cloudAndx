@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "target": "macos/arm64",
+  "aosp": {
+    "manifestTag": "android-17.0.0_r1",
+    "manifestCommit": "5bc9a7ce1cd78dd53613bbfd0ebf506e1e4adb0f",
+    "product": "sdk_phone16k_arm64",
+    "classification": "aosp-only"
+  },
+  "aemu": {
+    "version": "37.1.7",
+    "commit": "98f7f6ffcc4e6ce513a8b978323c3b961dc58143",
+    "tree": "aeeb57688c7eac123fd2c9728f721da45e60a39a"
+  },
+  "repoTool": { "callerLockedRecordRequired": true },
+  "adb": { "revision": "9084198a2d4b0f6a0f174260fb42da33485b684d" },
+  "scrcpy": { "version": "4.1", "commit": "2926c06c5dc3064ae6d8db706f1a98a37cfcf3f0" }
+}

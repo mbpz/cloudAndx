@@ -12,38 +12,39 @@ final class RuntimeViewModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var isOpeningInteraction = false
     @Published private(set) var projectPath = ""
+    @Published private(set) var runtimeMode = RuntimeMode.unavailable
+    @Published private(set) var isCapabilityAvailable: Bool
 
-    var isCommandLocked: Bool { isBusy || isOpeningInteraction }
+    var isCommandLocked: Bool { !isCapabilityAvailable || isBusy || isOpeningInteraction }
 
-    private var service: RuntimeService?
+    private let service: any CapabilityServing
 
-    init() {
-        do {
-            let root = try ProjectLocator.locate(startingAt: Bundle.main.bundleURL)
-            service = RuntimeService(projectRoot: root)
-            projectPath = root.path
-            feedback = "已连接本机 runtime"
-            refresh()
-        } catch {
-            feedback = error.localizedDescription
+    init(service: (any CapabilityServing)? = nil, mode: RuntimeMode? = nil) {
+        let configuration = try? RuntimeBundleConfiguration.load(resources: Bundle.main.resourceURL ?? URL(fileURLWithPath: "/nonexistent"))
+        isCapabilityAvailable = service != nil
+        self.service = service ?? UnavailableCapabilityService()
+        runtimeMode = mode ?? configuration?.mode ?? .unavailable
+        switch runtimeMode {
+        case .developmentSDK: feedback = "沙盒 Capability Agent 当前无生命周期权限；功能已禁用并失败关闭"
+        case .bundledRelease: feedback = "签名发布 runtime 尚不可用；功能已禁用并失败关闭"
+        case .unavailable: feedback = "Runtime 配置不可用"
         }
+        if isCapabilityAvailable { refresh() }
     }
 
     func perform(_ command: RuntimeCommand) {
-        guard let service else { return }
+        guard !isCommandLocked else { return }
         if command == .scrcpy {
             openInteraction(using: service)
             return
         }
-        guard !isCommandLocked else { return }
         isBusy = true
         feedback = "\(command.title)中…"
         Task {
             do {
-                let result = try await Task.detached(priority: .userInitiated) {
-                    try service.execute(command)
-                }.value
+                let result = try await service.execute(command)
                 await reload(using: service)
+                if command == .snapshotSave || command == .snapshotResume { refreshSnapshotStatus() }
                 feedback = result.output.isEmpty ? "\(command.title)完成" : result.output
             } catch {
                 feedback = error.localizedDescription
@@ -54,7 +55,7 @@ final class RuntimeViewModel: ObservableObject {
     }
 
     func refresh() {
-        guard let service, !isCommandLocked else { return }
+        guard !isCommandLocked else { return }
         isBusy = true
         Task {
             await reload(using: service)
@@ -75,7 +76,7 @@ final class RuntimeViewModel: ObservableObject {
     }
 
     func installAPK() {
-        guard let service, !isCommandLocked else { return }
+        guard !isCommandLocked else { return }
         let panel = NSOpenPanel()
         if let apk = UTType(filenameExtension: "apk") {
             panel.allowedContentTypes = [apk]
@@ -84,71 +85,61 @@ final class RuntimeViewModel: ObservableObject {
         panel.canChooseDirectories = false
         panel.message = "选择要安装到当前 Android 实例的 APK"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        runForegroundAction(title: RuntimeCommand.installAPK.title) {
-            try service.installAPK(at: url)
-        }
+        runFileAction(title: RuntimeCommand.installAPK.title, url: url, install: true)
     }
 
     func pushFile() {
-        guard let service, !isCommandLocked else { return }
+        guard !isCommandLocked else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = "选择要投递到 /sdcard/Download 的文件"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        runForegroundAction(title: RuntimeCommand.pushFile.title) {
-            try service.pushFile(at: url)
-        }
+        runFileAction(title: RuntimeCommand.pushFile.title, url: url, install: false)
     }
 
     func captureScreenshot() {
-        guard let service, !isCommandLocked else { return }
+        guard !isCommandLocked else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "cloudandx-\(Self.timestamp()).png"
         panel.message = "导出当前 Android 画面为 PNG"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        runForegroundAction(title: RuntimeCommand.captureScreenshot.title) {
-            try service.captureScreenshot(to: url)
-        }
+        isBusy = true
+        Task { defer { isBusy = false }; do { feedback = try await SecurityScopedFileAccess.withWritableHandle(at: url) { try await service.captureScreenshot(to: $0) } } catch { feedback = error.localizedDescription } }
     }
 
-    private func reload(using service: RuntimeService) async {
+    private func reload(using service: any CapabilityServing) async {
         do {
-            status = try await Task.detached(priority: .utility) { try service.status() }.value
+            status = RuntimeStatusParser.parse(try await service.execute(.status).output)
             if !status.rawOutput.isEmpty { feedback = status.rawOutput }
         } catch {
             status = RuntimeStatus(health: .unknown, pid: nil, serial: nil, rawOutput: "")
             feedback = error.localizedDescription
         }
-        do {
-            snapshot = try await Task.detached(priority: .utility) {
-                try service.snapshotStatus()
-            }.value
-        } catch {
-            snapshot = SnapshotStatus(health: .unknown, rawOutput: error.localizedDescription)
-        }
         await reloadLog(using: service)
     }
 
-    private func reloadLog(using service: RuntimeService) async {
+    func refreshSnapshotStatus() {
+        Task { do { snapshot = SnapshotStatusParser.parse(try await service.execute(.snapshotStatus).output) } catch { snapshot = SnapshotStatus(health: .unknown, rawOutput: error.localizedDescription) } }
+    }
+
+    private func reloadLog(using service: any CapabilityServing) async {
         do {
-            log = try await Task.detached(priority: .utility) { try service.readLog() }.value
+            log = try await service.readLog()
         } catch {
             log = "日志读取失败：\(error.localizedDescription)"
         }
     }
 
-    private func openInteraction(using service: RuntimeService) {
+    private func openInteraction(using service: any CapabilityServing) {
         guard !isCommandLocked else { return }
         isOpeningInteraction = true
         feedback = "正在打开连接同一 Android 实例的 scrcpy…"
         Task {
             do {
-                _ = try await Task.detached(priority: .userInitiated) {
-                    try service.execute(.scrcpy)
-                }.value
+                _ = try await service.execute(.scrcpy)
                 feedback = "Android 交互窗口已关闭"
             } catch {
                 feedback = error.localizedDescription
@@ -157,23 +148,19 @@ final class RuntimeViewModel: ObservableObject {
         }
     }
 
-    private func runForegroundAction(
-        title: String,
-        action: @escaping @Sendable () throws -> ProcessResult
-    ) {
-        guard let service else { return }
+    private func runFileAction(title: String, url: URL, install: Bool) {
         isBusy = true
         feedback = "\(title)中…"
         Task {
-            do {
-                let result = try await Task.detached(priority: .userInitiated, operation: action).value
+            defer { isBusy = false }
+            do { let output = try await SecurityScopedFileAccess.withReadableHandle(at: url) { handle in
+                try await (install ? service.installAPK(handle, name: url.lastPathComponent) : service.pushFile(handle, name: url.lastPathComponent)) }
                 await reload(using: service)
-                feedback = result.output.isEmpty ? "\(title)完成" : result.output
+                feedback = output.isEmpty ? "\(title)完成" : output
             } catch {
                 feedback = error.localizedDescription
                 await reloadLog(using: service)
             }
-            isBusy = false
         }
     }
 
@@ -184,4 +171,12 @@ final class RuntimeViewModel: ObservableObject {
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return formatter.string(from: now)
     }
+}
+
+private struct UnavailableCapabilityService: CapabilityServing {
+    func execute(_ command: RuntimeCommand) async throws -> ProcessResult { throw CapabilityAgentError.xpcUnavailable }
+    func readLog() async throws -> String { throw CapabilityAgentError.xpcUnavailable }
+    func installAPK(_ handle: FileHandle, name: String) async throws -> String { throw CapabilityAgentError.xpcUnavailable }
+    func pushFile(_ handle: FileHandle, name: String) async throws -> String { throw CapabilityAgentError.xpcUnavailable }
+    func captureScreenshot(to handle: FileHandle) async throws -> String { throw CapabilityAgentError.xpcUnavailable }
 }

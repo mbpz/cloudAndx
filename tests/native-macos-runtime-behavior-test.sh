@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 RUNNER=${ROOT}/scripts/native-android17.sh
+export CLOUDANDX_RUNTIME_MODE=development-sdk
 TMP=$(mktemp -d)
 FAKE_BIN=${TMP}/bin
 SDK=${TMP}/sdk
@@ -72,24 +73,31 @@ printf '%s\n' \
 printf '%s\n' \
   '#!/bin/sh' \
   'case ${1:-} in' \
-  '  remove)' \
+  '  bootout)' \
+  '    [ -z "${FAKE_LIFECYCLE_LOG:-}" ] || printf "%s\\n" bootout >>"${FAKE_LIFECYCLE_LOG}"' \
   '    if [ -s "${FAKE_LAUNCH_STATE}" ]; then kill "$(cat "${FAKE_LAUNCH_STATE}")" 2>/dev/null || true; fi' \
-  '    rm -f "${FAKE_LAUNCH_STATE}" ;;' \
-  '  submit)' \
-  '    log_file=; wants_snapshot=0; next_is_log=0' \
-  '    for argument do' \
-  '      if [ "${next_is_log}" = 1 ]; then log_file=${argument}; next_is_log=0; continue; fi' \
-  '      [ "${argument}" = -o ] && next_is_log=1' \
-  '      [ "${argument}" = cloudandx-ready ] && wants_snapshot=1' \
-  '    done' \
-  '    [ "${wants_snapshot}" = 0 ] || printf "%s\n" "Successfully loaded snapshot '\''cloudandx-ready'\''" >"${log_file}"' \
+  '    rm -f "${FAKE_LAUNCH_STATE}" "${FAKE_LAUNCH_STATE}.plist" ;;' \
+  '  bootstrap)' \
+  '    [ -z "${FAKE_LIFECYCLE_LOG:-}" ] || printf "%s\\n" bootstrap >>"${FAKE_LIFECYCLE_LOG}"' \
+  '    cp "${3}" "${FAKE_LAUNCH_STATE}.plist" ;;' \
+  '  kickstart)' \
+  '    [ -z "${FAKE_LIFECYCLE_LOG:-}" ] || printf "%s\\n" kickstart >>"${FAKE_LIFECYCLE_LOG}"' \
+  '    log_file=$(sed -n "s#.*<key>StandardOutPath</key><string>\(.*\)</string>.*#\1#p" "${FAKE_LAUNCH_STATE}.plist")' \
+  '    grep -Fq "cloudandx-ready" "${FAKE_LAUNCH_STATE}.plist" && printf "%s\n" "Successfully loaded snapshot '\''cloudandx-ready'\''" >"${log_file}"' \
   '    sleep 60 &' \
-  '    echo $! >"${FAKE_LAUNCH_STATE}" ;;' \
+  '    echo $! >"${FAKE_LAUNCH_STATE}"' \
+  '    if [ -n "${FAKE_LAUNCH_COUNT:-}" ]; then count=0; [ ! -f "${FAKE_LAUNCH_COUNT}" ] || count=$(cat "${FAKE_LAUNCH_COUNT}"); echo $((count + 1)) >"${FAKE_LAUNCH_COUNT}"; fi ;;' \
   '  print)' \
   '    [ -s "${FAKE_LAUNCH_STATE}" ] || exit 1' \
   '    echo "pid = $(cat "${FAKE_LAUNCH_STATE}")" ;;' \
   '  *) exit 1 ;;' \
   'esac' >"${FAKE_BIN}/launchctl"
+
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ "${1:-}" = --version ]; then echo "scrcpy 4.1"; exit 0; fi' \
+  'printf "%s %s\\n" "$0" "$*" >>"${FAKE_SCRCPY_LOG}"' \
+  'exit 0' >"${FAKE_BIN}/scrcpy"
 
 printf '%s\n' \
   '#!/bin/sh' \
@@ -150,8 +158,35 @@ fi
 [ ! -e "${STATE}" ]
 [ ! -e "${RUNTIME}/emulator.pid" ]
 
-run_native ADB_BOOT_COMPLETED=1 >/dev/null
-[ -s "${STATE}" ]
+mkdir -p "${RUNTIME}/avd/unsafe&name.avd"
+printf '%s\n' 'hw.sdCard=no' 'PlayStore.enabled=yes' >"${RUNTIME}/avd/unsafe&name.avd/config.ini"
+if unsafe_output=$(run_native ADB_BOOT_COMPLETED=1 CLOUDANDX_NATIVE_AVD_NAME='unsafe&name' 2>&1); then
+  echo 'FAIL: unsafe XML LaunchAgent value was accepted' >&2
+  exit 1
+fi
+printf '%s\n' "${unsafe_output}" | grep -Fq 'LaunchAgent plist value contains unsafe XML characters'
+[ ! -e "${STATE}" ]
+
+if unsafe_output=$(run_native ADB_BOOT_COMPLETED=1 CLOUDANDX_NATIVE_GRPC_PORT='8556&unsafe' 2>&1); then
+  echo 'FAIL: unsafe XML LaunchAgent port was accepted' >&2
+  exit 1
+fi
+printf '%s\n' "${unsafe_output}" | grep -Fq 'LaunchAgent plist value contains unsafe XML characters'
+[ ! -e "${STATE}" ]
+
+launch_count=${TMP}/launch.count
+run_native ADB_BOOT_COMPLETED=1 FAKE_LAUNCH_COUNT="${launch_count}" >/dev/null
+first_pid=$(cat "${STATE}")
+[ -f "${STATE}.plist" ]
+grep -Fq '<key>KeepAlive</key><false/>' "${STATE}.plist"
+/usr/bin/plutil -lint "${STATE}.plist" >/dev/null
+kill "${first_pid}" 2>/dev/null || true
+sleep 1
+[ "$(cat "${launch_count}")" = 1 ]
+if kill -0 "${first_pid}" 2>/dev/null; then
+  echo 'FAIL: exited LaunchAgent child was restarted' >&2
+  exit 1
+fi
 env \
   PATH="${FAKE_BIN}:/usr/bin:/bin" \
   CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
@@ -162,8 +197,50 @@ env \
   "${RUNNER}" stop >/dev/null
 [ ! -e "${STATE}" ]
 [ ! -e "${RUNTIME}/emulator.pid" ]
+[ ! -e "${STATE}.plist" ]
+
+# scrcpy is interaction-only: a stopped runtime must not start/stop/relaunch,
+# and a ready runtime must exec the fixed 4.1 client exactly once.
+scrcpy_log=${TMP}/scrcpy.log
+lifecycle_log=${TMP}/scrcpy-lifecycle.log
+if env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_SCRCPY_BIN="${FAKE_BIN}/scrcpy" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_LIFECYCLE_LOG="${lifecycle_log}" \
+  FAKE_SCRCPY_LOG="${scrcpy_log}" \
+  ADB_BOOT_COMPLETED=1 \
+  "${RUNNER}" scrcpy >/dev/null 2>&1; then
+  echo 'FAIL: stopped runtime accepted scrcpy' >&2
+  exit 1
+fi
+[ ! -e "${scrcpy_log}" ]
+[ ! -e "${lifecycle_log}" ]
 
 run_native ADB_BOOT_COMPLETED=1 >/dev/null
+ready_pid=$(cat "${STATE}")
+rm -f "${scrcpy_log}" "${lifecycle_log}"
+env \
+  PATH="${FAKE_BIN}:/usr/bin:/bin" \
+  CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \
+  CLOUDANDX_JAVA_HOME="${TMP}/java" \
+  CLOUDANDX_NATIVE_RUNTIME_ROOT="${RUNTIME}" \
+  CLOUDANDX_SCRCPY_BIN="${FAKE_BIN}/scrcpy" \
+  CLOUDANDX_LSOF_BIN="${FAKE_BIN}/lsof" \
+  FAKE_LAUNCH_STATE="${STATE}" \
+  FAKE_LIFECYCLE_LOG="${lifecycle_log}" \
+  FAKE_SCRCPY_LOG="${scrcpy_log}" \
+  ADB_BOOT_COMPLETED=1 \
+  "${RUNNER}" scrcpy >/dev/null
+[ "$(cat "${STATE}")" = "${ready_pid}" ]
+[ ! -e "${lifecycle_log}" ]
+[ "$(wc -l <"${scrcpy_log}" | tr -d ' ')" = 1 ]
+grep -Fq "${FAKE_BIN}/scrcpy --serial emulator-5556" "${scrcpy_log}"
+grep -Fq -- '--no-audio --stay-awake' "${scrcpy_log}"
 env \
   PATH="${FAKE_BIN}:/usr/bin:/bin" \
   CLOUDANDX_ANDROID_SDK_ROOT="${SDK}" \

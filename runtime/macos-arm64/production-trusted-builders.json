@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "rsa-sha256",
+  "trustedPublicKeyDerSha256": []
+}

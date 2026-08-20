@@ -26,16 +26,17 @@ client/macos/scripts/swift-toolchain.sh run CloudAndxClientCoreTests
 client/macos/scripts/swift-toolchain.sh run CloudAndxClient
 ```
 
-生成无需安装、未签名的 `.app` bundle：
+生成无需安装、开发期 ad-hoc 签名的 `.app` bundle：
 
 ```sh
-client/macos/scripts/build-app.sh
+client/macos/scripts/build-app.sh --mode development-sdk
 open client/macos/.build/CloudAndx.app
 ```
 
-客户端仅从应用位置向上发现含有可执行 `scripts/native-android17.sh` 和 `compose.yaml` 的
-项目根，并校验项目、脚本目录、runtime 脚本和 Compose 文件均归当前用户所有且不可由
-group/other 写入。MVP 不接受环境变量重定向到另一个脚本；请运行默认生成在项目内的 `.app`。
+`development-sdk` 的 App-Sandboxed Capability Agent 目前只提供 descriptor/FD 边界，
+不会读取项目根或启动生命周期；权限服务在 bundle-owned runtime 或单独审计 helper 完成前失败关闭。
+它仍依赖本机版本锁定的 Android SDK。最终 `bundled-release` 不向上发现项目根，而是只解析
+App bundle 内 source-built AEMU+AOSP runtime；用户无需 Android Studio、Android SDK 或单独模拟器。
 
 完整产品架构和后续阶段见 `docs/native-macos-client-architecture.md`。
 

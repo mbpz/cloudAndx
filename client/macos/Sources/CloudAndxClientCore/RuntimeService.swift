@@ -13,12 +13,27 @@ public enum RuntimeServiceError: Error, LocalizedError, Sendable {
 
 public struct RuntimeService: Sendable {
     public static let outputLimit = 65_536
+    /// XPC long-operation budgets are deliberately greater than this trusted
+    /// runner gate; never inherit an unbounded host environment value here.
+    public static let trustedBootTimeoutSeconds = 120
     private static let downloadTargetDirectory = "/sdcard/Download"
     public let projectRoot: URL
+    public let runtimeMode: RuntimeMode
+    public let bundledRuntimeRoot: URL?
+    public let runnerURL: URL
     private let processRunner: any ProcessRunning
 
-    public init(projectRoot: URL, processRunner: any ProcessRunning = FoundationProcessRunner()) {
+    public init(
+        projectRoot: URL,
+        runtimeMode: RuntimeMode = .developmentSDK,
+        bundledRuntimeRoot: URL? = nil,
+        runnerURL: URL? = nil,
+        processRunner: any ProcessRunning = FoundationProcessRunner()
+    ) {
         self.projectRoot = projectRoot.standardizedFileURL
+        self.runtimeMode = runtimeMode
+        self.bundledRuntimeRoot = bundledRuntimeRoot?.standardizedFileURL
+        self.runnerURL = (runnerURL ?? projectRoot.appendingPathComponent("scripts/native-android17.sh")).standardizedFileURL
         self.processRunner = processRunner
     }
 
@@ -29,16 +44,15 @@ public struct RuntimeService: Sendable {
     public var logURL: URL { runtimeRoot.appendingPathComponent("emulator.log") }
 
     public func execute(_ command: RuntimeCommand) throws -> ProcessResult {
-        try execute(command, environment: [:])
+        try execute(command, environment: runtimeEnvironment)
     }
 
     private func execute(
         _ command: RuntimeCommand,
         environment: [String: String]
     ) throws -> ProcessResult {
-        let runner = projectRoot.appendingPathComponent("scripts/native-android17.sh")
         let result = try processRunner.run(
-            executable: runner,
+            executable: runnerURL,
             arguments: [command.rawValue],
             currentDirectory: projectRoot,
             environment: environment,
@@ -54,14 +68,26 @@ public struct RuntimeService: Sendable {
         return result
     }
 
+    private var runtimeEnvironment: [String: String] {
+        var environment = [
+            "CLOUDANDX_RUNTIME_MODE": runtimeMode.rawValue,
+            "CLOUDANDX_NATIVE_BOOT_TIMEOUT_SECONDS": String(Self.trustedBootTimeoutSeconds),
+        ]
+        if runtimeMode == .developmentSDK { environment["CLOUDANDX_DEVELOPMENT_PROJECT_ROOT"] = projectRoot.path }
+        if runtimeMode == .bundledRelease, let bundledRuntimeRoot {
+            environment["CLOUDANDX_BUNDLED_RUNTIME_ROOT"] = bundledRuntimeRoot.path
+        }
+        return environment
+    }
+
     public func installAPK(at url: URL) throws -> ProcessResult {
         guard url.pathExtension.lowercased() == "apk" else {
             throw RuntimeCapabilityError.invalidAPK(url.lastPathComponent)
         }
         try validateReadableRegularFile(url)
-        return try execute(.installAPK, environment: [
+        return try execute(.installAPK, environment: runtimeEnvironment.merging([
             "CLOUDANDX_NATIVE_APK_PATH": url.path,
-        ])
+        ]) { _, replacement in replacement })
     }
 
     public func pushFile(at url: URL) throws -> ProcessResult {
@@ -69,9 +95,9 @@ public struct RuntimeService: Sendable {
             throw RuntimeCapabilityError.directoryNotSupported(url.lastPathComponent)
         }
         try validateReadableRegularFile(url)
-        return try execute(.pushFile, environment: [
+        return try execute(.pushFile, environment: runtimeEnvironment.merging([
             "CLOUDANDX_NATIVE_HOST_FILE_PATH": url.path,
-        ])
+        ]) { _, replacement in replacement })
     }
 
     public func captureScreenshot(to url: URL) throws -> ProcessResult {
@@ -85,9 +111,9 @@ public struct RuntimeService: Sendable {
               FileManager.default.isWritableFile(atPath: parent.path) else {
             throw RuntimeCapabilityError.invalidDestination(parent.lastPathComponent)
         }
-        return try execute(.captureScreenshot, environment: [
+        return try execute(.captureScreenshot, environment: runtimeEnvironment.merging([
             "CLOUDANDX_NATIVE_SCREENSHOT_PATH": url.path,
-        ])
+        ]) { _, replacement in replacement })
     }
 
     public static func defaultPushedFileTarget(for url: URL) -> String {

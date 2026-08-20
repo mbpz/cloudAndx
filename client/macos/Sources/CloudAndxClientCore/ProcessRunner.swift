@@ -92,10 +92,12 @@ public struct FoundationProcessRunner: ProcessRunning, Sendable {
             "CLOUDANDX_JAVA_HOME",
             "CLOUDANDX_LSOF_BIN",
             "CLOUDANDX_NATIVE_AVD_NAME",
-            "CLOUDANDX_NATIVE_BOOT_TIMEOUT_SECONDS",
             "CLOUDANDX_NATIVE_CONSOLE_PORT",
             "CLOUDANDX_NATIVE_GRPC_PORT",
             "CLOUDANDX_NATIVE_RUNTIME_ROOT",
+            "CLOUDANDX_RUNTIME_MODE",
+            "CLOUDANDX_BUNDLED_RUNTIME_ROOT",
+            // Deliberately not inherited from the app/process environment.
             "CLOUDANDX_SCRCPY_BIN",
         ]
         for key in allowedOverrides {
@@ -105,6 +107,12 @@ public struct FoundationProcessRunner: ProcessRunning, Sendable {
             "CLOUDANDX_NATIVE_APK_PATH",
             "CLOUDANDX_NATIVE_HOST_FILE_PATH",
             "CLOUDANDX_NATIVE_SCREENSHOT_PATH",
+            // RuntimeService supplies the fixed trusted value; it is never
+            // inherited from the app/process environment above.
+            "CLOUDANDX_NATIVE_BOOT_TIMEOUT_SECONDS",
+            "CLOUDANDX_RUNTIME_MODE",
+            "CLOUDANDX_BUNDLED_RUNTIME_ROOT",
+            "CLOUDANDX_DEVELOPMENT_PROJECT_ROOT",
         ]
         for (key, value) in overrides {
             guard allowedActionInputs.contains(key) else {

@@ -26,12 +26,17 @@ Google 的[硬件加速说明](https://developer.android.com/studio/run/emulator
   PS16K ARM64 r06；`setup` 在安装前校验 stable repository 版本，仓库或已安装版本不符时
   失败关闭。
 - AVD 和运行状态只写入 `.runtime/native-android17/`。
-- `launchd` label `dev.cloudandx.android17`负责进程生命周期，调用终端退出不会杀死设备。
+- `launchd` label `dev.cloudandx.android17` 只负责让显式启动的设备脱离客户端和终端继续运行。
+  它由显式 LaunchAgent plist 以 `KeepAlive=false` 加载：qemu 正常或异常退出后保持已加载但
+  inactive，绝不自动重生；只有明确的 `start`、`restart` 或 `snapshot-resume` 再次启动它。
+  `stop` 会先 `bootout` 该 job，再确认 pid 不会存活。
 - 启动前停止 Compose 的旧 `android`容器，但不删除 `cloudandx-android_emulator-data`
   命名卷。
 - ADB 使用 Emulator 本地端口 5557；gRPC 使用 8556 并启用 token。两者不绑定或转发到
   局域网/公网。
-- 本机交互使用 Emulator 原生窗口或同版 scrcpy 4.1；二者控制同一个 AVD。
+- `sdk_gphone16k_arm` 是 AEMU 的原生窗口，而不是 scrcpy。scrcpy 4.1 仅由明确的按钮/命令
+  打开，且与该 AEMU 实例控制同一个 AVD；客户端自动刷新只读取 `status` 和日志，不自动
+  `start` 或打开 scrcpy。
 - 现有 noVNC 浏览器入口仍属于 Docker 兼容路径，不在本阶段跨越宿主/容器边界暴露
   原生 Emulator gRPC。需要浏览器远程入口时，应另行实现带 token 的宿主代理并重新完成
   未授权访问、输入、重连和敏感信息测试。

@@ -2,7 +2,7 @@
 
 > 决策日期：2026-08-12<br>
 > 目标主机：Apple Silicon Mac（当前验证机为 M1 MacBook Pro）<br>
-> 当前状态：架构确定；Phase 1 客户端 MVP 已完成；Phase 2A 桌面融合闭环实施中
+> 当前状态：架构确定；Phase 1 客户端 MVP 已完成；Phase 2A 桌面融合闭环实施中；Phase 2B 已嵌入 descriptor-only XPC Agent。development-sdk 仍依赖本机 SDK；最终发行 App 才会内嵌 source-built ARM64 AEMU+AOSP，用户无需 Android Studio、Android SDK 或单独模拟器。
 
 ## 1. 决策
 
@@ -59,11 +59,11 @@ flowchart LR
     AEMU["AEMU\nHVF + host GPU"]
     Guest["Android 17 Play ARM64"]
     View["AEMU 原生窗口 / scrcpy 4.1"]
-    Agent["未来 Local Capability Agent\nallowlist only"]
+    Agent["嵌入式 XPC Capability Agent\ndescriptor-only allowlist"]
     Pixel["可选 Physical Pixel lane"]
 
     User --> Client --> Core --> Runner --> AEMU --> Guest --> View
-    Core -. "阶段二" .-> Agent
+    Client --> Agent
     Agent --> Guest
     Client -. "需要真实硬件时" .-> Pixel
 ```
@@ -105,20 +105,31 @@ Apple 的 Hypervisor.framework 是低级虚拟化接口，Virtualization.framewo
 
 Phase 2 将 Docker Device Bridge 的“鉴权 + allowlist”思想迁移到本机，但不会把容器 HTTP
 服务原样搬到宿主。Phase 2A 在 `CloudAndxClientCore` 内先实现进程内、固定二进制和固定参数
-的结构化动作，便于当前未签名 MVP 验证完整体验；没有 code signing requirement 的 XPC
-拆分不能形成可信身份边界。签名发布阶段再迁移为 app-owned XPC service，并保持相同请求模型：
+的结构化动作，便于当前未签名 MVP 验证完整体验。当前开发 app 已迁移为 app-owned XPC
+service：SwiftUI 不直接执行 runner，用户文件仅以已打开的 `FileHandle` 跨 XPC；agent 不接收
+bookmark、host path、shell 或 ADB 参数。开发 ad-hoc 门禁仅为同用户/同 app path 弱身份，发布仍需 Team-ID requirement：
 
-- `installAPK(bookmark)`、`launchApp(package)`、`stopApp(package)`；
-- `pushFile(bookmark, destinationClass)`、`pullFile(allowlistedPath)`；
+- `installAPK(FileHandle)`、`pushFile(FileHandle, destinationClass)`、`captureScreenshot(FileHandle)`；
+- 未来能力：`launchApp(package)`、`stopApp(package)`、`pullFile(allowlistedPath)`；
 - `setClipboard(text)`、`readClipboard()`；
 - `tap`、`swipe`、`key`、`text`、`rotate`；
 - `setLocation`、`setBattery`、`setNetworkProfile`；
 - `captureScreenshot`、`startRecording`、`collectDiagnostics`。
 
-当前 bridge 以及未来 XPC service 都只执行固定二进制与参数数组，不暴露任意 ADB、shell、
+当前 bridge 以及未来能力扩展都只执行固定二进制与参数数组，不暴露任意 ADB、shell、
 gRPC 或 Emulator Console。Android 17 r06 实测没有公开 `cmd clipboard` 实现，Phase 2A 不以
 `input text` 冒充剪贴板；剪贴板同步在审计 scrcpy control protocol 或引入签名 companion
 后再启用。
+
+### 5.3 生命周期
+
+客户端自动刷新只读取 `status` 与日志，不自动启动 Android 或打开 scrcpy。显式启动使用
+`KeepAlive=false` 的 LaunchAgent：AEMU（`sdk_gphone16k_arm`）是原生 AEMU 窗口；它正常或
+异常退出后不会由 launchd 重生，只有明确的 start/restart/snapshot-resume 才会再次创建实例。
+scrcpy 只接受已 ready 的实例，绝不隐式启动或停止 Android，因此不会与生命周期操作竞争。
+当前 Capability Agent 是 App Sandbox XPC descriptor/FD 边界；它不能安全执行开发 checkout
+的 runner 或写 `.runtime`，所以 sandboxed authority 失败关闭，直到 bundle-owned runtime 或
+单独审计的 helper 被设计完成。发布同样保持 fail-closed。
 
 ## 6. 显示与输入策略
 
@@ -201,7 +212,7 @@ SystemServer、SurfaceFlinger、GMS、网络、音频和输入，而不只检查
 
 - SwiftUI/AppKit 应用和可测试 Core 模块；
 - 启动、停止、重启、状态、日志和打开 Android；
-- 仅从 app 位置向上定位可信项目目录，不接受环境变量重定向；
+- App-Sandboxed agent 当前不定位 development checkout；release 仅可使用 bundle-relative runtime，生命周期 helper 仍是单独设计门禁；
 - 固定命令、无 shell 拼接、有界输出、忙状态和错误反馈；
 - 构建/单测以及现有 native runtime contract 回归。
 
@@ -211,8 +222,14 @@ SystemServer、SurfaceFlinger、GMS、网络、音频和输入，而不只检查
 ### Phase 2：真机级桌面体验
 
 - Phase 2A：可信固定快照、APK 安装、Download 文件投递、PNG 截图；
-- Phase 2B：签名 XPC Capability Agent、可信书签与剪贴板协议；
-- Phase 2C：通知、摄像头、麦克风、音频设备切换；
+- Phase 2B：自包含 ARM64 runtime manifest、来源/SBOM/NOTICE 闭环、开发期嵌入式 XPC Capability Agent 与可信书签 descriptor-only 边界；主 app 负责 security-scoped bookmark 并只向 agent 传已打开的 `FileHandle`，agent 不接收任意 host path/bookmark。发布签名、公证和 payload 仍由 provenance/identity 门禁阻断；
+- Phase 2C supply chain：离线 source-lock/source-evidence/toolchain-evidence、RSA
+  builder attestation、精确 manifest closure 和独立重验。生产 trusted-builders
+  policy 当前固定为零 key，因此 release fail-closed；此管道不证明真正可再分发
+  的 macOS AEMU/gfxstream/adb closure 已完成或获法律批准。
+- Phase 2D embedded display：必须单独证明低延迟、真正嵌入的客户端画面；外置
+  scrcpy 或 AEMU 窗口不能作为该项验收证据。
+- 后续能力：通知、摄像头、麦克风、音频设备切换；
 - 快照秒开、设备/应用 profile、键鼠/触控板/手柄映射；
 - 帧时间、输入 RTT、ANR、崩溃和音频 underrun HUD；
 - 8 小时长稳与权限恢复测试。

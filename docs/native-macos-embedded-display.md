@@ -18,26 +18,28 @@ uses that buffer's validated dimensions for the matching touch-coordinate map.
 
 The dedicated display test creates a CPU-backed 16×16 BGRA source buffer (no
 IOSurface properties, entitlement, or display service), and asks VideoToolbox
-for a software H.264 encoder. When the host exposes that encoder it performs a
-real encode → SPS/PPS extraction → Annex-B → `ScrcpyH264Decoder` round trip.
-Some restricted test sandboxes deny VideoToolbox encoder discovery. Decode
-coverage remains mandatory there via an embedded 48-byte Annex-B baseline
-fixture containing SPS, PPS, and one IDR frame. It was authored once with the
-local `/opt/homebrew/bin/ffmpeg` libx264 encoder from a 16×16 solid `#2a2a2a`
-frame, then had NAL type 6 (SEI) removed using ffmpeg `filter_units=remove_types=6`.
-Its SHA-256 is
+for a software H.264 encoder. When the host exposes the native media services,
+it performs a real encode → SPS/PPS extraction → Annex-B →
+`ScrcpyH264Decoder` round trip. The test also carries an embedded 48-byte
+Annex-B baseline fixture containing SPS, PPS, and one IDR frame. It was authored
+once with the local `/opt/homebrew/bin/ffmpeg` libx264 encoder from a 16×16
+solid `#2a2a2a` frame, then had NAL type 6 (SEI) removed using ffmpeg
+`filter_units=remove_types=6`. Its SHA-256 is
 `5ce781747c676c8e417e3a3a70abf97daf030440e3068c721873702ebc2435f8`.
 ffmpeg/x264 are fixture-authoring tools only: neither product code nor tests
 invoke them or declare them as dependencies. The test supplies its SPS/PPS
 configuration and IDR access unit separately, matching the real stream's
 configuration/media packet boundary.
 
-This is a strict native-media test, not a mocked decoder test: it needs normal
-macOS VideoToolbox/media-service access. The restricted Codex sandbox blocks
-the required IOSurface/media service and returns `kVTCouldNotFindVideoDecoderErr`
-(`-12906`); execute the display suite in a normal local macOS process for the
-functional result. The test does not suppress that error or substitute a fake
-decoded frame.
+This is a strict native-media test, not a mocked decoder test: when VideoToolbox
+is available, decode and presentation assertions remain mandatory. A host or
+restricted sandbox without an H.264 media service can return
+`kVTCouldNotFindVideoDecoderErr` (`-12906`) or
+`kVTVideoDecoderMalfunctionErr` (`-12911`) while creating the session. In that
+explicit capability-limited case, the test reports the status and skips only
+native decode/offscreen-render assertions; parser, framing, endpoint ownership,
+control serialization, fixture digest, and all unexpected errors remain strict.
+No fake decoded frame is substituted.
 
 Excluded: ADB/server launch, socket discovery, helper/lifecycle authority, live
 Android evidence, latency claims, audio, clipboard, file transfer, source-built
